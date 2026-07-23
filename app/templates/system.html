@@ -1,0 +1,107 @@
+{% extends "config/nav.html" %}
+{% block page_title %}System{% endblock %}
+{% block config_content %}
+<h1>System</h1>
+
+<div class="grid-auto">
+  <div class="card">
+    <div class="stat stat--lg">
+      <div class="stat__label">Sources</div>
+      <div class="stat__value">{{ enabled_sources }}/{{ total_sources }}</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="stat stat--lg">
+      <div class="stat__label">Active jobs</div>
+      <div class="stat__value">{{ job_count }}</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="stat stat--lg">
+      <div class="stat__label">Webhook accepts</div>
+      <div class="stat__value">{{ webhook_accepted }}</div>
+      <div class="stat__hint text-muted">lifetime audit · {{ webhook_accepted_last_hour }} last hour</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="stat stat--lg">
+      <div class="stat__label">Retained events</div>
+      <div class="stat__value">{{ retained_events }}</div>
+      <div class="stat__hint text-muted">max {{ max_events_per_source }} per source</div>
+    </div>
+  </div>
+</div>
+
+{% if events_pending > 0 %}
+<p class="mt text-muted">
+  <strong class="text-warning">{{ events_pending }}</strong> event{{ 's' if events_pending != 1 else '' }} pending pipeline processing.
+</p>
+{% endif %}
+
+<div class="card mt">
+  <div class="card__header"><h2>Source Health</h2></div>
+  {% if source_health %}
+  <table class="table">
+    <thead><tr><th>Name</th><th>Slug</th><th>Status</th><th>Last Seen</th></tr></thead>
+    <tbody>
+    {% for s in source_health %}
+      <tr>
+        <td>{{ s.name }}</td>
+        <td><code>{{ s.slug }}</code></td>
+        <td>
+          {% if s.enabled %}
+            {% if s.status == 'healthy' %}<span class="text-success">healthy</span>
+            {% elif s.status == 'recent' %}<span class="text-muted">recent</span>
+            {% else %}<span class="text-muted">{{ s.status }}</span>{% endif %}
+          {% else %}<span class="text-muted">disabled</span>{% endif %}
+        </td>
+        <td>{{ s.last_seen }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted mt">No sources configured.</p>
+  {% endif %}
+</div>
+
+<div class="card mt">
+  <div class="card__header">
+    <h2>Schedules</h2>
+  </div>
+  {% if schedules %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Last Run</th>
+        <th>Next Run</th>
+        <th>OK / Fail (lifetime)</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in schedules %}
+      <tr>
+        <td>{{ s.name }}</td>
+        <td>{{ s.last_run }}</td>
+        <td>{{ s.next_run }}</td>
+        <td>{{ s.success_count }} / {{ s.failure_count }}</td>
+        <td>
+          {% if not s.enabled %}
+            <span class="text-muted">disabled</span>
+          {% elif s.last_error %}
+            <span class="text-danger" title="{{ s.last_error }}">error</span>
+          {% else %}
+            enabled
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted mt">No schedules configured.</p>
+  {% endif %}
+</div>
+{% endblock %}

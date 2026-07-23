@@ -1,0 +1,363 @@
+{% set is_edit = action is defined and action %}
+{% set cfg = (action.config if is_edit else {}) or {} %}
+{% set selected_field_id = cfg.get('field_id') %}
+{% set selected_field = none %}
+{% for f in fields %}
+  {% if f.id == selected_field_id %}{% set selected_field = f %}{% endif %}
+{% endfor %}
+<form method="post"
+      action="{% if is_edit %}/config/pipeline/action/{{ action.id }}{% else %}/config/pipeline/source/{{ source.id }}/actions{% endif %}"
+      class="stack dialog__form"
+      hx-post="{% if is_edit %}/config/pipeline/action/{{ action.id }}{% else %}/config/pipeline/source/{{ source.id }}/actions{% endif %}"
+      hx-target="#source-chain-{{ source.id }}"
+      hx-swap="outerHTML"
+      id="action-form">
+  {% include 'components/csrf.html' %}
+  {% if not is_edit %}
+  <input type="hidden" name="rule_id" value="{{ rule.id }}">
+  {% endif %}
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">
+      {% if is_edit %}Edit Action{% else %}Add Action{% endif %}
+      — {{ source.name }}
+    </h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+
+  <label class="stack">
+    <span class="field-label">
+      Type
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About action types"
+              data-tip="field_push: write into a Field. web_push: Title/Body with {{ '{{source}}' }} placeholders. http_forward: POST event JSON to a URL (optional secrets).">?</button>
+    </span>
+    <select name="action_type" class="input" id="action-type-select">
+      {% for t in action_types %}
+        <option value="{{ t }}" {% if is_edit and action.action_type == t %}selected{% elif not is_edit and t == 'field_push' %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  {# ── field_push ── #}
+  <div id="panel-field-push" class="stack action-panel" hidden>
+    <label class="stack">
+      Field *
+      <select name="field_id" class="input" id="action-field-select">
+        <option value="">— select field —</option>
+        {% for f in fields %}
+          <option value="{{ f.id }}"
+                  data-field-type="{{ f.field_type }}"
+                  {% if cfg.get('field_id') == f.id %}selected{% endif %}>
+            {{ f.name }} ({{ f.field_type }})
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <input type="hidden" name="field_type" id="action-field-type" value="">
+
+    <div id="fp-logbook" class="stack fp-params" hidden>
+      <label class="stack">
+        Value source
+        <select name="logbook_mode" class="input" id="logbook-mode">
+          <option value="event" {% if 'value' not in cfg and not cfg.get('value_key') %}selected{% endif %}>Whole event</option>
+          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Event key</option>
+          <option value="literal" {% if 'value' in cfg and not cfg.get('value_key') %}selected{% endif %}>Literal</option>
+        </select>
+      </label>
+      <label class="stack" id="logbook-key-wrap" hidden>
+        Event key
+        <input name="value_key" type="text" class="input" id="logbook-value-key"
+               value="{{ cfg.get('value_key') or '' }}" placeholder="status or _poll.outcome">
+      </label>
+      <label class="stack" id="logbook-literal-wrap" hidden>
+        Literal value
+        <input name="value" type="text" class="input" id="logbook-value"
+               value="{% if 'value' in cfg and not cfg.get('value_key') %}{{ cfg.get('value') }}{% endif %}">
+      </label>
+    </div>
+
+    <div id="fp-counter" class="stack fp-params" hidden>
+      <label class="stack">
+        Operation
+        <select name="counter_op" class="input" id="counter-op">
+          <option value="increment" {% if cfg.get('op', 'increment') == 'increment' %}selected{% endif %}>Increment</option>
+          <option value="decrement" {% if cfg.get('op') == 'decrement' %}selected{% endif %}>Decrement</option>
+          <option value="reset" {% if cfg.get('op') == 'reset' %}selected{% endif %}>Reset</option>
+        </select>
+      </label>
+      <label class="stack" id="counter-delta-wrap">
+        <span class="field-label">
+          Delta
+          <button type="button" class="field-tip" tabindex="0"
+                  data-tip="number or event key, default 1">?</button>
+        </span>
+        <input name="delta" type="text" class="input"
+               value="{% if cfg.get('delta') is not none %}{{ cfg.get('delta') }}{% endif %}"
+               placeholder="1 or _poll.response_time_ms">
+      </label>
+    </div>
+
+    <div id="fp-value" class="stack fp-params" hidden>
+      <label class="stack">
+        Value source
+        <select name="value_mode" class="input" id="value-mode">
+          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Literal string</option>
+          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Event key</option>
+        </select>
+      </label>
+      <label class="stack" id="value-literal-wrap">
+        Value
+        <input name="value" type="text" class="input" id="value-literal"
+               value="{% if not cfg.get('value_key') and 'value' in cfg %}{{ cfg.get('value') }}{% endif %}">
+      </label>
+      <label class="stack" id="value-key-wrap" hidden>
+        Event key
+        <input name="value_key" type="text" class="input" id="value-value-key"
+               value="{{ cfg.get('value_key') or '' }}" placeholder="_poll.response_time_ms">
+      </label>
+    </div>
+
+    <div id="fp-toggle" class="stack fp-params" hidden>
+      <label class="stack">
+        Value source
+        <select name="toggle_mode" class="input" id="toggle-mode">
+          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Literal</option>
+          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Event key</option>
+        </select>
+      </label>
+      <label class="stack" id="toggle-literal-wrap">
+        Bool
+        <select name="toggle_value" class="input">
+          <option value="true" {% if cfg.get('value') is true %}selected{% endif %}>true</option>
+          <option value="false" {% if cfg.get('value') is not true %}selected{% endif %}>false</option>
+        </select>
+      </label>
+      <label class="stack" id="toggle-key-wrap" hidden>
+        Event key
+        <input name="value_key" type="text" class="input" id="toggle-value-key"
+               value="{{ cfg.get('value_key') or '' }}" placeholder="ok or _poll.outcome">
+      </label>
+    </div>
+  </div>
+
+  {# ── web_push ── #}
+  <div id="panel-web-push" class="stack action-panel" hidden>
+    <label class="stack">
+      Title
+      <input name="title" type="text" class="input"
+             value="{{ cfg.get('title') or 'Para-Scope' }}"
+             placeholder="Alert from {{ '{{source}}' }}">
+    </label>
+    <label class="stack">
+      <span class="field-label">
+        Body
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="Use {{ '{{source}}' }} and other {{ '{{field}}' }} placeholders from event data.">?</button>
+      </span>
+      <input name="body" type="text" class="input"
+             value="{{ cfg.get('body') or '' }}"
+             placeholder="Message from {{ '{{source}}' }}">
+    </label>
+    <label class="stack">
+      URL
+      <input name="url" type="text" class="input"
+             value="{{ cfg.get('url') or '/' }}" placeholder="/">
+    </label>
+  </div>
+
+  {# ── http_forward ── #}
+  <div id="panel-http-forward" class="stack action-panel" hidden>
+    <label class="stack">
+      URL *
+      <input name="url" type="url" class="input" id="http-url"
+             value="{{ cfg.get('url') or '' }}" placeholder="https://example.com/hook" required>
+    </label>
+    <label class="stack">
+      Method
+      <select name="method" class="input">
+        {% for m in ['POST', 'PUT', 'PATCH', 'GET'] %}
+          <option value="{{ m }}" {% if (cfg.get('method') or 'POST') == m %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="stack">
+      Timeout (seconds)
+      <input name="timeout_seconds" type="number" class="input" min="1"
+             value="{{ cfg.get('timeout_seconds') or '' }}" placeholder="30">
+    </label>
+    <label class="stack">
+      Auth
+      <select name="auth_mode" class="input" id="auth-mode">
+        <option value="none" {% if cfg.get('auth_mode') == 'none' %}selected{% endif %}>None</option>
+        <option value="bearer" {% if (cfg.get('auth_mode') or 'bearer') == 'bearer' and cfg.get('auth_mode') != 'none' and cfg.get('auth_mode') != 'key_secret' %}selected{% endif %}>Bearer token</option>
+        <option value="key_secret" {% if cfg.get('auth_mode') == 'key_secret' %}selected{% endif %}>Key + Secret</option>
+      </select>
+    </label>
+
+    <fieldset class="stack" id="http-secrets">
+      <legend>Credentials</legend>
+      {% if is_edit and action.secret %}
+      <p class="text-muted">Current: {{ action.secret.name }}. Leave value blank to keep.</p>
+      {% endif %}
+      <label class="stack" id="secret-primary-wrap">
+        <span id="secret-primary-label">Secret name</span>
+        <input name="secret_name" type="text" class="input" placeholder="API token"
+               value="{{ action.secret.name if is_edit and action.secret else '' }}">
+      </label>
+      <label class="stack">
+        Secret value
+        <input name="secret_value" type="password" class="input" autocomplete="new-password">
+      </label>
+      <div id="secret-secondary-wrap" class="stack" hidden>
+        {% if is_edit and action.secret_2 %}
+        <p class="text-muted">Current secret 2: {{ action.secret_2.name }}.</p>
+        {% endif %}
+        <label class="stack">
+          API secret name
+          <input name="secret2_name" type="text" class="input"
+                 value="{{ action.secret_2.name if is_edit and action.secret_2 else '' }}">
+        </label>
+        <label class="stack">
+          API secret value
+          <input name="secret2_value" type="password" class="input" autocomplete="new-password">
+        </label>
+        <label class="stack">
+          Key header
+          <input name="api_key_header" type="text" class="input"
+                 value="{{ cfg.get('api_key_header') or 'X-Api-Key' }}">
+        </label>
+        <label class="stack">
+          Secret header
+          <input name="api_secret_header" type="text" class="input"
+                 value="{{ cfg.get('api_secret_header') or 'X-Api-Secret' }}">
+        </label>
+      </div>
+    </fieldset>
+  </div>
+
+  <div class="flex items-center gap">
+    <button type="submit" class="btn btn--primary">{% if is_edit %}Save Action{% else %}Create Action{% endif %}</button>
+  </div>
+</form>
+<script>
+(function () {
+  var typeSel = document.getElementById("action-type-select");
+  var fieldSel = document.getElementById("action-field-select");
+  var fieldTypeInput = document.getElementById("action-field-type");
+  var panels = {
+    field_push: document.getElementById("panel-field-push"),
+    web_push: document.getElementById("panel-web-push"),
+    http_forward: document.getElementById("panel-http-forward")
+  };
+  var fpPanels = {
+    logbook: document.getElementById("fp-logbook"),
+    counter: document.getElementById("fp-counter"),
+    value: document.getElementById("fp-value"),
+    toggle: document.getElementById("fp-toggle")
+  };
+  var authMode = document.getElementById("auth-mode");
+  var secretSecondary = document.getElementById("secret-secondary-wrap");
+  var httpSecrets = document.getElementById("http-secrets");
+  var httpUrl = document.getElementById("http-url");
+  var form = document.getElementById("action-form");
+
+  function selectedFieldType() {
+    var opt = fieldSel && fieldSel.options[fieldSel.selectedIndex];
+    return opt && opt.value ? opt.getAttribute("data-field-type") : "";
+  }
+
+  function syncFieldParams() {
+    var ft = selectedFieldType();
+    if (fieldTypeInput) fieldTypeInput.value = ft || "";
+    Object.keys(fpPanels).forEach(function (k) {
+      if (fpPanels[k]) fpPanels[k].hidden = k !== ft;
+    });
+    // Disable unused nested inputs so only active panel submits conflicting names
+    Object.keys(fpPanels).forEach(function (k) {
+      var el = fpPanels[k];
+      if (!el) return;
+      Array.prototype.forEach.call(el.querySelectorAll("input, select, textarea"), function (inp) {
+        inp.disabled = k !== ft;
+      });
+    });
+    syncLogbookMode();
+    syncValueMode();
+    syncToggleMode();
+    syncCounterOp();
+  }
+
+  function syncLogbookMode() {
+    var mode = document.getElementById("logbook-mode");
+    var keyW = document.getElementById("logbook-key-wrap");
+    var litW = document.getElementById("logbook-literal-wrap");
+    if (!mode || !keyW || !litW) return;
+    var m = mode.value;
+    keyW.hidden = m !== "key";
+    litW.hidden = m !== "literal";
+  }
+  function syncValueMode() {
+    var mode = document.getElementById("value-mode");
+    var litW = document.getElementById("value-literal-wrap");
+    var keyW = document.getElementById("value-key-wrap");
+    if (!mode) return;
+    litW.hidden = mode.value !== "literal";
+    keyW.hidden = mode.value !== "key";
+  }
+  function syncToggleMode() {
+    var mode = document.getElementById("toggle-mode");
+    var litW = document.getElementById("toggle-literal-wrap");
+    var keyW = document.getElementById("toggle-key-wrap");
+    if (!mode) return;
+    litW.hidden = mode.value !== "literal";
+    keyW.hidden = mode.value !== "key";
+  }
+  function syncCounterOp() {
+    var op = document.getElementById("counter-op");
+    var delta = document.getElementById("counter-delta-wrap");
+    if (!op || !delta) return;
+    delta.hidden = op.value === "reset";
+  }
+  function syncAuth() {
+    if (!authMode || !secretSecondary || !httpSecrets) return;
+    var m = authMode.value;
+    httpSecrets.hidden = m === "none";
+    secretSecondary.hidden = m !== "key_secret";
+    var label = document.getElementById("secret-primary-label");
+    if (label) label.textContent = m === "key_secret" ? "API key name" : "Secret name";
+  }
+  function sync() {
+    var t = typeSel.value;
+    Object.keys(panels).forEach(function (k) {
+      if (panels[k]) panels[k].hidden = k !== t;
+    });
+    if (httpUrl) httpUrl.required = t === "http_forward";
+    // Disable inputs in hidden panels so they don't submit
+    Object.keys(panels).forEach(function (k) {
+      var el = panels[k];
+      if (!el) return;
+      Array.prototype.forEach.call(el.querySelectorAll("input, select, textarea"), function (inp) {
+        if (k !== t) inp.disabled = true;
+        else if (!inp.closest(".fp-params") || !inp.closest(".fp-params").hidden) {
+          // re-enable panel, then field-param sync will refine
+          inp.disabled = false;
+        }
+      });
+    });
+    if (t === "field_push") syncFieldParams();
+    if (t === "http_forward") syncAuth();
+  }
+
+  if (typeSel) typeSel.addEventListener("change", sync);
+  if (fieldSel) fieldSel.addEventListener("change", syncFieldParams);
+  var lm = document.getElementById("logbook-mode");
+  if (lm) lm.addEventListener("change", syncLogbookMode);
+  var vm = document.getElementById("value-mode");
+  if (vm) vm.addEventListener("change", syncValueMode);
+  var tm = document.getElementById("toggle-mode");
+  if (tm) tm.addEventListener("change", syncToggleMode);
+  var co = document.getElementById("counter-op");
+  if (co) co.addEventListener("change", syncCounterOp);
+  if (authMode) authMode.addEventListener("change", syncAuth);
+  sync();
+})();
+</script>

@@ -1,0 +1,865 @@
+{% extends "config/nav.html" %}
+{% block page_title %}Dashboard Layout{% endblock %}
+{% block config_content %}
+<h1>Dashboard Layout</h1>
+
+{% include 'components/alerts.html' %}
+
+<p class="mt">Add a widget kind, pick a display mode and style, configure Field sources, then save. Drag and resize on the main dashboard. Layout is shared for this install.</p>
+
+<form method="post" action="/config/dashboard" id="dashboard-form" class="stack">
+  {% include 'components/csrf.html' %}
+  <input type="hidden" name="widgets" id="widgets-json" value="[]">
+
+  <div class="flex items-center gap flex-wrap">
+    <label class="stack form-field--xl form-field--grow">
+      Widget kind
+      <select id="widget-catalog" class="input">
+        {% for w in available_widgets %}
+        <option value="{{ w.type }}">{{ w.title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="button" class="btn self-end" id="add-widget-btn">Add widget</button>
+  </div>
+
+  <div id="widget-instances" class="stack"></div>
+
+  <p id="widgets-empty" class="text-muted" hidden>No widgets yet. Add one from the catalog above.</p>
+
+  <div class="flex items-center gap mt">
+    <button type="submit" class="btn btn--primary">Save Layout</button>
+  </div>
+</form>
+
+<script>
+(function () {
+  var KINDS = {{ available_widgets | tojson }};
+  var KIND_BY_TYPE = {};
+  KINDS.forEach(function (k) { KIND_BY_TYPE[k.type] = k; });
+  var FIELDS = [
+    {% for f in fields %}
+    {id: {{ f.id }}, name: {{ f.name | tojson }}, field_type: {{ f.field_type | tojson }}}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ];
+  var initial = {{ current_widgets | tojson }};
+
+  var listEl = document.getElementById("widget-instances");
+  var emptyEl = document.getElementById("widgets-empty");
+  var jsonEl = document.getElementById("widgets-json");
+  var form = document.getElementById("dashboard-form");
+
+  function kindTitle(type) {
+    return (KIND_BY_TYPE[type] && KIND_BY_TYPE[type].title) || type;
+  }
+
+  function defaultDisplay(type) {
+    return (KIND_BY_TYPE[type] && KIND_BY_TYPE[type].default_display) || "";
+  }
+
+  function displayEntry(type, disp) {
+    var kind = KIND_BY_TYPE[type];
+    if (!kind) return null;
+    var found = null;
+    (kind.displays || []).forEach(function (d) {
+      if (d.id === disp) found = d;
+    });
+    return found || (kind.displays && kind.displays[0]) || null;
+  }
+
+  function bindingFor(type, disp) {
+    var d = displayEntry(type, disp);
+    return (d && d.binding) || (KIND_BY_TYPE[type] && KIND_BY_TYPE[type].binding) || {cardinality: "none"};
+  }
+
+  function defaultStyle(type, disp) {
+    var d = displayEntry(type, disp);
+    return (d && d.default_style) || "default";
+  }
+
+  function fieldOptionsHtml(allowedTypes, selectedId) {
+    var opts = '<option value="">— select field —</option>';
+    FIELDS.forEach(function (f) {
+      if (allowedTypes && allowedTypes.length && allowedTypes.indexOf(f.field_type) < 0) return;
+      var sel = selectedId != null && String(selectedId) === String(f.id) ? " selected" : "";
+      opts += '<option value="' + f.id + '"' + sel + ">" +
+        f.name + " (" + f.field_type + ")</option>";
+    });
+    return opts;
+  }
+
+  function fieldMultiSelectHtml(selectedIds) {
+    selectedIds = (selectedIds || []).map(String);
+    var html = '<select class="input" data-cfg="field_ids" multiple size="4">';
+    FIELDS.forEach(function (f) {
+      var sel = selectedIds.indexOf(String(f.id)) >= 0 ? " selected" : "";
+      html += '<option value="' + f.id + '"' + sel + ">" + f.name + " (" + f.field_type + ")</option>";
+    });
+    html += "</select>";
+    return html;
+  }
+
+  function normalize(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw.filter(function (w) { return w && w.type; }).map(function (w) {
+      var title = w.title || w.label || kindTitle(w.type);
+      var disp = w.display || defaultDisplay(w.type);
+      var cfg = w.config && typeof w.config === "object" ? Object.assign({}, w.config) : {};
+      if (!cfg.style) cfg.style = defaultStyle(w.type, disp);
+      // Migrate legacy series field_id → sources
+      if (w.type === "series" && cfg.field_id && !(Array.isArray(cfg.sources) && cfg.sources.length)) {
+        cfg.sources = [{
+          field_id: cfg.field_id,
+          label: "",
+          value_path: cfg.value_path || "",
+          transform: cfg.transform || []
+        }];
+      }
+      var entry = {
+        type: w.type,
+        display: disp,
+        title: title,
+        config: cfg
+      };
+      if (w.id) entry.id = w.id;
+      ["x", "y", "w", "h"].forEach(function (k) {
+        if (w[k] != null) entry[k] = w[k];
+      });
+      return entry;
+    });
+  }
+
+  function transformStepsHtml(steps) {
+    steps = Array.isArray(steps) ? steps : [];
+    if (!steps.length) steps = [{op: "div", by: ""}];
+    var html = '<div class="stack stack--tight" data-transform-list>';
+    steps.forEach(function (s) {
+      var op = (s && s.op) || "div";
+      var by = s && s.by != null ? s.by : (s && s.digits != null ? s.digits : "");
+      html += '<div class="flex items-center gap flex-wrap" data-transform-row>' +
+        '<select class="input form-field--sm" data-xform-op>' +
+          ["mul","div","add","sub","abs","round"].map(function (o) {
+            return '<option value="' + o + '"' + (o === op ? " selected" : "") + ">" + o + "</option>";
+          }).join("") +
+        "</select>" +
+        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="by / digits" value="' +
+          escapeAttr(by) + '">' +
+        '<button type="button" class="btn" data-action="xform-remove">−</button>' +
+      "</div>";
+    });
+    html += '<button type="button" class="btn self-start" data-action="xform-add">Add transform step</button></div>';
+    return html;
+  }
+
+  function displaySelectHtml(type, selected) {
+    var kind = KIND_BY_TYPE[type];
+    if (!kind) return "";
+    var html = '<label class="stack form-field--lg">Display' +
+      '<select class="input" data-cfg="display">';
+    (kind.displays || []).forEach(function (d) {
+      html += '<option value="' + d.id + '"' + (d.id === selected ? " selected" : "") + ">" +
+        d.title + "</option>";
+    });
+    html += "</select></label>";
+    return html;
+  }
+
+  function styleSelectHtml(type, disp, selected) {
+    var d = displayEntry(type, disp);
+    var styles = (d && d.styles) || [];
+    if (!styles.length) return "";
+    var cur = selected || (d && d.default_style) || styles[0].id;
+    var html = '<label class="stack form-field--lg">Style' +
+      '<select class="input" data-cfg="style">';
+    styles.forEach(function (s) {
+      html += '<option value="' + s.id + '"' + (s.id === cur ? " selected" : "") + ">" +
+        s.title + "</option>";
+    });
+    html += "</select></label>";
+    return html;
+  }
+
+  function previewHtml(disp, style) {
+    style = style || "default";
+    var inner = "";
+    if (disp === "toggle") {
+      inner = '<div class="widget-toggle widget-toggle--' + style + '" data-on="1">' +
+        (style === "led"
+          ? '<span class="widget-toggle__led"></span><span class="widget-toggle__label">On</span>'
+          : style === "badge"
+            ? '<span class="badge badge--success">On</span>'
+            : style === "switch"
+              ? '<span class="widget-toggle__switch"><span class="widget-toggle__knob"></span></span><span class="widget-toggle__label">On</span>'
+              : '<span class="widget-toggle__text">On</span>') +
+        "</div>";
+    } else if (disp === "stat") {
+      inner = '<div class="stat ' + (style === "compact" ? "stat--compact" : "stat--xl") + '">' +
+        '<div class="stat__value' + (style === "signed" ? " stat__value--positive" : "") + '">42' +
+        (style === "hero" ? ' <span class="stat__unit">ms</span>' : "") +
+        "</div></div>";
+    } else if (disp === "line" || disp === "area" || disp === "sparkline") {
+      inner = seriesPreviewSvg(disp, style);
+    } else if (disp === "pie" || disp === "doughnut") {
+      inner = aggregatePreviewSvg(disp, style);
+    } else if (disp === "bar" || disp === "stacked_bar") {
+      inner = aggregatePreviewSvg(disp, style);
+    } else if (disp === "kv_text") {
+      inner = '<div class="widget-kv widget-kv--' + style + '">Status: ok</div>';
+    } else if (disp === "logbook_list") {
+      if (style === "timeline") {
+        inner = '<ul class="widget-timeline widget-preview__mini">' +
+          '<li class="widget-timeline__item"><span class="widget-timeline__dot"></span><div><span class="text-muted">12:01</span> <code>{ok}</code></div></li>' +
+          '<li class="widget-timeline__item"><span class="widget-timeline__dot"></span><div><span class="text-muted">12:02</span> <code>{ok}</code></div></li>' +
+          "</ul>";
+      } else if (style === "cards") {
+        inner = '<div class="widget-entry-card widget-preview__mini"><span class="text-muted">12:01</span> <code>{ok}</code></div>';
+      } else {
+        inner = '<ul class="widget-list widget-preview__mini"><li class="widget-list__item"><span class="text-muted">12:01</span> <code>{ok}</code></li></ul>';
+      }
+    } else if (disp === "table") {
+      inner = '<table class="table widget-preview__mini' +
+        (style === "compact" ? " table--compact" : "") +
+        (style === "striped" ? " table--striped" : "") +
+        '"><tbody><tr><td>hits</td><td>42</td></tr><tr><td>up</td><td>on</td></tr></tbody></table>';
+    } else if (disp === "list" || disp === "button_row" || disp === "icon_grid") {
+      if (disp === "button_row") {
+        inner = '<span class="btn btn--sm' + (style === "emphasized" ? " btn--primary" : "") + '">Docs</span>';
+      } else if (disp === "icon_grid") {
+        inner = '<span class="widget-link-tile widget-link-tile--compact">★ Docs</span>';
+      } else {
+        inner = '<a href="#">Docs</a>';
+      }
+    } else if (disp === "metric_summary") {
+      inner = '<div class="stat"><div class="stat__label">Total</div><div class="stat__value">128</div></div>';
+    } else if (disp === "source_health" || disp === "recent_events" || disp === "poller_status") {
+      if (style === "cards") {
+        inner = '<div class="widget-entry-card widget-preview__mini"><strong>api</strong> <span class="text-success">healthy</span></div>';
+      } else {
+        inner = '<table class="table widget-preview__mini' + (style === "compact" ? " table--compact" : "") +
+          '"><tbody><tr><td>api</td><td class="text-success">healthy</td></tr></tbody></table>';
+      }
+    } else {
+      inner = '<span class="text-muted text-xs">' + escapeAttr(disp) + " · " + escapeAttr(style) + "</span>";
+    }
+    return '<div class="widget-preview" data-preview>' + inner + "</div>";
+  }
+
+  /** Sample points → SVG path for series style preview. */
+  function seriesPreviewSvg(disp, style) {
+    // Sample wave: x 0..100, y inverted (SVG y grows down)
+    var pts = [
+      [0, 28], [14, 18], [28, 32], [42, 12], [56, 22], [70, 8], [84, 20], [100, 14]
+    ];
+    var spark = disp === "sparkline";
+    var fill = disp === "area" || style === "filled";
+    var strokeW = spark ? 1.5 : 2;
+    var path;
+    if (style === "stepped") {
+      path = "M" + pts[0][0] + " " + pts[0][1];
+      for (var i = 1; i < pts.length; i++) {
+        path += " H" + pts[i][0] + " V" + pts[i][1];
+      }
+    } else if (style === "smooth") {
+      path = "M" + pts[0][0] + " " + pts[0][1];
+      for (var j = 1; j < pts.length; j++) {
+        var prev = pts[j - 1];
+        var cur = pts[j];
+        var cpx = (prev[0] + cur[0]) / 2;
+        path += " C" + cpx + " " + prev[1] + " " + cpx + " " + cur[1] + " " + cur[0] + " " + cur[1];
+      }
+    } else {
+      path = "M" + pts.map(function (p) { return p[0] + " " + p[1]; }).join(" L");
+    }
+    var h = spark ? 28 : 40;
+    var areaPath = path + " L100 " + h + " L0 " + h + " Z";
+    var markers = "";
+    if (style === "markers") {
+      markers = pts.map(function (p) {
+        return '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="2.2" fill="currentColor"/>';
+      }).join("");
+    }
+    return '<svg class="widget-preview__svg' + (spark ? " widget-preview__svg--spark" : "") +
+      '" viewBox="0 0 100 ' + h + '" preserveAspectRatio="none" aria-hidden="true">' +
+      (fill ? '<path d="' + areaPath + '" class="widget-preview__area"/>' : "") +
+      '<path d="' + path + '" class="widget-preview__line" fill="none" stroke="currentColor" stroke-width="' + strokeW +
+      '" stroke-linecap="round" stroke-linejoin="round"/>' +
+      markers +
+      "</svg>";
+  }
+
+  function aggregatePreviewSvg(disp, style) {
+    if (disp === "pie" || disp === "doughnut") {
+      var hole = disp === "doughnut"
+        ? '<circle cx="20" cy="20" r="8" fill="var(--color-surface, #fff)"/>'
+        : "";
+      return '<svg class="widget-preview__svg widget-preview__svg--pie" viewBox="0 0 40 40" aria-hidden="true">' +
+        '<circle cx="20" cy="20" r="16" fill="#3366cc"/>' +
+        '<path d="M20 20 L20 4 A16 16 0 0 1 34.9 28 Z" fill="#dc3912"/>' +
+        '<path d="M20 20 L34.9 28 A16 16 0 0 1 8 30.9 Z" fill="#ff9900"/>' +
+        hole +
+        "</svg>" +
+        (style === "no_legend" ? "" : '<span class="text-muted text-xs">' +
+          (style === "legend_right" ? "legend →" : "legend ↓") + "</span>");
+    }
+    // bar / stacked_bar
+    var horiz = style === "horizontal";
+    if (horiz) {
+      return '<svg class="widget-preview__svg" viewBox="0 0 100 40" aria-hidden="true">' +
+        '<rect x="0" y="4" width="70" height="8" fill="#3366cc" rx="1"/>' +
+        '<rect x="0" y="16" width="45" height="8" fill="#dc3912" rx="1"/>' +
+        '<rect x="0" y="28" width="88" height="8" fill="#ff9900" rx="1"/>' +
+        "</svg>";
+    }
+    if (disp === "stacked_bar") {
+      return '<svg class="widget-preview__svg" viewBox="0 0 100 40" aria-hidden="true">' +
+        '<rect x="20" y="22" width="18" height="14" fill="#3366cc"/>' +
+        '<rect x="20" y="12" width="18" height="10" fill="#dc3912"/>' +
+        '<rect x="20" y="4" width="18" height="8" fill="#ff9900"/>' +
+        '<rect x="55" y="18" width="18" height="18" fill="#3366cc"/>' +
+        '<rect x="55" y="10" width="18" height="8" fill="#dc3912"/>' +
+        "</svg>";
+    }
+    return '<svg class="widget-preview__svg" viewBox="0 0 100 40" aria-hidden="true">' +
+      '<rect x="8" y="18" width="14" height="18" fill="#3366cc" rx="1"/>' +
+      '<rect x="32" y="8" width="14" height="28" fill="#dc3912" rx="1"/>' +
+      '<rect x="56" y="14" width="14" height="22" fill="#ff9900" rx="1"/>' +
+      '<rect x="80" y="4" width="14" height="32" fill="#109618" rx="1"/>' +
+      "</svg>";
+  }
+
+  function seriesSourcesHtml(sources, allowedTypes) {
+    sources = Array.isArray(sources) ? sources : [];
+    if (!sources.length) sources = [{field_id: "", label: "", value_path: ""}];
+    var html = '<div class="stack stack--dense" data-series-sources><span class="text-muted">Series (one or more Fields)</span>';
+    sources.forEach(function (s) {
+      html += '<div class="card card--compact" data-series-source>' +
+        '<div class="card__body stack">' +
+          '<div class="flex items-center gap flex-wrap">' +
+            '<label class="stack form-field--lg form-field--grow">Field' +
+              '<select class="input" data-ssrc="field_id">' +
+                fieldOptionsHtml(allowedTypes, s.field_id) +
+              "</select></label>" +
+            '<button type="button" class="btn self-end" data-action="series-src-remove">Remove</button>' +
+          "</div>" +
+          '<label class="stack form-field--lg">Label' +
+            '<input type="text" class="input" data-ssrc="label" value="' + escapeAttr(s.label || "") + '">' +
+          "</label>" +
+          '<label class="stack form-field--2xl">Value path (logbook)' +
+            '<input type="text" class="input" data-ssrc="value_path" placeholder="_poll.response_time_ms" value="' +
+            escapeAttr(s.value_path || "") + '">' +
+          "</label>" +
+        "</div></div>";
+    });
+    html += '<button type="button" class="btn" data-action="series-src-add">Add series</button></div>';
+    return html;
+  }
+
+  function chartSourcesHtml(sources, allowedTypes) {
+    sources = Array.isArray(sources) ? sources : [];
+    if (!sources.length) sources = [{kind: "counter", field_id: "", label: ""}];
+    var html = '<div class="stack stack--dense" data-chart-sources><span class="text-muted">Sources</span>';
+    sources.forEach(function (s) {
+      var kind = s.kind || "counter";
+      var typeFilter = [kind];
+      html += '<div class="card card--compact" data-chart-source>' +
+        '<div class="card__body stack">' +
+          '<div class="flex items-center gap flex-wrap">' +
+            '<label class="stack form-field--md">Kind' +
+              '<select class="input" data-src="kind">' +
+                ["logbook","counter","value"].map(function (k) {
+                  return '<option value="' + k + '"' + (kind === k ? " selected" : "") + ">" + k + "</option>";
+                }).join("") +
+              "</select></label>" +
+            '<label class="stack form-field--lg form-field--grow">Field' +
+              '<select class="input" data-src="field_id">' +
+                fieldOptionsHtml(typeFilter, s.field_id) +
+              "</select></label>" +
+            '<button type="button" class="btn self-end" data-action="src-remove">Remove</button>' +
+          "</div>" +
+          '<label class="stack form-field--lg">Label' +
+            '<input type="text" class="input" data-src="label" value="' + escapeAttr(s.label || "") + '">' +
+          "</label>" +
+          '<label class="stack form-field--2xl">Value path' +
+            '<input type="text" class="input" data-src="value_path" placeholder="_poll.response_time_ms" value="' +
+            escapeAttr(s.value_path || "") + '">' +
+          "</label>" +
+          '<label class="stack form-field--md">Agg' +
+            '<select class="input" data-src="agg">' +
+              ["sum","count"].map(function (a) {
+                return '<option value="' + a + '"' + ((s.agg || "sum") === a ? " selected" : "") + ">" + a + "</option>";
+              }).join("") +
+            "</select></label>" +
+        "</div></div>";
+    });
+    html += '<button type="button" class="btn" data-action="src-add">Add source</button></div>';
+    return html;
+  }
+
+  function linkItemsHtml(items) {
+    items = Array.isArray(items) ? items : [];
+    if (!items.length) items = [{label: "", url: "", icon: ""}];
+    var html = '<div class="stack stack--dense" data-link-items><span class="text-muted">Links</span>';
+    items.forEach(function (it) {
+      html += '<div class="flex items-center gap flex-wrap" data-link-row>' +
+        '<input type="text" class="input form-field--md" data-link="label" placeholder="Label" value="' + escapeAttr(it.label || "") + '">' +
+        '<input type="url" class="input form-field--grow" data-link="url" placeholder="https://…" value="' + escapeAttr(it.url || "") + '">' +
+        '<input type="text" class="input form-field--xs" data-link="icon" placeholder="Icon" value="' + escapeAttr(it.icon || "") + '">' +
+        '<button type="button" class="btn" data-action="link-remove">−</button>' +
+      "</div>";
+    });
+    html += '<button type="button" class="btn" data-action="link-add">Add link</button></div>';
+    return html;
+  }
+
+  function configFieldsHtml(w) {
+    var cfg = w.config || {};
+    var disp = w.display || defaultDisplay(w.type);
+    var style = cfg.style || defaultStyle(w.type, disp);
+    var bind = bindingFor(w.type, disp);
+    var allowed = bind.field_types || null;
+    var html = '<div class="flex items-center gap flex-wrap">' +
+      displaySelectHtml(w.type, disp) +
+      styleSelectHtml(w.type, disp, style) +
+      "</div>";
+    html += previewHtml(disp, style);
+
+    if (w.type === "series") {
+      var rangeMode = (cfg.range_mode === "entries") ? "entries" : "hours";
+      html += seriesSourcesHtml(cfg.sources, allowed || ["counter", "logbook"]);
+      html += '<label class="stack form-field--md">Range mode' +
+        '<select class="input" data-cfg="range_mode">' +
+        '<option value="hours"' + (rangeMode === "hours" ? " selected" : "") + ">Hours</option>" +
+        '<option value="entries"' + (rangeMode === "entries" ? " selected" : "") + ">Entries</option>" +
+        "</select></label>";
+      if (rangeMode === "entries") {
+        html += '<label class="stack form-field--md">Range (entries)' +
+          '<input type="number" class="input" data-cfg="range_entries" min="1" max="1000" value="' +
+          (cfg.range_entries != null ? cfg.range_entries : 50) + '"></label>';
+      } else {
+        html += '<label class="stack form-field--md">Range (hours)' +
+          '<input type="number" class="input" data-cfg="range_hours" min="1" max="8760" value="' +
+          (cfg.range_hours != null ? cfg.range_hours : 24) + '"></label>';
+      }
+      html += '<label class="stack form-field--sm">Unit' +
+        '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
+    }
+
+    if (w.type === "chart") {
+      html += '<label class="stack form-field--md">Range (hours)' +
+        '<input type="number" class="input" data-cfg="range_hours" min="1" max="8760" value="' +
+        (cfg.range_hours != null ? cfg.range_hours : 24) + '"></label>';
+      html += '<label class="stack form-field--sm">Unit' +
+        '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
+      html += chartSourcesHtml(cfg.sources, allowed);
+    }
+
+    if (w.type === "display") {
+      if (disp === "logbook_list") {
+        html += '<label class="stack form-field--2xl">Field' +
+          '<select class="input" data-cfg="field_id">' +
+          fieldOptionsHtml(allowed || ["logbook"], cfg.field_id) +
+          "</select></label>";
+        html += '<label class="stack form-field--md">Max lines' +
+          '<input type="number" class="input" data-cfg="limit" min="1" max="100" value="' +
+          (cfg.limit != null ? cfg.limit : 20) + '"></label>';
+        html += '<label class="stack form-field--2xl">Value path (sparkline)' +
+          '<input type="text" class="input" data-cfg="value_path" value="' + escapeAttr(cfg.value_path || "") + '"></label>';
+        html += '<label class="stack form-field--sm">Unit' +
+          '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
+        html += '<div class="stack"><span class="text-muted">Transforms</span>' + transformStepsHtml(cfg.transform) + "</div>";
+      } else if (disp === "kv_text") {
+        html += '<label class="stack form-field--2xl">Field (optional)' +
+          '<select class="input" data-cfg="field_id">' +
+          fieldOptionsHtml(null, cfg.field_id) +
+          "</select></label>";
+        html += '<label class="stack">Template' +
+          '<textarea class="input" data-cfg="template" rows="3" placeholder="Status: {{ '{{_poll.outcome}}' }}">' +
+          escapeAttr(cfg.template || "") + "</textarea></label>";
+      } else if (disp === "stat") {
+        html += '<label class="stack form-field--2xl">Field' +
+          '<select class="input" data-cfg="field_id">' +
+          fieldOptionsHtml(allowed || ["counter", "value"], cfg.field_id) +
+          "</select></label>";
+        html += '<label class="stack form-field--sm">Unit' +
+          '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
+        html += '<div class="stack"><span class="text-muted">Transforms</span>' + transformStepsHtml(cfg.transform) + "</div>";
+      } else if (disp === "toggle") {
+        html += '<label class="stack form-field--2xl">Field' +
+          '<select class="input" data-cfg="field_id">' +
+          fieldOptionsHtml(allowed || ["toggle"], cfg.field_id) +
+          "</select></label>";
+      } else if (disp === "table") {
+        var ids = Array.isArray(cfg.field_ids) ? cfg.field_ids : [];
+        html += '<label class="stack form-field--2xl">Fields' + fieldMultiSelectHtml(ids) + "</label>";
+      }
+    }
+
+    if (w.type === "links") {
+      html += linkItemsHtml(cfg.items);
+    }
+
+    if (w.type === "system") {
+      if (disp === "source_health") {
+        html += '<label class="stack form-field--md">Stale after (hours)' +
+          '<input type="number" class="input" data-cfg="stale_threshold_hours" min="1" max="8760" value="' +
+          (cfg.stale_threshold_hours != null ? cfg.stale_threshold_hours : 24) + '"></label>';
+      }
+      if (disp === "recent_events") {
+        html += '<label class="stack form-field--md">Max lines' +
+          '<input type="number" class="input" data-cfg="limit" min="1" max="50" value="' +
+          (cfg.limit != null ? cfg.limit : 10) + '"></label>';
+      }
+    }
+
+    return html;
+  }
+
+  function escapeAttr(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  }
+
+  function render() {
+    var widgets = normalize(JSON.parse(jsonEl.value || "[]"));
+    listEl.innerHTML = "";
+    emptyEl.hidden = widgets.length > 0;
+    widgets.forEach(function (w, i) {
+      var card = document.createElement("div");
+      card.className = "card";
+      card.dataset.index = String(i);
+      card.dataset.type = w.type;
+      card.dataset.display = w.display || defaultDisplay(w.type);
+      if (w.id) card.dataset.id = w.id;
+      ["x", "y", "w", "h"].forEach(function (k) {
+        if (w[k] != null) card.dataset[k] = String(w[k]);
+      });
+      card.innerHTML =
+        '<div class="card__body stack">' +
+          '<div class="flex items-center gap flex-wrap justify-between">' +
+            '<span class="text-muted">' + escapeAttr(kindTitle(w.type)) +
+              (w.id ? ' <code class="text-xs">' + escapeAttr(w.id) + "</code>" : "") +
+            "</span>" +
+            '<div class="flex items-center gap">' +
+              '<button type="button" class="btn" data-action="up"' + (i === 0 ? " disabled" : "") + ">Up</button>" +
+              '<button type="button" class="btn" data-action="down"' + (i === widgets.length - 1 ? " disabled" : "") + ">Down</button>" +
+              '<button type="button" class="btn" data-action="remove">Remove</button>' +
+            "</div>" +
+          "</div>" +
+          '<label class="stack form-field--2xl">Title' +
+            '<input type="text" class="input" data-cfg="title" value="' + escapeAttr(w.title) + '">' +
+          "</label>" +
+          configFieldsHtml(w) +
+        "</div>";
+      listEl.appendChild(card);
+    });
+    syncJson();
+  }
+
+  function readTransforms(card) {
+    var steps = [];
+    card.querySelectorAll("[data-transform-row]").forEach(function (row) {
+      var op = (row.querySelector("[data-xform-op]") || {}).value || "div";
+      var byEl = row.querySelector("[data-xform-by]");
+      var byRaw = byEl ? byEl.value : "";
+      var step = {op: op};
+      if (op === "abs") { steps.push(step); return; }
+      if (byRaw === "" || byRaw == null) return;
+      var n = parseFloat(byRaw);
+      if (isNaN(n)) return;
+      if (op === "round") step.digits = Math.round(n);
+      else step.by = n;
+      steps.push(step);
+    });
+    return steps;
+  }
+
+  function readChartSources(card) {
+    var sources = [];
+    card.querySelectorAll("[data-chart-source]").forEach(function (box) {
+      var src = {};
+      box.querySelectorAll("[data-src]").forEach(function (el) {
+        var key = el.getAttribute("data-src");
+        var raw = el.value;
+        if (raw === "" || raw == null) return;
+        if (key === "field_id") {
+          var n = parseInt(raw, 10);
+          if (!isNaN(n)) src[key] = n;
+        } else {
+          src[key] = raw;
+        }
+      });
+      if (src.field_id) sources.push(src);
+    });
+    return sources;
+  }
+
+  function readSeriesSources(card) {
+    var sources = [];
+    card.querySelectorAll("[data-series-source]").forEach(function (box) {
+      var src = {};
+      box.querySelectorAll("[data-ssrc]").forEach(function (el) {
+        var key = el.getAttribute("data-ssrc");
+        var raw = el.value;
+        if (raw === "" || raw == null) return;
+        if (key === "field_id") {
+          var n = parseInt(raw, 10);
+          if (!isNaN(n)) src[key] = n;
+        } else {
+          src[key] = raw;
+        }
+      });
+      if (src.field_id) sources.push(src);
+    });
+    return sources;
+  }
+
+  function readLinkItems(card) {
+    var items = [];
+    card.querySelectorAll("[data-link-row]").forEach(function (row) {
+      var it = {};
+      row.querySelectorAll("[data-link]").forEach(function (el) {
+        var key = el.getAttribute("data-link");
+        var raw = (el.value || "").trim();
+        if (raw) it[key] = raw;
+      });
+      if (it.label && it.url) items.push(it);
+    });
+    return items;
+  }
+
+  function readFromDom() {
+    var widgets = [];
+    listEl.querySelectorAll(":scope > .card").forEach(function (card) {
+      var type = card.dataset.type;
+      if (!type) return;
+      var titleInput = card.querySelector('[data-cfg="title"]');
+      var displayEl = card.querySelector('[data-cfg="display"]');
+      var entry = {
+        type: type,
+        display: displayEl ? displayEl.value : (card.dataset.display || defaultDisplay(type)),
+        title: titleInput ? titleInput.value.trim() || kindTitle(type) : kindTitle(type),
+      };
+      if (card.dataset.id) entry.id = card.dataset.id;
+      ["x", "y", "w", "h"].forEach(function (k) {
+        if (card.dataset[k] != null && card.dataset[k] !== "") {
+          var n = parseInt(card.dataset[k], 10);
+          if (!isNaN(n)) entry[k] = n;
+        }
+      });
+      var config = {};
+      card.querySelectorAll("[data-cfg]").forEach(function (el) {
+        var key = el.getAttribute("data-cfg");
+        if (key === "title" || key === "display") return;
+        if (key === "field_ids") {
+          var selected = [];
+          Array.prototype.forEach.call(el.selectedOptions || [], function (opt) {
+            var n = parseInt(opt.value, 10);
+            if (!isNaN(n)) selected.push(n);
+          });
+          if (selected.length) config.field_ids = selected;
+          return;
+        }
+        var raw = el.value;
+        if (raw === "" || raw == null) return;
+        if (key === "field_id" || key === "limit" || key === "range_hours" || key === "range_entries" || key === "stale_threshold_hours") {
+          var n = parseInt(raw, 10);
+          if (!isNaN(n)) config[key] = n;
+        } else {
+          config[key] = raw;
+        }
+      });
+      if (type === "display" && (entry.display === "logbook_list" || entry.display === "stat")) {
+        var steps = readTransforms(card);
+        if (steps.length) config.transform = steps;
+      }
+      if (type === "series") {
+        var ss = readSeriesSources(card);
+        if (ss.length) config.sources = ss;
+        delete config.field_id;
+        delete config.value_path;
+      }
+      if (type === "chart") {
+        var sources = readChartSources(card);
+        if (sources.length) config.sources = sources;
+      }
+      if (type === "links") {
+        var items = readLinkItems(card);
+        if (items.length) config.items = items;
+      }
+      if (!config.style) config.style = defaultStyle(type, entry.display);
+      entry.config = config;
+      widgets.push(entry);
+    });
+    return widgets;
+  }
+
+  function syncJson() {
+    listEl.querySelectorAll(":scope > .card").forEach(function (c, i) { c.dataset.index = String(i); });
+    jsonEl.value = JSON.stringify(readFromDom());
+  }
+
+  function setWidgets(widgets) {
+    jsonEl.value = JSON.stringify(normalize(widgets));
+    render();
+  }
+
+  document.getElementById("add-widget-btn").addEventListener("click", function () {
+    var sel = document.getElementById("widget-catalog");
+    var type = sel.value;
+    if (!type) return;
+    var widgets = readFromDom();
+    var disp = defaultDisplay(type);
+    widgets.push({
+      type: type,
+      display: disp,
+      title: kindTitle(type),
+      config: {style: defaultStyle(type, disp)}
+    });
+    setWidgets(widgets);
+  });
+
+  listEl.addEventListener("change", function (e) {
+    var el = e.target;
+    var cfgKey = el && el.getAttribute("data-cfg");
+    var srcKey = el && el.getAttribute("data-src");
+    if (cfgKey === "display" || cfgKey === "range_mode" || cfgKey === "style") {
+      var card = el.closest(".card");
+      if (!card) return;
+      var widgets = readFromDom();
+      var i = parseInt(card.dataset.index, 10);
+      if (!isNaN(i) && widgets[i]) {
+        if (cfgKey === "display") {
+          widgets[i].display = el.value;
+          widgets[i].config = widgets[i].config || {};
+          widgets[i].config.style = defaultStyle(widgets[i].type, el.value);
+        }
+        if (cfgKey === "style") {
+          widgets[i].config = widgets[i].config || {};
+          widgets[i].config.style = el.value;
+        }
+        if (cfgKey === "range_mode") {
+          widgets[i].config = widgets[i].config || {};
+          widgets[i].config.range_mode = el.value;
+        }
+        setWidgets(widgets);
+        return;
+      }
+    }
+    if (srcKey === "kind") {
+      var card2 = el.closest(".card");
+      if (!card2) return;
+      var widgets2 = readFromDom();
+      var i2 = parseInt(card2.dataset.index, 10);
+      if (!isNaN(i2) && widgets2[i2]) setWidgets(widgets2);
+      return;
+    }
+    syncJson();
+  });
+
+  listEl.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    var action = btn.getAttribute("data-action");
+
+    if (action === "xform-add") {
+      var list = btn.closest("[data-transform-list]");
+      if (!list) return;
+      var row = document.createElement("div");
+      row.className = "flex items-center gap flex-wrap";
+      row.setAttribute("data-transform-row", "");
+      row.innerHTML =
+        '<select class="input form-field--sm" data-xform-op>' +
+          ["mul","div","add","sub","abs","round"].map(function (o) {
+            return '<option value="' + o + '"' + (o === "div" ? " selected" : "") + ">" + o + "</option>";
+          }).join("") +
+        "</select>" +
+        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="by / digits" value="">' +
+        '<button type="button" class="btn" data-action="xform-remove">−</button>';
+      list.insertBefore(row, btn);
+      syncJson();
+      return;
+    }
+    if (action === "xform-remove") {
+      var r = btn.closest("[data-transform-row]");
+      if (r) r.remove();
+      syncJson();
+      return;
+    }
+    if (action === "src-add") {
+      var wrap = btn.closest("[data-chart-sources]");
+      if (!wrap) return;
+      var widgets = readFromDom();
+      var card = btn.closest(".card");
+      var i = parseInt(card.dataset.index, 10);
+      if (!widgets[i]) return;
+      widgets[i].config = widgets[i].config || {};
+      widgets[i].config.sources = widgets[i].config.sources || [];
+      widgets[i].config.sources.push({kind: "counter", field_id: "", label: ""});
+      setWidgets(widgets);
+      return;
+    }
+    if (action === "src-remove") {
+      var srcCard = btn.closest("[data-chart-source]");
+      if (srcCard) srcCard.remove();
+      syncJson();
+      return;
+    }
+    if (action === "series-src-add") {
+      var widgetsS = readFromDom();
+      var cardS = btn.closest(".card");
+      var iS = parseInt(cardS.dataset.index, 10);
+      if (!widgetsS[iS]) return;
+      widgetsS[iS].config = widgetsS[iS].config || {};
+      widgetsS[iS].config.sources = widgetsS[iS].config.sources || [];
+      widgetsS[iS].config.sources.push({field_id: "", label: "", value_path: ""});
+      setWidgets(widgetsS);
+      return;
+    }
+    if (action === "series-src-remove") {
+      var ssrc = btn.closest("[data-series-source]");
+      if (ssrc) ssrc.remove();
+      syncJson();
+      return;
+    }
+    if (action === "link-add") {
+      var widgets2 = readFromDom();
+      var card2 = btn.closest(".card");
+      var i2 = parseInt(card2.dataset.index, 10);
+      if (!widgets2[i2]) return;
+      widgets2[i2].config = widgets2[i2].config || {};
+      widgets2[i2].config.items = widgets2[i2].config.items || [];
+      widgets2[i2].config.items.push({label: "", url: "", icon: ""});
+      setWidgets(widgets2);
+      return;
+    }
+    if (action === "link-remove") {
+      var lr = btn.closest("[data-link-row]");
+      if (lr) lr.remove();
+      syncJson();
+      return;
+    }
+
+    var card = btn.closest(".card");
+    if (!card || !card.dataset.type) return;
+    var i = parseInt(card.dataset.index, 10);
+    var widgets = readFromDom();
+    if (action === "remove") {
+      widgets.splice(i, 1);
+    } else if (action === "up" && i > 0) {
+      var tmp = widgets[i - 1];
+      widgets[i - 1] = widgets[i];
+      widgets[i] = tmp;
+    } else if (action === "down" && i < widgets.length - 1) {
+      var tmp2 = widgets[i + 1];
+      widgets[i + 1] = widgets[i];
+      widgets[i] = tmp2;
+    }
+    setWidgets(widgets);
+  });
+
+  listEl.addEventListener("input", function () { syncJson(); });
+  form.addEventListener("submit", function () { syncJson(); });
+
+  setWidgets(initial);
+})();
+</script>
+{% endblock %}

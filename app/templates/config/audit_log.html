@@ -1,0 +1,57 @@
+{% extends "config/nav.html" %}
+{% block page_title %}Audit Log{% endblock %}
+{% block config_content %}
+<h1>Audit Log</h1>
+
+<form method="get" class="stack stack--dense mb">
+  <div class="filter-bar">
+    <input name="user_id" type="number" class="input" placeholder="User ID" value="{{ user_id_filter or '' }}">
+    <input name="action" type="text" class="input filter-bar__wide" placeholder="Action (e.g. source.create)" value="{{ action_filter or '' }}">
+    <button type="submit" class="btn btn--primary">Filter</button>
+    {% if user_id_filter or action_filter %}
+    <a href="/config/audit-log" class="btn">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+{% if items %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Timestamp</th>
+      <th>User</th>
+      <th>Action</th>
+      <th>Resource</th>
+      <th>IP</th>
+      <th>Details</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr>
+      <td>{{ item.timestamp.strftime('%Y-%m-%d %H:%M:%S') if item.timestamp else '' }}</td>
+      <td>{{ item.user_id or '-' }}</td>
+      <td><code>{{ item.action }}</code></td>
+      <td>{{ item.resource_type }}#{{ item.resource_id or '-' }}</td>
+      <td>{{ item.ip_address or '-' }}</td>
+      <td>{{ item.details | tojson if item.details else '-' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="flex items-center gap justify-center mt">
+  {% if page > 1 %}
+  <a href="/config/audit-log?page={{ page - 1 }}{{ '&user_id=' + user_id_filter if user_id_filter else '' }}{{ '&action=' + action_filter if action_filter else '' }}" class="btn btn--sm">Previous</a>
+  {% endif %}
+  <span class="text-muted">Page {{ page }} of {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a href="/config/audit-log?page={{ page + 1 }}{{ '&user_id=' + user_id_filter if user_id_filter else '' }}{{ '&action=' + action_filter if action_filter else '' }}" class="btn btn--sm">Next</a>
+  {% endif %}
+</div>
+
+<p class="text-muted mt">{{ total }} total entries</p>
+{% else %}
+<p class="text-muted mt">No audit entries yet.</p>
+{% endif %}
+{% endblock %}

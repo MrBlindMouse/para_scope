@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Event #{{ event.id }} – Para-Scope{% endblock %}
+{% block content %}
+<p class="mb"><a href="/events" class="btn btn--sm">Back to Events</a></p>
+<h1>Event #{{ event.id }}</h1>
+
+<div class="card mb">
+  <div class="card__header"><h2>Details</h2></div>
+  <div class="card__body">
+    <table class="table table--flush">
+      <tr><th class="table__key">ID</th><td>{{ event.id }}</td></tr>
+      <tr><th>Timestamp</th><td>{{ event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '-' }}</td></tr>
+      <tr><th>Status</th><td>
+        {% if event.status == 'processed' %}
+        <span class="badge badge--success">{{ event.status }}</span>
+        {% elif event.status == 'failed' %}
+        <span class="badge badge--negative">{{ event.status }}</span>
+        {% else %}
+        <span class="badge badge--warning">{{ event.status }}</span>
+        {% endif %}
+      </td></tr>
+      <tr><th>Source</th><td>{{ source.name if source else '-' }}</td></tr>
+      <tr><th>Event Type</th><td>{{ event_type.name if event_type else '-' }}</td></tr>
+      <tr><th>Correlation ID</th><td><code>{{ event.correlation_id or '-' }}</code></td></tr>
+      {% if event.processing_error %}
+      <tr><th>Processing Error</th><td><pre class="code-block code-block--error">{{ event.processing_error }}</pre></td></tr>
+      {% endif %}
+    </table>
+  </div>
+</div>
+
+<div class="card mb">
+  <div class="card__header"><h2>Normalized Data</h2></div>
+  <div class="card__body">
+    <pre class="code-block code-block--scroll">{{ event.normalized_data | tojson(indent=2) if event.normalized_data else '(empty)' }}</pre>
+  </div>
+</div>
+
+<div class="card mb">
+  <div class="card__header"><h2>Raw Payload</h2></div>
+  <div class="card__body">
+    <pre class="code-block code-block--scroll">{{ event.raw_payload or '(empty)' }}</pre>
+  </div>
+</div>
+{% endblock %}

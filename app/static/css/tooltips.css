@@ -1,0 +1,71 @@
+@layer components;
+
+@layer components {
+  .field-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+  }
+
+  .field-tip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.1em;
+    height: 1.1em;
+    padding: 0;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--color-ink-muted);
+    font: inherit;
+    font-size: 0.75em;
+    font-weight: 600;
+    line-height: 1;
+    cursor: help;
+
+    &:focus-visible {
+      outline: 2px solid var(--color-link);
+      outline-offset: 1px;
+    }
+  }
+
+  /*
+   * Uses the Popover API (top layer) so tips paint above modal <dialog>.
+   * Fallbacks still use fixed positioning when popover is unavailable.
+   */
+  .field-tip-bubble {
+    --tip-background: var(--color-canvas, Canvas);
+    --tip-color: var(--color-ink, inherit);
+    --tip-border: var(--color-border);
+
+    position: fixed;
+    inset: unset;
+    margin: 0;
+    z-index: 10000;
+    width: max-content;
+    max-width: min(18rem, calc(100vw - 1.5rem));
+    padding: 0.5em 0.65em;
+    border: 1px solid var(--tip-border);
+    border-radius: var(--radius-md);
+    background: var(--tip-background);
+    color: var(--tip-color);
+    font-size: 0.8rem;
+    font-weight: 400;
+    line-height: 1.35;
+    text-align: start;
+    white-space: normal;
+    box-shadow: 0 0.25rem 0.75rem color-mix(in oklch, var(--lch-gray-900, #000) 20%, transparent);
+    pointer-events: none;
+    overflow: visible;
+
+    &:popover-open {
+      display: block;
+    }
+
+    &[hidden] {
+      display: none;
+    }
+  }
+}

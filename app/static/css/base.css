@@ -1,0 +1,139 @@
+@layer base;
+
+@layer base {
+  :root {
+    /* --- Grays (neutral, chroma ~0.01) --- */
+    --lch-gray-50:   98% 0.003 96;
+    --lch-gray-100:  95% 0.004 96;
+    --lch-gray-200:  90% 0.005 96;
+    --lch-gray-300:  80% 0.006 96;
+    --lch-gray-400:  65% 0.007 96;
+    --lch-gray-500:  50% 0.008 96;
+    --lch-gray-600:  35% 0.009 96;
+    --lch-gray-700:  25% 0.010 96;
+    --lch-gray-800:  15% 0.010 96;
+    --lch-gray-900:  8%  0.010 96;
+
+    /* --- Blue (chroma ~0.22, hue 255) --- */
+    --lch-blue-50:   97% 0.010 255;
+    --lch-blue-100:  93% 0.018 255;
+    --lch-blue-200:  85% 0.040 255;
+    --lch-blue-300:  72% 0.100 255;
+    --lch-blue-400:  60% 0.170 255;
+    --lch-blue-500:  54% 0.230 255;
+    --lch-blue-600:  45% 0.240 255;
+    --lch-blue-700:  35% 0.210 255;
+    --lch-blue-800:  25% 0.160 255;
+    --lch-blue-900:  15% 0.100 255;
+
+    /* --- Red (chroma ~0.24, hue 25) --- */
+    --lch-red-50:   96% 0.012 25;
+    --lch-red-100:  91% 0.025 25;
+    --lch-red-200:  82% 0.055 25;
+    --lch-red-300:  70% 0.120 25;
+    --lch-red-400:  60% 0.190 25;
+    --lch-red-500:  52% 0.240 25;
+    --lch-red-600:  44% 0.240 25;
+    --lch-red-700:  36% 0.210 25;
+    --lch-red-800:  26% 0.160 25;
+    --lch-red-900:  16% 0.100 25;
+
+    /* --- Green (chroma ~0.20, hue 150) --- */
+    --lch-green-50:   97% 0.010 150;
+    --lch-green-100:  93% 0.020 150;
+    --lch-green-200:  86% 0.045 150;
+    --lch-green-300:  74% 0.110 150;
+    --lch-green-400:  63% 0.170 150;
+    --lch-green-500:  55% 0.200 150;
+    --lch-green-600:  46% 0.200 150;
+    --lch-green-700:  37% 0.170 150;
+    --lch-green-800:  27% 0.130 150;
+    --lch-green-900:  17% 0.080 150;
+
+    /* --- Yellow (chroma ~0.20, hue 95) --- */
+    --lch-yellow-50:   97% 0.015 95;
+    --lch-yellow-100:  93% 0.030 95;
+    --lch-yellow-200:  87% 0.060 95;
+    --lch-yellow-300:  78% 0.120 95;
+    --lch-yellow-400:  70% 0.170 95;
+    --lch-yellow-500:  63% 0.200 95;
+    --lch-yellow-600:  54% 0.200 95;
+    --lch-yellow-700:  44% 0.180 95;
+    --lch-yellow-800:  33% 0.150 95;
+    --lch-yellow-900:  20% 0.100 95;
+
+    /* --- Amber (chroma ~0.20, hue 55) --- */
+    --lch-amber-50:   97% 0.012 55;
+    --lch-amber-100:  93% 0.028 55;
+    --lch-amber-200:  86% 0.060 55;
+    --lch-amber-300:  75% 0.130 55;
+    --lch-amber-400:  65% 0.180 55;
+    --lch-amber-500:  56% 0.200 55;
+    --lch-amber-600:  47% 0.200 55;
+    --lch-amber-700:  38% 0.170 55;
+    --lch-amber-800:  27% 0.130 55;
+    --lch-amber-900:  16% 0.080 55;
+
+    /* --- Purple (chroma ~0.22, hue 300) --- */
+    --lch-purple-50:   97% 0.010 300;
+    --lch-purple-100:  92% 0.022 300;
+    --lch-purple-200:  84% 0.050 300;
+    --lch-purple-300:  72% 0.110 300;
+    --lch-purple-400:  60% 0.180 300;
+    --lch-purple-500:  52% 0.220 300;
+    --lch-purple-600:  43% 0.220 300;
+    --lch-purple-700:  34% 0.190 300;
+    --lch-purple-800:  24% 0.150 300;
+    --lch-purple-900:  14% 0.090 300;
+
+    /* --- Semantic colors (light mode) --- */
+    --color-canvas:      oklch(var(--lch-gray-50));
+    --color-surface:     oklch(var(--lch-gray-100));
+    --color-ink:         oklch(var(--lch-gray-900));
+    --color-ink-muted:   oklch(var(--lch-gray-500));
+    --color-border:      oklch(var(--lch-gray-300));
+    --color-border-strong: oklch(var(--lch-gray-400));
+
+    --color-link:        oklch(var(--lch-blue-500));
+    --color-link-hover:  oklch(var(--lch-blue-600));
+
+    --color-negative:    oklch(var(--lch-red-500));
+    --color-negative-bg: oklch(var(--lch-red-50) / 0.15);
+
+    --color-positive:    oklch(var(--lch-green-500));
+    --color-positive-bg: oklch(var(--lch-green-50) / 0.15);
+
+    --color-warning:     oklch(var(--lch-yellow-500));
+    --color-warning-bg:  oklch(var(--lch-yellow-50) / 0.15);
+
+    --color-info:        oklch(var(--lch-blue-500));
+    --color-info-bg:     oklch(var(--lch-blue-50) / 0.15);
+
+    --color-purple:      oklch(var(--lch-purple-500));
+
+    --font-family: system-ui, sans-serif;
+    --font-scale: 1;
+
+    --inline-space: 1ch;
+    --block-space:  1rem;
+    --radius-sm: 0.25rem;
+    --radius-md: 0.375rem;
+    --radius-lg: 0.5rem;
+  }
+
+  /* Dark / named themes live in themes.css via html[data-theme]. */
+
+  html {
+    font-size: calc(100% * var(--font-scale));
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-family);
+    line-height: 1.5;
+  }
+
+  a { color: var(--color-link); }
+  a:hover { color: var(--color-link-hover); text-decoration: underline; }
+}

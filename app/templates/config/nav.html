@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{% block page_title %}Configuration{% endblock %} – Para-Scope{% endblock %}
+{% block header_actions %}
+  <a href="/" class="btn btn--icon" aria-label="Go to dashboard" title="Go to dashboard">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+      <polyline points="9 22 9 12 15 12 15 22"/>
+    </svg>
+  </a>
+{% endblock %}
+{% block content %}
+<div class="config-layout" id="config-panel">
+  {# Boost only the nav links so hx-select/hx-target do not leak into page HTMX actions. #}
+  <nav class="card config-nav"
+       hx-boost="true"
+       hx-target="#config-panel"
+       hx-select="#config-panel"
+       hx-swap="outerHTML show:window:top">
+    <a href="/config/pipeline" class="config-nav__link{% if active == 'pipeline' or active.startswith('source_') %} config-nav__link--active{% endif %}">
+      Pipeline
+    </a>
+    <a href="/config/users" class="config-nav__link{% if active == 'users' %} config-nav__link--active{% endif %}">
+      Users
+    </a>
+    <hr class="config-nav__divider">
+    <a href="/config/dashboard" class="config-nav__link{% if active == 'dashboard' %} config-nav__link--active{% endif %}">
+      Dashboard
+    </a>
+    <a href="/config/style" class="config-nav__link{% if active == 'style' %} config-nav__link--active{% endif %}">
+      Style
+    </a>
+    <hr class="config-nav__divider">
+    <a href="/config/audit-log" class="config-nav__link{% if active == 'audit-log' %} config-nav__link--active{% endif %}">
+      Audit Log
+    </a>
+    <hr class="config-nav__divider">
+    <a href="/system" class="config-nav__link{% if active == 'system' %} config-nav__link--active{% endif %}">
+      System
+    </a>
+    <hr class="config-nav__divider">
+    <a href="/help" class="config-nav__link{% if active == 'help' %} config-nav__link--active{% endif %}">
+      Help
+    </a>
+  </nav>
+  <div class="config-layout__main">
+    {% block config_content %}{% endblock %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,19 @@
+<div class="stack dialog__form">
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">Sample — {{ event_type.name }}</h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+  {% if event %}
+    <p class="text-muted">
+      #{{ event.id }}
+      · {{ event.status or "pending" }}
+      · {{ event.timestamp }}
+    </p>
+    <pre class="input" style="white-space: pre-wrap; overflow: auto; max-height: 24rem; margin: 0;">{{ event.normalized_data | tojson(indent=2) }}</pre>
+  {% else %}
+    <p class="text-muted">
+      No events of type <code>{{ event_type.name }}</code> yet.
+      Send a webhook with this type or wait for a poll to emit it.
+    </p>
+  {% endif %}
+</div>

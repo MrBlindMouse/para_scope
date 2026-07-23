@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Events – Para-Scope{% endblock %}
+{% block content %}
+<h1>Events</h1>
+
+<form method="get" class="stack stack--dense mb"
+      hx-get="/events" hx-target="#events-table-wrap" hx-select="#events-table-wrap" hx-push-url="true">
+  <div class="filter-bar">
+    <select name="source_id" class="input">
+      <option value="">All sources</option>
+      {% for s in sources %}
+      <option value="{{ s.id }}"{% if source_id_filter == (s.id|string) %} selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="event_type_id" class="input">
+      <option value="">All types</option>
+      {% for et in event_types %}
+      <option value="{{ et.id }}"{% if event_type_filter == (et.id|string) %} selected{% endif %}>{{ et.name }}</option>
+      {% endfor %}
+    </select>
+    <select name="status" class="input">
+      <option value="">All statuses</option>
+      <option value="pending"{% if status_filter == 'pending' %} selected{% endif %}>Pending</option>
+      <option value="processed"{% if status_filter == 'processed' %} selected{% endif %}>Processed</option>
+      <option value="failed"{% if status_filter == 'failed' %} selected{% endif %}>Failed</option>
+    </select>
+    <button type="submit" class="btn btn--primary">Filter</button>
+    {% if source_id_filter or event_type_filter or status_filter %}
+    <a href="/events" class="btn">Clear</a>
+    {% endif %}
+  </div>
+</form>
+
+<div id="events-table-wrap">
+{% if items %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Timestamp</th>
+      <th>Source</th>
+      <th>Type</th>
+      <th>Status</th>
+      <th>Correlation ID</th>
+      <th>Errors</th>
+    </tr>
+  </thead>
+  <tbody id="events-tbody"
+         hx-get="/events/rows{% if source_id_filter %}?source_id={{ source_id_filter }}{% endif %}{% if event_type_filter %}{{ '&' if source_id_filter else '?' }}event_type_id={{ event_type_filter }}{% endif %}{% if status_filter %}{{ '&' if source_id_filter or event_type_filter else '?' }}status={{ status_filter }}{% endif %}"
+         hx-trigger="every 5s"
+         hx-vals="js:{after: document.querySelector('#events-tbody tr td a')?.textContent?.trim() || '0'}"
+         hx-swap="afterbegin">
+    {% for item in items %}
+    {% include "components/event_row.html" %}
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="flex items-center gap justify-center mt">
+  {% if page > 1 %}
+  <a href="/events?page={{ page - 1 }}{{ '&source_id=' + source_id_filter if source_id_filter else '' }}{{ '&event_type_id=' + event_type_filter if event_type_filter else '' }}{{ '&status=' + status_filter if status_filter else '' }}" class="btn btn--sm">Previous</a>
+  {% endif %}
+  <span class="text-muted">Page {{ page }} of {{ total_pages }}</span>
+  {% if page < total_pages %}
+  <a href="/events?page={{ page + 1 }}{{ '&source_id=' + source_id_filter if source_id_filter else '' }}{{ '&event_type_id=' + event_type_filter if event_type_filter else '' }}{{ '&status=' + status_filter if status_filter else '' }}" class="btn btn--sm">Next</a>
+  {% endif %}
+</div>
+
+<p class="text-muted mt">{{ total }} total events</p>
+{% else %}
+<p class="text-muted mt">No events yet.</p>
+{% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,15 @@
+@layer reset;
+
+@layer reset {
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  body { min-height: 100vh; }
+  h1, h2, h3, h4, h5, h6 { font-weight: inherit; }
+  p { margin-block: 1rem; }
+  a { color: inherit; text-decoration: inherit; }
+  img, svg { display: block; max-width: 100%; }
+  input, button, textarea, select { font: inherit; }
+  ul, ol { list-style: none; }
+  /* Author .stack/.flex display rules otherwise beat the UA [hidden] rule. */
+  [hidden] { display: none !important; }
+}

@@ -1,0 +1,20 @@
+{% set canvas_id = "chart-" ~ (widget_id or "series") %}
+{% set disp = display or wdata.display or "line" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "default" %}
+{% if wdata and wdata.error %}
+<p class="text-muted">{{ wdata.error }}</p>
+{% elif wdata and wdata.series %}
+<div class="widget-chart{% if disp == 'sparkline' %} widget-chart--spark{% endif %}">
+  <canvas id="{{ canvas_id }}"
+          data-widget-chart="series"
+          data-chart-display="{{ disp }}"
+          data-chart-style="{{ style }}"
+          data-series='{{ wdata.series | tojson }}'
+          data-label="{{ wdata.name or '' }}"
+          data-unit="{{ wdata.unit or '' }}"
+          {% if disp == 'sparkline' %}data-spark="1"{% endif %}
+          {% if disp == 'area' %}data-area="1"{% endif %}></canvas>
+</div>
+{% else %}
+<p class="text-muted">No data available.</p>
+{% endif %}

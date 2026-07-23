@@ -1,0 +1,50 @@
+{% extends "config/nav.html" %}
+{% block page_title %}Users{% endblock %}
+{% block config_content %}
+<h1>Users</h1>
+
+{% include 'components/alerts.html' %}
+
+<!-- Add User Form -->
+<div class="card mb">
+  <div class="card__header"><h2>Add User</h2></div>
+  <div class="card__body">
+    <form method="post" action="/config/users" class="stack">
+  {% include 'components/csrf.html' %}
+      <label class="stack">
+        Username *
+        <input name="username" type="text" class="input" placeholder="jdoe" required>
+      </label>
+      <label class="stack">
+        Password *
+        <input name="password" type="password" class="input" required>
+      </label>
+      <div class="flex items-center gap">
+        <button type="submit" class="btn btn--primary">Create User</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Users Table -->
+{% if items %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Username</th>
+      <th>Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in items %}
+    <tr>
+      <td>{{ item.username }}</td>
+      <td>{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else '-' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted mt">No users yet.</p>
+{% endif %}
+{% endblock %}

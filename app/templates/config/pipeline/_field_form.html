@@ -1,0 +1,89 @@
+{% set is_edit = field is defined and field %}
+{% set ft = field.field_type if is_edit else 'logbook' %}
+{% set fname = field.name if is_edit else '' %}
+<form method="post"
+      action="{% if is_edit %}/config/pipeline/field/{{ field.id }}{% else %}/config/pipeline/fields{% endif %}"
+      class="stack dialog__form"
+      hx-post="{% if is_edit %}/config/pipeline/field/{{ field.id }}{% else %}/config/pipeline/fields{% endif %}"
+      hx-target="#pipeline-fields"
+      hx-swap="outerHTML"
+      id="field-form">
+  {% include 'components/csrf.html' %}
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">{% if is_edit %}Edit Field{% else %}Add Field{% endif %}</h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+
+  <label class="stack">
+    <span class="field-label">
+      Type
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About field types"
+              data-tip="logbook: append-only JSON entries. counter: numeric. value: string. toggle: on/off. Type locks after create.">?</button>
+    </span>
+    <select name="field_type" class="input" id="field-type-select" autofocus
+            {% if is_edit %}disabled{% endif %}>
+      {% for t in field_types %}
+        <option value="{{ t }}" {% if ft == t %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+    {% if is_edit %}
+      <input type="hidden" name="field_type" value="{{ field.field_type }}">
+      <span class="text-muted">Type cannot be changed after create.</span>
+    {% endif %}
+  </label>
+
+  {# ── logbook ── #}
+  <div id="field-params-logbook" class="stack field-type-params" {% if ft != 'logbook' %}hidden{% endif %}>
+    <p class="text-muted">Append-only JSON log. field_push adds entries; widgets can transform for display.</p>
+    <label class="stack">
+      Name *
+      <input name="name" type="text" class="input field-name-input"
+             value="{{ fname }}" placeholder="App errors"
+             {% if ft == 'logbook' %}required{% else %}disabled{% endif %}>
+    </label>
+    <label class="stack">
+      Max entries
+      <input name="max_entries" type="number" class="input" min="1" max="100000"
+             value="{{ (field.config or {}).get('max_entries', 100) if is_edit else 100 }}"
+             {% if ft != 'logbook' %}disabled{% endif %}>
+    </label>
+  </div>
+
+  {# ── counter ── #}
+  <div id="field-params-counter" class="stack field-type-params" {% if ft != 'counter' %}hidden{% endif %}>
+    <p class="text-muted">Numeric counter. field_push can increment, decrement, or reset. Starts at 0.</p>
+    <label class="stack">
+      Name *
+      <input name="name" type="text" class="input field-name-input"
+             value="{{ fname }}" placeholder="Request count"
+             {% if ft == 'counter' %}required{% else %}disabled{% endif %}>
+    </label>
+  </div>
+
+  {# ── value ── #}
+  <div id="field-params-value" class="stack field-type-params" {% if ft != 'value' %}hidden{% endif %}>
+    <p class="text-muted">Stores a single string. field_push replaces it from a literal or event key.</p>
+    <label class="stack">
+      Name *
+      <input name="name" type="text" class="input field-name-input"
+             value="{{ fname }}" placeholder="Last status"
+             {% if ft == 'value' %}required{% else %}disabled{% endif %}>
+    </label>
+  </div>
+
+  {# ── toggle ── #}
+  <div id="field-params-toggle" class="stack field-type-params" {% if ft != 'toggle' %}hidden{% endif %}>
+    <p class="text-muted">Boolean on/off. field_push sets it from a literal or event key. Starts off.</p>
+    <label class="stack">
+      Name *
+      <input name="name" type="text" class="input field-name-input"
+             value="{{ fname }}" placeholder="Service up"
+             {% if ft == 'toggle' %}required{% else %}disabled{% endif %}>
+    </label>
+  </div>
+
+  <div class="flex items-center gap">
+    <button type="submit" class="btn btn--primary">{% if is_edit %}Save Field{% else %}Create Field{% endif %}</button>
+  </div>
+</form>

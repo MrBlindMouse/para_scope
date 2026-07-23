@@ -1,0 +1,287 @@
+{% extends "config/nav.html" %}
+{% block page_title %}Help{% endblock %}
+{% block config_content %}
+<div class="stack help">
+  <h1>Help</h1>
+  <p class="text-muted">
+    How Para-Scope pipelines work: sources ingest events, rules decide what matches,
+    and actions run when a rule fires.
+  </p>
+
+  <nav class="card">
+    <div class="card__body stack">
+      <strong>On this page</strong>
+      <ul class="stack help__list">
+        <li><a href="#pipeline">Pipeline overview</a></li>
+        <li><a href="#fields">Fields</a></li>
+        <li><a href="#rule-matching">Rule matching</a></li>
+        <li><a href="#rule-conditions">Rule conditions</a></li>
+        <li><a href="#actions">Actions</a></li>
+        <li><a href="#webhooks">Webhooks</a></li>
+        <li><a href="#polling">Polling</a></li>
+        <li><a href="#web-push">Web Push</a></li>
+        <li><a href="#secrets">Secrets</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <section class="card stack" id="pipeline">
+    <div class="card__header"><h2>Pipeline overview</h2></div>
+    <div class="card__body stack">
+      <p>Configure everything under <a href="/config/pipeline">Pipeline</a> as a chain per source:</p>
+      <p><strong>Source → Events → Rules → Actions</strong></p>
+      <ol class="stack help__list help__list--ordered">
+        <li><strong>Source</strong> — webhook or poll endpoint that receives data.</li>
+        <li><strong>Events</strong> — named event types for that source (e.g. <code>payment.paid</code>, <code>on_success</code>).</li>
+        <li><strong>Rules</strong> — which events (and optional field conditions) should fire actions.</li>
+        <li><strong>Actions</strong> — what to do when a rule matches (<code>log</code>, notify, forward, etc.).</li>
+      </ol>
+      <p class="text-muted">
+        Typical setup: add a source, define event types, create a rule for those types,
+        then add actions on the rule. Confirm results on <a href="/events">Events</a>.
+      </p>
+    </div>
+  </section>
+
+  <section class="card stack" id="fields">
+    <div class="card__header"><h2>Fields</h2></div>
+    <div class="card__body stack">
+      <p>
+        <strong>Fields</strong> are global storage sinks on the
+        <a href="/config/pipeline">Pipeline</a> page (not per-source, and not the same as
+        condition keys on event payloads). Actions write into them; dashboard widgets read them.
+      </p>
+      <table class="table">
+        <thead>
+          <tr><th>Type</th><th>Purpose</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>logbook</code></td>
+            <td>Append-only JSON entries with a max size. Widgets transform for display.</td>
+          </tr>
+          <tr>
+            <td><code>counter</code></td>
+            <td>Numeric tally — <code>field_push</code> can increment, decrement (default delta 1), or reset.</td>
+          </tr>
+          <tr>
+            <td><code>value</code></td>
+            <td>Single string — widgets may coerce for display.</td>
+          </tr>
+          <tr>
+            <td><code>toggle</code></td>
+            <td>Boolean on/off state.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Create Fields first, then pick one on a <code>field_push</code> action
+        and on Metric Graph / Logbook / Field Value widgets under
+        <a href="/config/dashboard">Dashboard Layout</a>.
+      </p>
+    </div>
+  </section>
+
+  <section class="card stack" id="rule-matching">
+    <div class="card__header"><h2>Rule matching</h2></div>
+    <div class="card__body stack">
+      <p>When an event arrives, enabled rules are checked in <code>order_index</code> order. A rule matches only if all of these pass:</p>
+      <ol class="stack help__list help__list--ordered">
+        <li><strong>Source</strong> — the rule’s source matches the event (rules are scoped to a source in the pipeline UI).</li>
+        <li><strong>Event types</strong> — empty selection means all types for that source; otherwise the event’s type must be in the list.</li>
+        <li><strong>Conditions</strong> — see below; empty conditions match everything that passed the filters above.</li>
+      </ol>
+      <p>Then each linked <strong>enabled</strong> action on the rule is run.</p>
+    </div>
+  </section>
+
+  <section class="card stack" id="rule-conditions">
+    <div class="card__header"><h2>Rule conditions</h2></div>
+    <div class="card__body stack">
+      <p>
+        Conditions filter on fields in the event’s <code>normalized_data</code>
+        (webhook JSON body, or fields extracted from a poll).
+        In the rule dialog you build rows of <strong>Field + Operator + Value</strong>;
+        they are stored as JSON under the hood.
+      </p>
+
+      <h3>Behavior</h3>
+      <ul class="stack help__list">
+        <li><strong>Empty</strong> (no rows / <code>{}</code>) — match all events that already passed source and event-type filters.</li>
+        <li><strong>AND logic</strong> — every condition must match.</li>
+        <li><strong>Fail-closed</strong> — missing fields, bad types, or invalid regex do <em>not</em> match.</li>
+        <li><strong>Dotted paths</strong> — use <code>severity</code> or nested paths like <code>_poll.outcome</code> / <code>_poll.response_time_ms</code>.</li>
+      </ul>
+
+      <h3>Operators</h3>
+      <table class="table">
+        <thead>
+          <tr><th>Operator</th><th>Meaning</th><th>Stored JSON example</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>equals</td>
+            <td>Exact match (numbers parsed when the value looks numeric)</td>
+            <td><code>{"severity": "high"}</code></td>
+          </tr>
+          <tr>
+            <td>not</td>
+            <td>Not equal (matches when the value differs, including if the field is missing)</td>
+            <td><code>{"status": {"not": "ok"}}</code></td>
+          </tr>
+          <tr>
+            <td>gt</td>
+            <td>Numeric greater than</td>
+            <td><code>{"amount": {"gt": 10}}</code></td>
+          </tr>
+          <tr>
+            <td>lt</td>
+            <td>Numeric less than</td>
+            <td><code>{"amount": {"lt": 100}}</code></td>
+          </tr>
+          <tr>
+            <td>contains</td>
+            <td>Substring in the string form of the value</td>
+            <td><code>{"msg": {"contains": "error"}}</code></td>
+          </tr>
+          <tr>
+            <td>regex</td>
+            <td>Python <code>re.search</code> against the string form</td>
+            <td><code>{"code": {"regex": "^5\\d\\d$"}}</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Combining conditions</h3>
+      <p>
+        Multiple rows on different fields all must match. Multiple operators on the
+        <em>same</em> field (e.g. gt and lt) merge into one object:
+      </p>
+      <pre class="help__code">{"amount": {"gt": 10, "lt": 100}, "currency": "USD"}</pre>
+      <p class="text-muted">
+        Prefer one clear operator per field. If you mix <code>equals</code> and
+        comparison ops on the same field in the visual editor, the last serialization wins.
+        Use <strong>Edit as JSON</strong> on the rule form for unusual shapes.
+      </p>
+
+      <h3>Examples</h3>
+      <pre class="help__code">{} 
+# match all events for the selected types
+
+{"severity": "high"}
+# only when severity is exactly "high"
+
+{"amount": {"gt": 100}, "currency": "USD"}
+# amount &gt; 100 AND currency equals USD
+
+{"status": {"not": "ok"}}
+# status is anything other than "ok" (including missing)
+
+{"status": {"contains": "fail"}, "code": {"regex": "^5\\d\\d$"}}
+# status contains "fail" AND code looks like 5xx</pre>
+    </div>
+  </section>
+
+  <section class="card stack" id="actions">
+    <div class="card__header"><h2>Actions</h2></div>
+    <div class="card__body stack">
+      <p>
+        Actions have a <strong>type</strong> and type-specific params (no freeform name —
+        the chain shows process → target).
+        <code>field_push</code> picks a global <a href="#fields">Field</a>;
+        <code>http_forward</code> can attach secrets.
+      </p>
+      <table class="table">
+        <thead>
+          <tr><th>Type</th><th>Params</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>field_push</code></td>
+            <td>Target Field + type-specific op. Event keys and counter deltas support dotted paths (e.g. <code>_poll.response_time_ms</code>).</td>
+          </tr>
+          <tr>
+            <td><code>http_forward</code></td>
+            <td>URL, method, optional Bearer or Key+Secret credentials.</td>
+          </tr>
+          <tr>
+            <td><code>web_push</code></td>
+            <td>Title, body, url — use <code>{{ '{{source}}' }}</code> / <code>{{ '{{field}}' }}</code> placeholders from event data.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="text-muted">
+        Config may include <code>retry_count</code> to retry a failed action that many times after the first attempt.
+      </p>
+    </div>
+  </section>
+
+  <section class="card stack" id="webhooks">
+    <div class="card__header"><h2>Webhooks</h2></div>
+    <div class="card__body stack">
+      <p>Create a <strong>Webhook</strong> source, then <code>POST /webhook/{slug}</code> with a JSON body.</p>
+      <ul class="stack help__list">
+        <li>Once the source has event types, send the type via <code>X-Event-Type</code> header or body field <code>event_type</code> / <code>type</code>.</li>
+        <li>If the source has a webhook secret, send <code>X-Webhook-Timestamp</code> (unix seconds) and <code>X-Webhook-Signature</code> = HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>. Without a secret, unsigned requests are accepted (ok for local/dev).</li>
+      </ul>
+      <p>
+        Each webhook event includes <code>source</code> and a <code>_webhook</code> object with
+        <code>slug</code>, <code>method</code>, <code>path</code>, <code>content_type</code>,
+        <code>body_bytes</code>, <code>client</code>, <code>user_agent</code>,
+        <code>event_type</code>, <code>correlation_id</code>, <code>signed</code>,
+        and <code>delivery_lag_ms</code> when <code>X-Webhook-Timestamp</code> is sent.
+      </p>
+      <p>
+        On the Pipeline page, use <strong>Recent</strong> on a source for the last few events,
+        and <strong>Sample</strong> on an event type for that type’s latest <code>normalized_data</code>
+        (handy when writing rules and <code>field_push</code> keys).
+        Each source keeps at most 500 events; older ones are pruned automatically.
+      </p>
+    </div>
+  </section>
+
+  <section class="card stack" id="polling">
+    <div class="card__header"><h2>Polling</h2></div>
+    <div class="card__body stack">
+      <p>
+        <strong>Poll</strong> sources run schedules in-process (interval or cron) and feed the same pipeline.
+        Successful polls emit <code>on_success</code> (or <code>handler_params.event_type</code> when set);
+        failures emit <code>on_failure</code>. An event type named <code>always</code> (not seeded by default) also fires on every run.
+      </p>
+      <p>
+        Each poll event includes <code>source</code> and a <code>_poll</code> object with
+        <code>schedule_id</code>, <code>status_code</code>,
+        <code>attempts</code>, <code>outcome</code>, and <code>response_time_ms</code>.
+      </p>
+      <p>
+        Schedule <code>handler_params</code> JSON supports <code>json_path</code>, <code>event_type</code>,
+        <code>headers</code>, <code>query</code>, <code>body</code>, and optional <code>auth_secret_id</code>.
+      </p>
+    </div>
+  </section>
+
+  <section class="card stack" id="web-push">
+    <div class="card__header"><h2>Web Push</h2></div>
+    <div class="card__body stack">
+      <p>For <code>web_push</code> actions:</p>
+      <ol class="stack help__list help__list--ordered">
+        <li>Set <code>PARA_SCOPE_VAPID_PUBLIC_KEY</code> and <code>PARA_SCOPE_VAPID_PRIVATE_KEY</code> in <code>.env</code> (optional <code>PARA_SCOPE_VAPID_SUBJECT</code>).</li>
+        <li>Click the bell icon in the page header while logged in to enable notifications.</li>
+        <li>Use <code>{{ '{{field}}' }}</code> or <code>{{ '{{nested.path}}' }}</code> placeholders in title/body/url from event data. Every event includes <code>source</code> (the Source name).</li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="card stack" id="secrets">
+    <div class="card__header"><h2>Secrets</h2></div>
+    <div class="card__body stack">
+      <p>
+        Only <code>http_forward</code> actions attach credential secrets (Bearer or Key+Secret)
+        in the action dialog. Values are encrypted with <code>PARA_SCOPE_SECRET_KEY</code>.
+        Webhook source secrets and poll <code>auth_secret_id</code> use the same store.
+        Never commit <code>.env</code> or secret values.
+      </p>
+    </div>
+  </section>
+</div>
+{% endblock %}

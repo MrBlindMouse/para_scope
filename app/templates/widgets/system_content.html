@@ -1,0 +1,134 @@
+{% set disp = display or wdata.display or "source_health" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "table" %}
+{% if wdata and wdata.error %}
+<p class="text-muted">{{ wdata.error }}</p>
+{% elif disp == "source_health" %}
+  {% if wdata.sources %}
+    {% if style == "cards" %}
+    <div class="stack stack--tight">
+      {% for s in wdata.sources %}
+      <div class="widget-entry-card">
+        <strong>{{ s.name }}</strong>
+        {% if s.status == 'healthy' %}<span class="text-success">healthy</span>
+        {% elif s.status == 'stale' %}<span class="text-muted">stale</span>
+        {% elif s.status == 'disabled' %}<span class="text-muted">disabled</span>
+        {% else %}{{ s.status }}{% endif %}
+        <span class="text-muted">{{ s.last_seen.strftime('%Y-%m-%d %H:%M') if s.last_seen else 'never' }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <table class="table {% if style == 'compact' %}table--compact{% endif %}">
+      <thead><tr><th>Name</th><th>Status</th><th>Last Seen</th></tr></thead>
+      <tbody>
+        {% for s in wdata.sources %}
+        <tr>
+          <td>{{ s.name }}{% if s.slug %} <code>{{ s.slug }}</code>{% endif %}</td>
+          <td>
+            {% if s.status == 'healthy' %}<span class="text-success">healthy</span>
+            {% elif s.status == 'stale' %}<span class="text-muted">stale</span>
+            {% elif s.status == 'disabled' %}<span class="text-muted">disabled</span>
+            {% else %}{{ s.status }}{% endif %}
+          </td>
+          <td>{{ s.last_seen.strftime('%Y-%m-%d %H:%M') if s.last_seen else 'never' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% else %}
+  <p class="text-muted">No sources configured.</p>
+  {% endif %}
+{% elif disp == "recent_events" %}
+  {% if wdata.events %}
+    {% if style == "cards" %}
+    <div class="stack stack--tight">
+      {% for e in wdata.events %}
+      <div class="widget-entry-card">
+        <strong>#{{ e.id }}</strong> {{ e.source }} / {{ e.event_type }}
+        {% if e.status == 'processed' %}<span class="text-success">{{ e.status }}</span>
+        {% elif e.status == 'failed' %}<span class="text-danger">{{ e.status }}</span>
+        {% else %}{{ e.status }}{% endif %}
+        <span class="text-muted">{{ e.timestamp.strftime('%Y-%m-%d %H:%M') if e.timestamp else '' }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <table class="table {% if style == 'compact' %}table--compact{% endif %}">
+      <thead><tr><th>#</th><th>Source</th><th>Type</th><th>Status</th><th>Time</th></tr></thead>
+      <tbody>
+        {% for e in wdata.events %}
+        <tr>
+          <td>{{ e.id }}</td>
+          <td>{{ e.source }}</td>
+          <td>{{ e.event_type }}</td>
+          <td>
+            {% if e.status == 'processed' %}<span class="text-success">{{ e.status }}</span>
+            {% elif e.status == 'failed' %}<span class="text-danger">{{ e.status }}</span>
+            {% else %}{{ e.status }}{% endif %}
+          </td>
+          <td>{{ e.timestamp.strftime('%Y-%m-%d %H:%M') if e.timestamp else '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% else %}
+  <p class="text-muted">No events yet.</p>
+  {% endif %}
+{% elif disp == "poller_status" %}
+  {% if wdata.schedules %}
+    {% if style == "cards" %}
+    <div class="stack stack--tight">
+      {% for s in wdata.schedules %}
+      <div class="widget-entry-card">
+        <strong>{{ s.name }}</strong> ({{ s.source }})
+        <span class="text-muted">{{ s.success_count }} / {{ s.failure_count }} (lifetime)</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <table class="table {% if style == 'compact' %}table--compact{% endif %}">
+      <thead><tr><th>Name</th><th>Source</th><th>Last Run</th><th>Next Run</th><th>OK / Fail (lifetime)</th></tr></thead>
+      <tbody>
+        {% for s in wdata.schedules %}
+        <tr>
+          <td>{{ s.name }}</td>
+          <td>{{ s.source }}</td>
+          <td>{{ s.last_run.strftime('%Y-%m-%d %H:%M') if s.last_run else 'never' }}</td>
+          <td>{{ s.next_run.strftime('%Y-%m-%d %H:%M') if s.next_run else '-' }}</td>
+          <td>{{ s.success_count }} / {{ s.failure_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% else %}
+  <p class="text-muted">No schedules configured.</p>
+  {% endif %}
+{% elif disp == "metric_summary" %}
+  {% if wdata %}
+  <div class="grid-auto {% if style == 'compact' %}widget-summary--compact{% elif style == 'cards' %}widget-summary--cards{% endif %}" style="--grid-min: 8em; --grid-gap: 0.5rem;">
+    <div class="stat">
+      <div class="stat__label">Retained</div>
+      <div class="stat__value">{{ wdata.total }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">Last hour (retained)</div>
+      <div class="stat__value">{{ wdata.last_hour }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">Processed</div>
+      <div class="stat__value stat__value--positive">{{ wdata.processed }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">Failed</div>
+      <div class="stat__value stat__value--negative">{{ wdata.failed }}</div>
+    </div>
+  </div>
+  {% else %}
+  <p class="text-muted">No data available.</p>
+  {% endif %}
+{% else %}
+<p class="text-muted">Unknown system display.</p>
+{% endif %}

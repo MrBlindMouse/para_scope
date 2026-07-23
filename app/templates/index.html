@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – Para-Scope{% endblock %}
+{% block body_class %}dashboard-page{% endblock %}
+{% block body_start %}
+{% if dashboard_bg %}
+<div class="dashboard-bg" aria-hidden="true"
+     style="--dashboard-bg-opacity: {{ dashboard_bg_opacity }}; --dashboard-bg-image: url('/media/dashboard-bg');"></div>
+{% endif %}
+{% endblock %}
+{% block header_actions %}
+  {% if widgets %}
+  <button type="button" id="dashboard-edit-toggle" class="btn btn--icon dashboard-edit-toggle"
+          aria-pressed="false" aria-label="Edit layout" title="Edit layout">
+    {# Locked / viewing — unlock to rearrange #}
+    <svg class="icon--layout-locked" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2"/>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </svg>
+    {# Editing — lock when done #}
+    <svg class="icon--layout-editing" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2"/>
+      <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+    </svg>
+  </button>
+  {% endif %}
+  <a href="/config/dashboard" class="btn btn--icon" aria-label="Dashboard Config" title="Dashboard Config">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+  </a>
+{% endblock %}
+{% block content %}
+{% if widgets %}
+<link rel="stylesheet" href="/static/vendor/gridstack/gridstack.min.css">
+<div class="grid-stack dashboard-grid" id="dashboard-grid">
+  {% for widget in widgets %}
+    {% set wid = widget.id %}
+    {% set wdata = widget_data.get(wid, {}) %}
+    {% set widget_id = wid %}
+    {% set widget_config = widget.config or {} %}
+    {% set display = widget.display or wdata.display or '' %}
+    <div class="grid-stack-item"
+         gs-id="{{ wid }}"
+         gs-x="{{ widget.x | default(0) }}"
+         gs-y="{{ widget.y | default(0) }}"
+         gs-w="{{ widget.w | default(6) }}"
+         gs-h="{{ widget.h | default(3) }}">
+      <div class="grid-stack-item-content">
+        <div class="card" data-widget="{{ widget.type }}" data-widget-id="{{ wid }}" id="widget-{{ wid }}">
+          <div class="card__header">
+            <h2>{{ widget.get('title', widget.get('label', widget.type | title)) }}</h2>
+          </div>
+          <div class="card__body"
+               {% if widget.type != 'links' %}
+               hx-get="/widgets/{{ widget.type }}?id={{ wid }}"
+               hx-trigger="every 30s"
+               hx-swap="innerHTML"
+               {% endif %}>
+            {% include "widgets/" + widget.type + "_content.html" with context %}
+          </div>
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+<script src="/static/vendor/gridstack/gridstack-all.js"></script>
+<script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+<script src="/static/js/widget-charts.js"></script>
+<script src="/static/js/dashboard-grid.js"></script>
+{% else %}
+<div class="card">
+  <div class="card__body" style="text-align:center; padding:2em;">
+    <p class="text-muted">No widgets configured on your dashboard.</p>
+    <a href="/config/dashboard" class="btn btn--primary mt">Add widgets</a>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

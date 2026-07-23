@@ -1,0 +1,291 @@
+"""Auto-split route module — handlers registered on shared app via include."""
+from __future__ import annotations
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import func, text
+from pathlib import Path
+import json
+import hashlib
+import hmac as hmac_mod
+import time
+import uuid
+import logging
+
+from app.database import get_db
+from app.models import (
+    User, Source, SourceStatus, EventTypeRecord, PollingSchedule, ScheduleType,
+    ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
+    PushSubscription, Field, FieldLogEntry,
+)
+from app.security import (
+    verify_password, hash_password, encrypt_secret, decrypt_secret,
+    create_session_token, verify_session_token, generate_csrf_token,
+    SESSION_MAX_AGE_SECONDS,
+)
+from app.pipeline import evaluate_and_dispatch
+from app.widgets import fetch_widget_data, get_widget_types, validate_widget_bindings
+from app.dashboard_layout import (
+    find_widget, layout_json, merge_geometry, migrate_widgets,
+    normalize_for_save, parse_layout_config,
+)
+from app.scheduler import add_or_update_job, remove_job, job_count
+from app.ingest import ingest_event
+
+from app import webctx as ctx
+
+router = APIRouter()
+
+# route: /api/push/vapid-public-key
+@router.get("/api/push/vapid-public-key")
+async def push_vapid_public_key():
+    from app.webpush_util import vapid_config
+    cfg = vapid_config()
+    if not cfg:
+        return JSONResponse(
+            {"error": "Web Push is not configured (set PARA_SCOPE_VAPID_* env vars)"},
+            status_code=503,
+        )
+    return {"public_key": cfg["public_key"]}
+
+
+
+# route: /api/push/subscribe
+@router.post("/api/push/subscribe")
+async def push_subscribe(request: Request, db: Session = Depends(get_db)):
+    user = ctx._get_user(request, db)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    endpoint = (body.get("endpoint") or "").strip()
+    keys = body.get("keys") or {}
+    p256dh = (keys.get("p256dh") or "").strip()
+    auth = (keys.get("auth") or "").strip()
+    if not endpoint or not p256dh or not auth:
+        return JSONResponse({"error": "endpoint and keys.p256dh/auth required"}, status_code=400)
+
+    existing = db.query(PushSubscription).filter(PushSubscription.endpoint == endpoint).first()
+    if existing:
+        existing.user_id = user.id
+        existing.p256dh = p256dh
+        existing.auth = auth
+    else:
+        db.add(PushSubscription(
+            user_id=user.id, endpoint=endpoint, p256dh=p256dh, auth=auth,
+        ))
+    db.commit()
+    return {"ok": True}
+
+
+
+# route: /api/push/subscribe
+@router.delete("/api/push/subscribe")
+async def push_unsubscribe(request: Request, db: Session = Depends(get_db)):
+    user = ctx._get_user(request, db)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    endpoint = (body.get("endpoint") or "").strip()
+    if not endpoint:
+        return JSONResponse({"error": "endpoint required"}, status_code=400)
+    sub = (
+        db.query(PushSubscription)
+        .filter(
+            PushSubscription.endpoint == endpoint,
+            PushSubscription.user_id == user.id,
+        )
+        .first()
+    )
+    if sub:
+        db.delete(sub)
+        db.commit()
+    return {"ok": True}
+
+
+# ── Dashboard (root) ────────────────────────────────────────────────────────
+
+def _get_layout(db: Session) -> DashboardLayout | None:
+    """Shared install layout (singleton)."""
+    return db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+
+
+def _load_widgets(db: Session) -> list[dict]:
+    """Load shared widgets, migrating ids/geometry and persisting if needed."""
+    layout = _get_layout(db)
+    if not layout:
+        return []
+    widgets = parse_layout_config(layout.layout_config)["widgets"]
+    widgets, changed = migrate_widgets(widgets)
+    if changed:
+        layout.layout_config = layout_json(widgets)
+        db.commit()
+    return widgets
+
+
+
+# route: /
+@router.get("/")
+async def root(request: Request, db: Session = Depends(get_db)):
+    user = ctx._get_user(request, db)
+    if not user:
+        return ctx.templates.TemplateResponse(request, "base.html", {})
+    widgets = _load_widgets(db)
+    widget_data = {}
+    for w in widgets:
+        wtype = w.get("type", "")
+        wid = w.get("id") or ""
+        disp = w.get("display") or ""
+        widget_data[wid] = fetch_widget_data(
+            wtype, db, widget_config=w.get("config") or {}, display=disp,
+        )
+    return ctx.templates.TemplateResponse(
+        request, "index.html", {"user": user, "widgets": widgets, "widget_data": widget_data}
+    )
+
+
+
+# route: /widgets/{widget_type}
+@router.get("/widgets/{widget_type}")
+async def widget_partial(request: Request, widget_type: str, db: Session = Depends(get_db)):
+    """HTMX partial: re-render a single widget's content body."""
+    user = ctx._get_user(request, db)
+    if not user:
+        return HTMLResponse("", status_code=401)
+
+    widget_id = (request.query_params.get("id") or "").strip() or None
+    try:
+        index = int(request.query_params.get("index") or 0) or None
+    except (TypeError, ValueError):
+        index = None
+
+    widgets = _load_widgets(db)
+    widget = find_widget(widgets, widget_id=widget_id, index=index)
+    config = (widget.get("config") or {}) if widget else {}
+    display = (widget.get("display") if widget else None) or ""
+    canvas_id = widget_id or f"{widget_type}-{index or 0}"
+
+    wdata = fetch_widget_data(
+        widget_type, db, widget_config=config, display=display,
+    ) or {}
+    try:
+        html = ctx.templates.env.get_template(f"widgets/{widget_type}_content.html").render(
+            wdata=wdata, request=request, widget_id=canvas_id,
+            widget_config=config, display=display or wdata.get("display"),
+        )
+    except Exception:
+        return HTMLResponse(f'<p class="text-muted">Unknown widget: {widget_type}</p>')
+    return HTMLResponse(html)
+
+
+
+# route: /api/dashboard/layout
+@router.post("/api/dashboard/layout")
+async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
+    """Merge widget geometry (x/y/w/h) by id into the shared layout."""
+    user = ctx._get_user(request, db)
+    if not user:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    updates = body.get("widgets") if isinstance(body, dict) else None
+    if not isinstance(updates, list):
+        return JSONResponse({"error": "widgets array required"}, status_code=400)
+
+    layout = _get_layout(db)
+    if not layout:
+        return JSONResponse({"error": "no layout"}, status_code=404)
+    widgets = parse_layout_config(layout.layout_config)["widgets"]
+    widgets, _ = migrate_widgets(widgets)
+    widgets = merge_geometry(widgets, updates)
+    layout.layout_config = layout_json(widgets)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Config: Pipeline (Sources → Rules → Actions) ────────────────────────────
+
+
+# route: /config/dashboard
+@router.get("/config/dashboard")
+async def config_dashboard(request: Request, db: Session = Depends(get_db)):
+    success, error = ctx.get_message_params(request)
+    layout_config = _load_widgets(db)
+
+    available_widgets = [
+        {
+            "type": w["type"],
+            "title": w["title"],
+            "displays": w["displays"],
+            "default_display": w["default_display"],
+            "binding": w.get("binding"),
+        }
+        for w in get_widget_types()
+    ]
+
+    return ctx.templates.TemplateResponse(
+        request, "config/dashboard.html", {"active": "dashboard",
+         "current_widgets": layout_config, "available_widgets": available_widgets,
+         "fields": db.query(Field).order_by(Field.name).all(),
+         "success": success, "error": error}
+    )
+
+
+
+# route: /config/dashboard
+@router.post("/config/dashboard")
+async def save_dashboard(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    widgets_raw = form.get("widgets", "[]").strip()
+
+    try:
+        widgets = json.loads(widgets_raw) if widgets_raw else []
+    except json.JSONDecodeError:
+        return RedirectResponse(
+            url=ctx.flash_url("/config/dashboard", error="Invalid widget data"),
+            status_code=303,
+        )
+
+    # Preserve geometry from existing layout when the form omits x/y/w/h
+    existing = {}
+    layout = _get_layout(db)
+    if layout:
+        for w in parse_layout_config(layout.layout_config)["widgets"]:
+            if w.get("id"):
+                existing[w["id"]] = w
+    for w in widgets:
+        if isinstance(w, dict) and w.get("id") and w["id"] in existing:
+            prev = existing[w["id"]]
+            for key in ("x", "y", "w", "h"):
+                if w.get(key) is None and prev.get(key) is not None:
+                    w[key] = prev[key]
+
+    widgets = normalize_for_save(widgets)
+    err = validate_widget_bindings(db, widgets)
+    if err:
+        return RedirectResponse(
+            url=ctx.flash_url("/config/dashboard", error=err),
+            status_code=303,
+        )
+    payload = layout_json(widgets)
+
+    if layout:
+        layout.layout_config = payload
+    else:
+        layout = DashboardLayout(layout_config=payload)
+        db.add(layout)
+    db.commit()
+    return RedirectResponse(
+        url=ctx.flash_url("/config/dashboard", success="Dashboard layout saved"),
+        status_code=303,
+    )
+
+

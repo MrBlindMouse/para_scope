@@ -1,0 +1,25 @@
+@layer components;
+
+@layer components {
+  .table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+  }
+
+  .table th,
+  .table td {
+    text-align: start;
+    padding: 0.4em 0.6em;
+    border-block-end: 1px solid var(--color-border);
+  }
+
+  .table thead th {
+    font-weight: 600;
+    color: var(--color-ink-muted);
+  }
+
+  .table tbody tr:hover {
+    background-color: var(--color-surface);
+  }
+}

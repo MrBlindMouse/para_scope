@@ -1,0 +1,150 @@
+{% extends "config/nav.html" %}
+{% block page_title %}Style{% endblock %}
+{% block config_content %}
+<h1>Style</h1>
+
+{% include 'components/alerts.html' %}
+
+<p class="mt">Customize how Para-Scope looks. These choices apply for everyone on this install.</p>
+
+<form method="post" action="/config/style" class="stack mt" id="style-form" enctype="multipart/form-data">
+  {% include 'components/csrf.html' %}
+
+  <section class="style-section stack">
+    <h2 class="style-section__title">Color theme</h2>
+    <p class="style-section__lead">Pick a look that feels comfortable — light, dark, or a familiar palette.</p>
+    <div class="theme-grid" role="radiogroup" aria-label="Color theme">
+      {% for opt in themes %}
+      <label class="theme-option">
+        <span class="theme-option__header">
+          <input type="radio" name="theme" value="{{ opt.id }}"
+                 {% if opt.id == current_theme %}checked{% endif %}>
+          <strong>{{ opt.label }}</strong>
+        </span>
+        <span class="theme-option__swatches" aria-hidden="true">
+          {% for c in opt.swatches %}
+          <span class="theme-option__swatch" style="background: {{ c }}"></span>
+          {% endfor %}
+        </span>
+        <span class="theme-option__meta">{{ opt.kind }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="style-section stack">
+    <h2 class="style-section__title">Font</h2>
+    <p class="style-section__lead">Choose the typeface used across the app.</p>
+    <div class="theme-grid" role="radiogroup" aria-label="Font">
+      {% for opt in fonts %}
+      <label class="theme-option font-option" data-font-preview="{{ opt.id }}">
+        <span class="theme-option__header">
+          <input type="radio" name="font" value="{{ opt.id }}"
+                 {% if opt.id == current_font %}checked{% endif %}>
+          <strong>{{ opt.label }}</strong>
+        </span>
+        <span class="font-option__sample">{{ opt.sample }}</span>
+        <span class="theme-option__meta">{{ opt.hint }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="style-section stack">
+    <h2 class="style-section__title">Text size</h2>
+    <p class="style-section__lead">Make everything a little smaller or larger relative to the default.</p>
+    <div class="font-size-grid" role="radiogroup" aria-label="Text size">
+      {% for opt in font_sizes %}
+      <label class="theme-option font-size-option" data-size-preview="{{ opt.id }}">
+        <span class="theme-option__header">
+          <input type="radio" name="font_size" value="{{ opt.id }}"
+                 {% if opt.id == current_font_size %}checked{% endif %}>
+          <span class="font-size-option__label">{{ opt.label }}</span>
+        </span>
+        <span class="theme-option__meta">{{ opt.hint }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="style-section stack">
+    <h2 class="style-section__title">Dashboard background</h2>
+    <p class="style-section__lead">Optional image behind the main dashboard. Widgets stay solid so they stay readable.</p>
+    <div class="dashboard-bg-controls stack stack--dense">
+      <label class="stack">
+        Image (JPEG, PNG, WebP, or GIF — max 5&nbsp;MB)
+        <input type="file" name="dashboard_bg" class="input" accept="image/jpeg,image/png,image/webp,image/gif">
+      </label>
+      {% if current_dashboard_bg %}
+      <label class="flex items-center gap">
+        <input type="checkbox" name="clear_dashboard_bg" value="1">
+        Remove current background
+      </label>
+      {% endif %}
+      <label class="stack">
+        <span class="flex items-center gap justify-between">
+          Opacity
+          <span id="dashboard-bg-opacity-label" class="text-muted">{{ (current_dashboard_bg_opacity * 100)|int }}%</span>
+        </span>
+        <input type="range" name="dashboard_bg_opacity" id="dashboard-bg-opacity"
+               class="input" min="0" max="100" step="1"
+               value="{{ (current_dashboard_bg_opacity * 100)|int }}">
+      </label>
+      <div class="dashboard-bg-preview" id="dashboard-bg-preview"
+           style="--dashboard-bg-opacity: {{ current_dashboard_bg_opacity }};{% if current_dashboard_bg %} --dashboard-bg-image: url('/media/dashboard-bg');{% endif %}">
+        <div class="dashboard-bg-preview__image" aria-hidden="true"></div>
+        <div class="dashboard-bg-preview__card card">
+          <span class="text-muted text-xs">Preview</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="flex items-center gap mt">
+    <button type="submit" class="btn btn--primary">Save style</button>
+  </div>
+</form>
+
+<script>
+(function () {
+  var form = document.getElementById("style-form");
+  if (!form) return;
+  var root = document.documentElement;
+  var slider = document.getElementById("dashboard-bg-opacity");
+  var label = document.getElementById("dashboard-bg-opacity-label");
+  var preview = document.getElementById("dashboard-bg-preview");
+  var fileInput = form.querySelector('input[name="dashboard_bg"]');
+  var objectUrl = null;
+
+  function setOpacity(pct) {
+    var o = Math.max(0, Math.min(100, Number(pct) || 0)) / 100;
+    if (label) label.textContent = Math.round(o * 100) + "%";
+    if (preview) preview.style.setProperty("--dashboard-bg-opacity", String(o));
+  }
+
+  form.addEventListener("change", function (e) {
+    var t = e.target;
+    if (!t || !t.name) return;
+    if (t.name === "theme" && t.value) root.setAttribute("data-theme", t.value);
+    if (t.name === "font" && t.value) root.setAttribute("data-font", t.value);
+    if (t.name === "font_size" && t.value) root.setAttribute("data-font-size", t.value);
+  });
+
+  if (slider) {
+    slider.addEventListener("input", function () { setOpacity(slider.value); });
+  }
+  if (fileInput && preview) {
+    fileInput.addEventListener("change", function () {
+      var f = fileInput.files && fileInput.files[0];
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = null;
+      }
+      if (!f) return;
+      objectUrl = URL.createObjectURL(f);
+      preview.style.setProperty("--dashboard-bg-image", "url('" + objectUrl + "')");
+    });
+  }
+})();
+</script>
+{% endblock %}

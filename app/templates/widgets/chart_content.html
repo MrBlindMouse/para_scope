@@ -1,0 +1,18 @@
+{% set canvas_id = "chart-" ~ (widget_id or "chart") %}
+{% set disp = display or wdata.display or "pie" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "default" %}
+{% if wdata and wdata.error %}
+<p class="text-muted">{{ wdata.error }}</p>
+{% elif wdata and wdata.labels %}
+<div class="widget-chart">
+  <canvas id="{{ canvas_id }}"
+          data-widget-chart="aggregate"
+          data-chart-display="{{ disp }}"
+          data-chart-style="{{ style }}"
+          data-labels='{{ wdata.labels | tojson }}'
+          data-values='{{ wdata.values | tojson }}'
+          data-unit="{{ wdata.unit or '' }}"></canvas>
+</div>
+{% else %}
+<p class="text-muted">No chart data. Add sources in widget config.</p>
+{% endif %}

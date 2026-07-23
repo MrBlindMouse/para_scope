@@ -1,0 +1,51 @@
+{% set is_edit = rule is defined and rule %}
+{% set selected_ids = rule.event_type_ids if is_edit else (selected_event_type_ids or []) %}
+<form method="post"
+      action="{% if is_edit %}/config/pipeline/rule/{{ rule.id }}{% else %}/config/pipeline/source/{{ source.id }}/rules{% endif %}"
+      class="stack dialog__form"
+      hx-post="{% if is_edit %}/config/pipeline/rule/{{ rule.id }}{% else %}/config/pipeline/source/{{ source.id }}/rules{% endif %}"
+      hx-target="#source-chain-{{ source.id }}"
+      hx-swap="outerHTML">
+  {% include 'components/csrf.html' %}
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">{% if is_edit %}Edit Rule{% else %}Add Rule{% endif %} — {{ source.name }}</h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+  <p class="text-muted">
+    Create the rule first, then add actions on the rule in the chain.
+  </p>
+  <label class="stack">
+    <span class="field-label">
+      Event Types
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About event types on rules"
+              data-tip="Hold Ctrl/Cmd for multiple. Empty = all events for this source. Use Add rule on an event to pre-select it.">?</button>
+    </span>
+    <select name="event_type_ids" class="input" multiple size="4" autofocus>
+      {% for et in event_types %}
+        <option value="{{ et.id }}" {% if et.id in selected_ids %}selected{% endif %}>{{ et.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% include "config/pipeline/_conditions_builder.html" %}
+
+  <label class="stack">
+    <span class="field-label">
+      Order Index
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About order index"
+              data-tip="Lower numbers run first when several rules match the same event. All matching rules still run — this only sets order.">?</button>
+    </span>
+    <input name="order_index" type="number" min="0"
+           value="{{ rule.order_index if is_edit else 0 }}" class="input">
+  </label>
+  {% if is_edit %}
+  <label class="flex items-center gap">
+    <input type="checkbox" name="enabled" value="1" {% if rule.enabled %}checked{% endif %}>
+    Enabled
+  </label>
+  {% endif %}
+  <div class="flex items-center gap">
+    <button type="submit" class="btn btn--primary">{% if is_edit %}Save Rule{% else %}Create Rule{% endif %}</button>
+  </div>
+</form>

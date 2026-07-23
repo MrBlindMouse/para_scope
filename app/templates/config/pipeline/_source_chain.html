@@ -1,0 +1,233 @@
+<article class="card pipeline-chain" id="source-chain-{{ source.id }}">
+  <header class="pipeline-chain__header">
+    <div class="pipeline-chain__source">
+      <h2 class="pipeline-chain__name">{{ source.name }}</h2>
+      <p class="pipeline-chain__meta text-muted">
+        <code>{{ source.slug }}</code>
+        · {{ source.source_type }}
+        ·
+        {% if source.enabled %}
+          <span class="pipeline-chain__status pipeline-chain__status--on">Enabled</span>
+        {% else %}
+          <span class="pipeline-chain__status">Disabled</span>
+        {% endif %}
+      </p>
+      {% if source.description %}
+        <p class="pipeline-chain__desc text-muted">{{ source.description }}</p>
+      {% endif %}
+    </div>
+    <div class="pipeline-chain__toolbar flex items-center gap">
+      <button type="button"
+              class="btn btn--sm"
+              hx-get="/config/pipeline/source/{{ source.id }}/partials/recent-events"
+              hx-target="#pipeline-dialog"
+              hx-swap="innerHTML">
+        Recent
+      </button>
+      <button type="button"
+              class="btn btn--sm"
+              hx-get="/config/pipeline/source/{{ source.id }}/partials/edit-form"
+              hx-target="#pipeline-dialog"
+              hx-swap="innerHTML">
+        Edit
+      </button>
+      <form method="post" action="/config/source/{{ source.id }}/toggle"
+            hx-post="/config/source/{{ source.id }}/toggle"
+            hx-target="#source-chain-{{ source.id }}"
+            hx-swap="outerHTML">
+        {% include 'components/csrf.html' %}
+        <button type="submit" class="btn btn--sm">{{ "Disable" if source.enabled else "Enable" }}</button>
+      </form>
+      <form method="post" action="/config/source/{{ source.id }}/delete"
+            hx-post="/config/source/{{ source.id }}/delete"
+            hx-target="#source-chain-{{ source.id }}"
+            hx-swap="outerHTML"
+            hx-confirm="Delete source {{ source.name }}? This also deletes its rules, actions, event types, and schedules.">
+        {% include 'components/csrf.html' %}
+        <button type="submit" class="btn btn--sm btn--negative">Delete</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="pipeline-chain__flow" aria-label="Source to events to rules">
+    <div class="pipeline-node pipeline-node--source">
+      <span class="pipeline-node__label">Source</span>
+      <strong>{{ source.name }}</strong>
+    </div>
+    <span class="pipeline-chain__arrow" aria-hidden="true">→</span>
+
+    <div class="pipeline-chain__events">
+      <div class="pipeline-chain__section-head flex items-center gap">
+        <span class="pipeline-node__label">Events</span>
+        <button type="button"
+                class="btn btn--sm"
+                hx-get="/config/pipeline/source/{{ source.id }}/partials/event-form"
+                hx-target="#pipeline-dialog"
+                hx-swap="innerHTML">
+          Add Event
+        </button>
+      </div>
+      {% if event_types %}
+        <ul class="pipeline-chain__list">
+          {% for et in event_types %}
+          <li class="pipeline-event">
+            <div class="pipeline-event__main">
+              <span class="pipeline-chip">
+                {{ et.name }}
+                {% if et.description %}
+                  <span class="text-muted">— {{ et.description[:48] }}{% if et.description|length > 48 %}…{% endif %}</span>
+                {% endif %}
+              </span>
+              <div class="pipeline-event__actions flex items-center gap">
+                <button type="button"
+                        class="btn btn--sm"
+                        hx-get="/config/pipeline/source/{{ source.id }}/partials/latest-event?event_type_id={{ et.id }}"
+                        hx-target="#pipeline-dialog"
+                        hx-swap="innerHTML">
+                  Sample
+                </button>
+                <button type="button"
+                        class="btn btn--sm"
+                        hx-get="/config/pipeline/source/{{ source.id }}/partials/event-form?event_id={{ et.id }}"
+                        hx-target="#pipeline-dialog"
+                        hx-swap="innerHTML">
+                  Edit
+                </button>
+                <button type="button"
+                        class="btn btn--sm"
+                        hx-get="/config/pipeline/source/{{ source.id }}/partials/rule-form?event_type_id={{ et.id }}"
+                        hx-target="#pipeline-dialog"
+                        hx-swap="innerHTML">
+                  Add rule
+                </button>
+                <form method="post" action="/config/event-type/{{ et.id }}/delete"
+                      hx-post="/config/event-type/{{ et.id }}/delete"
+                      hx-target="#source-chain-{{ source.id }}"
+                      hx-swap="outerHTML"
+                      hx-confirm="Delete event {{ et.name }}?">
+                  {% include 'components/csrf.html' %}
+                  <button type="submit" class="btn btn--sm btn--negative">Delete</button>
+                </form>
+              </div>
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted">No events for this source.</p>
+      {% endif %}
+    </div>
+
+    <span class="pipeline-chain__arrow" aria-hidden="true">→</span>
+
+    <div class="pipeline-chain__rules">
+      <div class="pipeline-chain__section-head flex items-center gap">
+        <span class="pipeline-node__label">Rules</span>
+        <button type="button"
+                class="btn btn--sm"
+                hx-get="/config/pipeline/source/{{ source.id }}/partials/rule-form"
+                hx-target="#pipeline-dialog"
+                hx-swap="innerHTML">
+          Add Rule
+        </button>
+      </div>
+      {% if rules %}
+        <ul class="pipeline-chain__list">
+          {% for rule in rules %}
+          <li class="pipeline-rule">
+            <div class="pipeline-rule__main flex items-center gap">
+              <strong>{{ rule | rule_label(event_types_by_id) }}</strong>
+              <span class="text-muted">order {{ rule.order_index }}</span>
+              <button type="button"
+                      class="btn btn--sm"
+                      hx-get="/config/pipeline/source/{{ source.id }}/partials/rule-form?rule_id={{ rule.id }}"
+                      hx-target="#pipeline-dialog"
+                      hx-swap="innerHTML">
+                Edit
+              </button>
+              <button type="button"
+                      class="btn btn--sm"
+                      hx-get="/config/pipeline/source/{{ source.id }}/partials/action-form?rule_id={{ rule.id }}"
+                      hx-target="#pipeline-dialog"
+                      hx-swap="innerHTML">
+                Add Action
+              </button>
+              <form method="post" action="/config/rule/{{ rule.id }}/delete"
+                    hx-post="/config/rule/{{ rule.id }}/delete"
+                    hx-target="#source-chain-{{ source.id }}"
+                    hx-swap="outerHTML"
+                    hx-confirm="Delete this rule? Actions stay under Unused until deleted.">
+                {% include 'components/csrf.html' %}
+                <button type="submit" class="btn btn--sm btn--negative">Delete</button>
+              </form>
+            </div>
+            <ul class="pipeline-rule__action-list">
+              {% if rule.action_ids %}
+                {% for aid in rule.action_ids %}
+                  {% set action = actions_by_id.get(aid) %}
+                  <li class="pipeline-action flex items-center gap">
+                    {% if action %}
+                      <span class="pipeline-chip">
+                        {{ action | action_label(fields_by_id) }}
+                      </span>
+                      <button type="button"
+                              class="btn btn--sm"
+                              hx-get="/config/pipeline/source/{{ source.id }}/partials/action-form?action_id={{ action.id }}"
+                              hx-target="#pipeline-dialog"
+                              hx-swap="innerHTML">
+                        Edit
+                      </button>
+                      <form method="post" action="/config/action/{{ action.id }}/delete"
+                            hx-post="/config/action/{{ action.id }}/delete"
+                            hx-target="#source-chain-{{ source.id }}"
+                            hx-swap="outerHTML"
+                            hx-confirm="Delete action {{ action | action_label(fields_by_id) }}?">
+                        {% include 'components/csrf.html' %}
+                        <button type="submit" class="btn btn--sm btn--negative">Delete</button>
+                      </form>
+                    {% else %}
+                      <span class="pipeline-chip pipeline-chip--missing">#{{ aid }}</span>
+                    {% endif %}
+                  </li>
+                {% endfor %}
+              {% else %}
+                <li class="text-muted">No actions yet — add one on this rule.</li>
+              {% endif %}
+            </ul>
+          </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted">No rules for this source.</p>
+      {% endif %}
+
+      {% if unbound_actions %}
+        <p class="text-muted pipeline-chain__hint">Unused actions:</p>
+        <ul class="pipeline-chain__list">
+          {% for action in unbound_actions %}
+          <li class="pipeline-action flex items-center gap">
+            <span class="pipeline-chip pipeline-chip--unbound">
+              {{ action | action_label(fields_by_id) }}
+            </span>
+            <button type="button"
+                    class="btn btn--sm"
+                    hx-get="/config/pipeline/source/{{ source.id }}/partials/action-form?action_id={{ action.id }}"
+                    hx-target="#pipeline-dialog"
+                    hx-swap="innerHTML">
+              Edit
+            </button>
+            <form method="post" action="/config/action/{{ action.id }}/delete"
+                  hx-post="/config/action/{{ action.id }}/delete"
+                  hx-target="#source-chain-{{ source.id }}"
+                  hx-swap="outerHTML"
+                  hx-confirm="Delete action {{ action | action_label(fields_by_id) }}?">
+              {% include 'components/csrf.html' %}
+              <button type="submit" class="btn btn--sm btn--negative">Delete</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
+  </div>
+</article>

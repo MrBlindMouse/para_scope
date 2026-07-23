@@ -1,0 +1,17 @@
+<tr>
+  <td><a href="/event/{{ item.id }}">{{ item.id }}</a></td>
+  <td>{{ item.timestamp.strftime('%Y-%m-%d %H:%M') if item.timestamp else '' }}</td>
+  <td>{{ item.source.name if item.source else '-' }}</td>
+  <td>{{ item.event_type.name if item.event_type else '-' }}</td>
+  <td>
+    {% if item.status == 'processed' %}
+    <span class="badge badge--success">{{ item.status }}</span>
+    {% elif item.status == 'failed' %}
+    <span class="badge badge--negative">{{ item.status }}</span>
+    {% else %}
+    <span class="badge badge--warning">{{ item.status }}</span>
+    {% endif %}
+  </td>
+  <td><code>{{ item.correlation_id or '-' }}</code></td>
+  <td>{{ item.processing_error[:50] + '...' if item.processing_error and item.processing_error|length > 50 else (item.processing_error or '-') }}</td>
+</tr>

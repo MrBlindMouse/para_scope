@@ -1,0 +1,20 @@
+/* Para-Scope stylesheet entry — STYLE.md cascade layers + one file per concept. */
+@layer reset, base, layout, components, utilities;
+
+@import url("reset.css");
+@import url("base.css");
+@import url("themes.css");
+@import url("layout.css");
+@import url("buttons.css");
+@import url("inputs.css");
+@import url("cards.css");
+@import url("tables.css");
+@import url("feedback.css");
+@import url("config-nav.css");
+@import url("dialogs.css");
+@import url("pipeline.css");
+@import url("tooltips.css");
+@import url("help.css");
+@import url("conditions-builder.css");
+@import url("dashboard.css");
+@import url("utilities.css");

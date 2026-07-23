@@ -1,0 +1,26 @@
+@layer components;
+
+@layer components {
+  .help__code {
+    margin: 0;
+    padding: 0.75em 1em;
+    overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    background: color-mix(in oklch, var(--color-ink) 6%, var(--color-canvas));
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .help__list {
+    list-style: disc;
+    padding-inline-start: 1.25em;
+    --stack-gap: 0.35rem;
+  }
+
+  .help__list--ordered {
+    list-style: decimal;
+  }
+}

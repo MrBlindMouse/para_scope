@@ -1,0 +1,53 @@
+@layer components;
+
+@layer components {
+  .dialog {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 1.25rem;
+    max-width: min(32rem, calc(100vw - 2rem));
+    max-height: min(90vh, 100%);
+    width: 100%;
+    margin: auto;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    box-shadow: 0 0.5rem 2rem color-mix(in oklch, var(--lch-gray-900, #000) 20%, transparent);
+
+    opacity: 0;
+    overflow: auto;
+    transition: 150ms allow-discrete;
+    transition-property: display, opacity, overlay;
+
+    &[open] {
+      opacity: 1;
+    }
+
+    @starting-style {
+      &[open] {
+        opacity: 0;
+      }
+    }
+
+    &::backdrop {
+      background: color-mix(in oklch, var(--lch-gray-900, #000) 45%, transparent);
+    }
+  }
+
+  .dialog__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-block-end: 1rem;
+  }
+
+  .dialog__title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .dialog__form {
+    min-width: 0;
+    overflow: visible;
+  }
+}

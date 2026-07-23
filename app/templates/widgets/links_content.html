@@ -1,0 +1,36 @@
+{% set disp = display or wdata.display or "list" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "default" %}
+{% set link_items = wdata.get("items") if wdata else none %}
+{% if wdata and wdata.error %}
+<p class="text-muted">{{ wdata.error }}</p>
+{% elif link_items %}
+  {% if disp == "button_row" %}
+  <div class="flex items-center gap flex-wrap widget-links widget-links--{{ style }}">
+    {% for it in link_items %}
+    <a class="btn {% if style == 'emphasized' %}btn--primary{% elif style == 'compact' %}btn--sm{% else %}btn--primary{% endif %}"
+       href="{{ it.url }}" target="_blank" rel="noopener noreferrer">{{ it.label }}</a>
+    {% endfor %}
+  </div>
+  {% elif disp == "icon_grid" %}
+  <div class="widget-links-grid widget-links--{{ style }}">
+    {% for it in link_items %}
+    <a class="widget-link-tile {% if style == 'emphasized' %}widget-link-tile--emphasized{% elif style == 'compact' %}widget-link-tile--compact{% endif %}"
+       href="{{ it.url }}" target="_blank" rel="noopener noreferrer">
+      {% if it.icon %}<div class="widget-link-tile__icon">{{ it.icon }}</div>{% endif %}
+      <div>{{ it.label }}</div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <ul class="stack stack--tight widget-list widget-links--{{ style }}">
+    {% for it in link_items %}
+    <li class="{% if style == 'emphasized' %}widget-list__item{% endif %}">
+      {% if it.icon %}<span aria-hidden="true">{{ it.icon }} </span>{% endif %}
+      <a href="{{ it.url }}" target="_blank" rel="noopener noreferrer">{{ it.label }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+{% else %}
+<p class="text-muted">No links configured.</p>
+{% endif %}

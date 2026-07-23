@@ -1,0 +1,55 @@
+<section class="pipeline-fields card" id="pipeline-fields">
+  <header class="pipeline-fields__header flex items-center gap">
+    <h2 class="pipeline-fields__title">Fields</h2>
+    <button type="button"
+            class="btn btn--sm btn--primary"
+            hx-get="/config/pipeline/partials/field-form"
+            hx-target="#pipeline-dialog"
+            hx-swap="innerHTML">
+      Add Field
+    </button>
+  </header>
+  <p class="text-muted pipeline-fields__hint">
+    Global storage sinks for <code>field_push</code> actions and dashboard widgets.
+  </p>
+  {% if fields %}
+  <ul class="pipeline-fields__list">
+    {% for f in fields %}
+    <li class="pipeline-fields__item flex items-center gap">
+      <div class="pipeline-fields__main">
+        <strong>{{ f.name }}</strong>
+        <span class="text-muted">
+          · {{ f.field_type }}
+          {% if f.field_type == 'logbook' %}
+            · max {{ (f.config or {}).get('max_entries', 100) }}
+          {% elif f.field_type == 'counter' %}
+            · {{ (f.state or {}).get('value', 0) }}
+          {% elif f.field_type == 'value' %}
+            · {{ (f.state or {}).get('value', '') | truncate(40) }}
+          {% elif f.field_type == 'toggle' %}
+            · {{ 'on' if (f.state or {}).get('value') else 'off' }}
+          {% endif %}
+        </span>
+      </div>
+      <button type="button"
+              class="btn btn--sm"
+              hx-get="/config/pipeline/partials/field-form?field_id={{ f.id }}"
+              hx-target="#pipeline-dialog"
+              hx-swap="innerHTML">
+        Edit
+      </button>
+      <form method="post" action="/config/pipeline/field/{{ f.id }}/delete"
+            hx-post="/config/pipeline/field/{{ f.id }}/delete"
+            hx-target="#pipeline-fields"
+            hx-swap="outerHTML"
+            hx-confirm="Delete field {{ f.name }}?">
+        {% include 'components/csrf.html' %}
+        <button type="submit" class="btn btn--sm btn--negative">Delete</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-muted" id="fields-empty">No fields yet. Add a logbook, counter, value, or toggle.</p>
+  {% endif %}
+</section>

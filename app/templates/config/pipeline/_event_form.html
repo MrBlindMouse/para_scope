@@ -1,0 +1,57 @@
+{% set is_edit = event is defined and event %}
+<form method="post"
+      action="{% if is_edit %}/config/pipeline/event/{{ event.id }}{% else %}/config/pipeline/source/{{ source.id }}/events{% endif %}"
+      class="stack dialog__form"
+      hx-post="{% if is_edit %}/config/pipeline/event/{{ event.id }}{% else %}/config/pipeline/source/{{ source.id }}/events{% endif %}"
+      hx-target="#source-chain-{{ source.id }}"
+      hx-swap="outerHTML">
+  {% include 'components/csrf.html' %}
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">{% if is_edit %}Edit Event{% else %}Add Event{% endif %} — {{ source.name }}</h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+
+  {% if source.source_type == "poll" %}
+  <p class="text-muted">
+    Poll sources emit <code>on_success</code> or <code>on_failure</code> automatically.
+    Add an event named <code>always</code> to also fire on every run (success and failure).
+    Other custom names only fire when a schedule’s <code>handler_params.event_type</code> matches.
+  </p>
+  {% else %}
+  <p class="text-muted">
+    Once any event type exists, webhook callers must send a matching name via
+    <code>X-Event-Type</code> or body field <code>event_type</code> / <code>type</code>.
+  </p>
+  {% endif %}
+
+  <label class="stack">
+    <span class="field-label">
+      Name *
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About event name"
+              {% if source.source_type == "poll" %}
+              data-tip="Built-ins: on_success, on_failure (seeded). Optional: always (fires every poll). Or a custom name wired via handler_params.event_type."
+              {% else %}
+              data-tip="Stable identifier the producer sends (e.g. order.paid). Must match X-Event-Type or body event_type/type once types are registered."
+              {% endif %}
+      >?</button>
+    </span>
+    <input name="name" type="text" class="input"
+           value="{{ event.name if is_edit else '' }}"
+           placeholder="{% if source.source_type == 'poll' %}always{% else %}order.paid{% endif %}"
+           required autofocus>
+  </label>
+  <label class="stack">
+    <span class="field-label">
+      Description
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About event description"
+              data-tip="Optional note for humans. Shown on the pipeline chain; not sent to producers.">?</button>
+    </span>
+    <textarea name="description" rows="2" class="input"
+              placeholder="{% if source.source_type == 'poll' %}Poll completed successfully{% else %}Fired when an order is paid{% endif %}">{% if is_edit %}{{ event.description }}{% endif %}</textarea>
+  </label>
+  <div class="flex items-center gap">
+    <button type="submit" class="btn btn--primary">{% if is_edit %}Save Event{% else %}Create Event{% endif %}</button>
+  </div>
+</form>

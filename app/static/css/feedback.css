@@ -1,0 +1,42 @@
+@layer components;
+
+@layer components {
+  .alert {
+    padding: 0.5em 0.75em;
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+  }
+
+  .alert--danger {
+    color: var(--color-negative);
+    background-color: var(--color-negative-bg);
+  }
+
+  .alert--success {
+    color: var(--color-positive);
+    background-color: var(--color-positive-bg);
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 0.15em 0.5em;
+    border-radius: var(--radius-sm);
+    font-size: 0.75em;
+    font-weight: 600;
+  }
+
+  .badge--success {
+    color: var(--color-positive);
+    background-color: var(--color-positive-bg);
+  }
+
+  .badge--negative {
+    color: var(--color-negative);
+    background-color: var(--color-negative-bg);
+  }
+
+  .badge--warning {
+    color: var(--color-warning);
+    background-color: var(--color-warning-bg);
+  }
+}

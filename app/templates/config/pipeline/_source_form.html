@@ -1,0 +1,139 @@
+<form method="post"
+      action="/config/pipeline/sources"
+      class="stack dialog__form"
+      hx-post="/config/pipeline/sources"
+      hx-target="this"
+      hx-swap="none">
+  {% include 'components/csrf.html' %}
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">Add Source</h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+  <label class="stack">
+    Name *
+    <input name="name" type="text" class="input" placeholder="My API Source" required autofocus>
+  </label>
+  <label class="stack">
+    Description
+    <textarea name="description" rows="2" class="input"></textarea>
+  </label>
+  <label class="stack">
+    <span class="field-label">
+      Type
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About source type"
+              data-tip="Webhook: external systems POST events to /webhook/{slug}. Poll: Para-Scope fetches a URL on a schedule and turns the response into events.">?</button>
+    </span>
+    <select name="source_type" class="input" id="source-type">
+      <option value="webhook">Webhook</option>
+      <option value="poll">Poll</option>
+    </select>
+  </label>
+
+  <fieldset class="stack" id="webhook-secret-fields">
+    <legend>
+      <span class="field-label">
+        Webhook secret (optional)
+        <button type="button" class="field-tip" tabindex="0"
+                aria-label="About webhook secret"
+                data-tip="Shared secret used to verify HMAC-SHA256 signatures (X-Webhook-Signature). Leave empty for unsigned local/dev traffic.">?</button>
+      </span>
+    </legend>
+    <label class="stack">
+      Secret name
+      <input name="webhook_secret_name" type="text" class="input" placeholder="Webhook HMAC key">
+    </label>
+    <label class="stack">
+      Secret value
+      <input name="webhook_secret_value" type="password" class="input" autocomplete="new-password">
+    </label>
+  </fieldset>
+
+  <fieldset class="stack" id="schedule-fields" style="display:none">
+    <legend>Initial schedule</legend>
+    <label class="stack">
+      <span class="field-label">
+        Schedule type
+        <button type="button" class="field-tip" tabindex="0"
+                aria-label="About schedule type"
+                data-tip="Interval runs every N seconds. Cron uses a five-field expression (minute hour day month weekday).">?</button>
+      </span>
+      <select name="schedule_type" class="input" id="sched-type">
+        <option value="interval">Interval</option>
+        <option value="cron">Cron Expression</option>
+      </select>
+    </label>
+    <div id="interval-fields" class="stack">
+      <label class="stack">
+        Interval (seconds)
+        <input name="interval_seconds" type="number" min="1" class="input" placeholder="3600">
+      </label>
+    </div>
+    <div id="cron-fields" class="stack" style="display:none">
+      <label class="stack">
+        <span class="field-label">
+          Cron Expression
+          <button type="button" class="field-tip" tabindex="0"
+                  aria-label="About cron expression"
+                  data-tip="Five fields: minute hour day-of-month month day-of-week. Example: 0 * * * * = every hour on the hour.">?</button>
+        </span>
+        <input name="cron_expression" type="text" class="input" placeholder="0 * * * *">
+      </label>
+    </div>
+    <label class="stack">
+      <span class="field-label">
+        Handler Type
+        <button type="button" class="field-tip" tabindex="0"
+                aria-label="About handler type"
+                data-tip="HTTP method used when polling the Handler URL.">?</button>
+      </span>
+      <select name="handler_type" class="input">
+        {% for t in ['http_get', 'http_post', 'http_put', 'http_delete'] %}
+          <option value="{{ t }}">{{ t }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="stack">
+      <span class="field-label">
+        Handler URL
+        <button type="button" class="field-tip" tabindex="0"
+                aria-label="About handler URL"
+                data-tip="Full URL Para-Scope requests on each poll run. Required for polling.">?</button>
+      </span>
+      <input name="handler_url" type="text" class="input" placeholder="https://api.example.com/data">
+    </label>
+    <label class="stack">
+      <span class="field-label">
+        Handler Params (JSON)
+        <button type="button" class="field-tip" tabindex="0"
+                aria-label="About handler params"
+                data-tip='Optional JSON object. Supported keys: query, headers, body (POST/PUT), json_path (dotted path into the response), event_type.'>?</button>
+      </span>
+      <textarea name="handler_params" rows="2" class="input">{}</textarea>
+    </label>
+    <div class="flex items-center gap">
+      <label class="stack" style="min-width:6em">
+        <span class="field-label">
+          Timeout (s)
+          <button type="button" class="field-tip" tabindex="0"
+                  aria-label="About timeout"
+                  data-tip="Seconds to wait for the HTTP response before failing that attempt.">?</button>
+        </span>
+        <input name="timeout_seconds" type="number" min="1" value="30" class="input">
+      </label>
+      <label class="stack" style="min-width:6em">
+        <span class="field-label">
+          Retries
+          <button type="button" class="field-tip" tabindex="0"
+                  aria-label="About retries"
+                  data-tip="Extra attempts after a failed poll before the run is marked failed.">?</button>
+        </span>
+        <input name="retry_count" type="number" min="0" value="0" class="input">
+      </label>
+    </div>
+  </fieldset>
+
+  <div class="flex items-center gap">
+    <button type="submit" class="btn btn--primary">Create Source</button>
+  </div>
+</form>

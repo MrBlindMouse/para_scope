@@ -1,0 +1,39 @@
+@layer components;
+
+@layer components {
+  .conditions-builder {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .conditions-builder__rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .conditions-builder__row {
+    display: grid;
+    grid-template-columns: 1fr minmax(7em, 8em) 1fr auto;
+    gap: 0.35rem;
+    align-items: center;
+  }
+
+  .conditions-builder__empty {
+    font-size: 0.875rem;
+  }
+
+  .conditions-builder__toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  @media (max-width: 36em) {
+    .conditions-builder__row {
+      grid-template-columns: 1fr;
+    }
+  }
+}

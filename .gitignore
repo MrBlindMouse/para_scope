@@ -1,0 +1,32 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# SQLite (main DB + WAL sidecars + test DBs)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Secrets / local env (keep .env.example)
+.env
+.env.*
+!.env.example
+
+*.egg-info/
+dist/
+build/
+*.log
+.DS_Store
+Thumbs.db
+
+.cursor/
+data/

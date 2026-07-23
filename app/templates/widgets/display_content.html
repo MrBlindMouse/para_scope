@@ -1,0 +1,102 @@
+{% set disp = display or wdata.display or "logbook_list" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "code" %}
+{% set canvas_id = "chart-" ~ (widget_id or "display") %}
+{% if wdata and wdata.error %}
+<p class="text-muted">{{ wdata.error }}</p>
+{% elif disp == "logbook_list" %}
+  {% if wdata.series %}
+  <div class="widget-chart widget-chart--spark">
+    <canvas id="{{ canvas_id }}"
+            data-widget-chart="series"
+            data-chart-display="sparkline"
+            data-chart-style="default"
+            data-spark="1"
+            data-series='{{ wdata.series | tojson }}'
+            data-label="{{ wdata.name or '' }}"
+            data-unit="{{ wdata.unit or '' }}"></canvas>
+  </div>
+  {% endif %}
+  {% if wdata.entries %}
+    {% if style == "timeline" %}
+    <ul class="widget-timeline">
+      {% for e in wdata.entries %}
+      <li class="widget-timeline__item">
+        <span class="widget-timeline__dot" aria-hidden="true"></span>
+        <div>
+          <span class="text-muted">{{ e.timestamp }}</span>
+          <code class="widget-list__code">{{ e.value | tojson }}</code>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% elif style == "cards" %}
+    <div class="stack stack--tight">
+      {% for e in wdata.entries %}
+      <div class="widget-entry-card">
+        <span class="text-muted">{{ e.timestamp }}</span>
+        <code class="widget-list__code">{{ e.value | tojson }}</code>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <ul class="stack stack--tight widget-list">
+      {% for e in wdata.entries %}
+      <li class="widget-list__item">
+        <span class="text-muted">{{ e.timestamp }}</span>
+        <code class="widget-list__code">{{ e.value | tojson }}</code>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  {% else %}
+  <p class="text-muted">No log entries yet.</p>
+  {% endif %}
+{% elif disp == "kv_text" %}
+  <div class="widget-kv widget-kv--{{ style }}">{{ wdata.text or '' }}</div>
+{% elif disp == "stat" %}
+  {% set signed_cls = '' %}
+  {% if style == 'signed' and wdata.sign == 'positive' %}
+    {% set signed_cls = 'stat__value--positive' %}
+  {% elif style == 'signed' and wdata.sign == 'negative' %}
+    {% set signed_cls = 'stat__value--negative' %}
+  {% endif %}
+  <div class="stat {% if style == 'hero' or style == 'plain' or style == 'signed' %}stat--xl{% endif %} {% if style == 'compact' %}stat--compact{% endif %}">
+    <div class="stat__value {{ signed_cls }}">
+      {{ wdata.value }}{% if wdata.unit %} <span class="stat__unit">{{ wdata.unit }}</span>{% endif %}
+    </div>
+  </div>
+{% elif disp == "toggle" %}
+  {% set on = wdata.value %}
+  <div class="widget-toggle widget-toggle--{{ style }}" data-on="{{ '1' if on else '0' }}">
+    {% if style == "led" %}
+      <span class="widget-toggle__led" aria-hidden="true"></span>
+      <span class="widget-toggle__label">{{ 'On' if on else 'Off' }}</span>
+    {% elif style == "badge" %}
+      <span class="badge {% if on %}badge--success{% else %}badge--negative{% endif %}">{{ 'On' if on else 'Off' }}</span>
+    {% elif style == "switch" %}
+      <span class="widget-toggle__switch" aria-hidden="true"><span class="widget-toggle__knob"></span></span>
+      <span class="widget-toggle__label">{{ 'On' if on else 'Off' }}</span>
+    {% else %}
+      <span class="widget-toggle__text">{{ 'On' if on else 'Off' }}</span>
+    {% endif %}
+  </div>
+{% elif disp == "table" %}
+  {% if wdata.rows %}
+  <table class="table {% if style == 'compact' %}table--compact{% endif %} {% if style == 'striped' %}table--striped{% endif %}">
+    <thead><tr><th>Name</th><th>Type</th><th>Value</th></tr></thead>
+    <tbody>
+      {% for r in wdata.rows %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td>{{ r.field_type }}</td>
+        <td><code>{{ r.value | tojson }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-muted">No fields selected.</p>
+  {% endif %}
+{% else %}
+<p class="text-muted">Unknown display mode.</p>
+{% endif %}

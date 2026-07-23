@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en"
+      data-theme="{{ theme|default('system') }}"
+      data-font="{{ font|default('system') }}"
+      data-font-size="{{ font_size|default('md') }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ _csrf_token }}">
+  <title>{% block title %}Para-Scope{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+  <script src="/static/js/htmx.min.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      if (typeof htmx === "undefined") {
+        console.error("htmx failed to load; interactive controls will not work");
+        return;
+      }
+      function htmxLog(kind, event) {
+        var d = event.detail || {};
+        var xhr = d.xhr;
+        var elt = d.elt || event.target;
+        var path = (d.pathInfo && d.pathInfo.requestPath) || (xhr && xhr.responseURL) || "";
+        var status = xhr ? xhr.status : "";
+        var tag = elt && elt.tagName ? elt.tagName.toLowerCase() : "?";
+        var id = elt && elt.id ? "#" + elt.id : "";
+        console.error("[htmx:" + kind + "]", status, path, tag + id);
+      }
+      document.body.addEventListener("htmx:sendError", function (e) { htmxLog("sendError", e); });
+      document.body.addEventListener("htmx:responseError", function (e) { htmxLog("responseError", e); });
+      document.body.addEventListener("htmx:targetError", function (e) { htmxLog("targetError", e); });
+    });
+  </script>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  {% block body_start %}{% endblock %}
+  <header class="page-header">
+    <a class="page-header__title" href="/">Para-Scope</a>
+    <div class="flex items-center gap">
+      <button type="button" id="webpush-toggle" class="btn btn--icon" aria-label="Enable notifications" title="Enable notifications" hidden>
+        <svg class="icon--bell-on" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+          <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+        </svg>
+        <svg class="icon--bell-off" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+          <path d="M18.63 13A17.9 17.9 0 0 1 18 8"/>
+          <path d="M6.26 6.26A5.86 5.86 0 0 0 6 8c0 7-3 9-3 9h14"/>
+          <path d="M18 8a6 6 0 0 0-9.33-5"/>
+          <line x1="1" y1="1" x2="23" y2="23"/>
+        </svg>
+      </button>
+      {% block header_actions %}
+        <nav class="flex items-center gap">
+          <a href="/events" class="btn btn--sm">Events</a>
+          <a href="/metrics" class="btn btn--sm">Metrics</a>
+          <a href="/system" class="btn btn--sm">System</a>
+          <a href="/config/pipeline" class="btn btn--sm">Config</a>
+        </nav>
+      {% endblock %}
+    </div>
+  </header>
+  <main class="page-content">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="/static/js/webpush.js"></script>
+</body>
+</html>
