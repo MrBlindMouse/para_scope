@@ -914,15 +914,25 @@ def _recent_events_data(db, config, source_id=None):
 
 
 def _metric_summary_data(db, config, source_id=None):
-    from app.models import Event
-    q = db.query(Event)
+    from app.models import Field, MetricPoint
+    q = db.query(MetricPoint)
     if source_id:
-        q = q.filter(Event.source_id == source_id)
-    total = q.count()
-    last_hour = q.filter(Event.timestamp >= sql_func.now() - timedelta(hours=1)).count()
-    processed = q.filter(Event.status == "processed").count()
-    failed = q.filter(Event.status == "failed").count()
-    return {"total": total, "last_hour": last_hour, "processed": processed, "failed": failed}
+        q = q.filter(MetricPoint.source_id == source_id)
+    points = q.count()
+    series_q = db.query(sql_func.count(sql_func.distinct(MetricPoint.name)))
+    if source_id:
+        series_q = series_q.filter(MetricPoint.source_id == source_id)
+    series = series_q.scalar() or 0
+    last_hour = q.filter(MetricPoint.timestamp >= sql_func.now() - timedelta(hours=1)).count()
+    counters = []
+    for f in db.query(Field).filter(Field.field_type == "counter").order_by(Field.name).all():
+        raw = (f.state or {}).get("value", 0)
+        try:
+            value = float(raw or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        counters.append({"name": f.name, "value": value})
+    return {"series": series, "points": points, "last_hour": last_hour, "counters": counters}
 
 
 def _poller_status_data(db, config, source_id=None):

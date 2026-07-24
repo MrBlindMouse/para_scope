@@ -1736,7 +1736,7 @@ class TestDashboardGridLayout:
             db.close()
         resp = authenticated_client.get(f"/widgets/system?id={wid}")
         assert resp.status_code == 200
-        assert b"total" in resp.content.lower() or b"Total" in resp.content or b"processed" in resp.content.lower()
+        assert b"Series" in resp.content or b"No metrics yet" in resp.content
 
 
 class TestWidgetTransforms:
@@ -3581,6 +3581,33 @@ class TestFields:
             assert ldata["name"] == "Widget Log"
             assert len(ldata["entries"]) == 1
             assert ldata["entries"][0]["value"] == "hello"
+        finally:
+            db.close()
+
+    def test_metric_summary_uses_metric_points_and_counters(self, authenticated_client):
+        from datetime import datetime, timezone
+        from app.database import get_db
+        from app.models import Field, MetricPoint, Source
+        from app.widgets import fetch_widget_data
+        db = next(get_db())
+        try:
+            src = Source(name="MS", slug="ms-summary", source_type="webhook", enabled=True)
+            counter = Field(
+                name="Hits", slug="ms-hits", field_type="counter",
+                config={}, state={"value": 3},
+            )
+            db.add_all([src, counter])
+            db.flush()
+            now = datetime.now(timezone.utc)
+            db.add(MetricPoint(source_id=src.id, field_id=counter.id, name="Hits", value=3.0, timestamp=now))
+            db.add(MetricPoint(source_id=src.id, name="latency", value=1.5, timestamp=now))
+            db.commit()
+
+            data = fetch_widget_data("system", db, display="metric_summary", widget_config={})
+            assert data["series"] == 2
+            assert data["points"] == 2
+            assert data["last_hour"] == 2
+            assert {"name": "Hits", "value": 3.0} in data["counters"]
         finally:
             db.close()
 

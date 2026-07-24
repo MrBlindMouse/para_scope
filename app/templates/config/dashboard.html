@@ -230,7 +230,11 @@
         inner = '<a href="#">Docs</a>';
       }
     } else if (disp === "metric_summary") {
-      inner = '<div class="stat"><div class="stat__label">Total</div><div class="stat__value">128</div></div>';
+      inner = '<div class="grid-auto widget-preview__mini" style="--grid-min: 4em; --grid-gap: 0.25rem;">' +
+        '<div class="stat"><div class="stat__label">Series</div><div class="stat__value">2</div></div>' +
+        '<div class="stat"><div class="stat__label">Points</div><div class="stat__value">48</div></div>' +
+        '<div class="stat"><div class="stat__label">Hits</div><div class="stat__value">12</div></div>' +
+        "</div>";
     } else if (disp === "source_health" || disp === "recent_events" || disp === "poller_status") {
       if (style === "cards") {
         inner = '<div class="widget-entry-card widget-preview__mini"><strong>api</strong> <span class="text-success">healthy</span></div>';
@@ -399,11 +403,13 @@
     items = Array.isArray(items) ? items : [];
     if (!items.length) items = [{label: "", url: "", icon: ""}];
     var html = '<div class="stack stack--dense" data-link-items><span class="text-muted">Links</span>';
-    items.forEach(function (it) {
+    items.forEach(function (it, i) {
       html += '<div class="flex items-center gap flex-wrap" data-link-row>' +
         '<input type="text" class="input form-field--md" data-link="label" placeholder="Label" value="' + escapeAttr(it.label || "") + '">' +
         '<input type="url" class="input form-field--grow" data-link="url" placeholder="https://…" value="' + escapeAttr(it.url || "") + '">' +
         '<input type="text" class="input form-field--xs" data-link="icon" placeholder="Icon" value="' + escapeAttr(it.icon || "") + '">' +
+        '<button type="button" class="btn" data-action="link-up"' + (i === 0 ? " disabled" : "") + ">Up</button>" +
+        '<button type="button" class="btn" data-action="link-down"' + (i === items.length - 1 ? " disabled" : "") + ">Down</button>" +
         '<button type="button" class="btn" data-action="link-remove">−</button>' +
       "</div>";
     });
@@ -833,7 +839,39 @@
     }
     if (action === "link-remove") {
       var lr = btn.closest("[data-link-row]");
-      if (lr) lr.remove();
+      if (!lr) return;
+      var lrWrap = lr.parentElement;
+      lr.remove();
+      var remain = Array.prototype.slice.call(lrWrap.querySelectorAll(":scope > [data-link-row]"));
+      remain.forEach(function (r, ri) {
+        var upBtn = r.querySelector('[data-action="link-up"]');
+        var downBtn = r.querySelector('[data-action="link-down"]');
+        if (upBtn) upBtn.disabled = ri === 0;
+        if (downBtn) downBtn.disabled = ri === remain.length - 1;
+      });
+      syncJson();
+      return;
+    }
+    if (action === "link-up" || action === "link-down") {
+      var linkRow = btn.closest("[data-link-row]");
+      if (!linkRow) return;
+      var linkWrap = linkRow.parentElement;
+      var linkRows = Array.prototype.slice.call(linkWrap.querySelectorAll(":scope > [data-link-row]"));
+      var linkIdx = linkRows.indexOf(linkRow);
+      if (action === "link-up" && linkIdx > 0) {
+        linkWrap.insertBefore(linkRow, linkRows[linkIdx - 1]);
+      } else if (action === "link-down" && linkIdx < linkRows.length - 1) {
+        linkWrap.insertBefore(linkRows[linkIdx + 1], linkRow);
+      } else {
+        return;
+      }
+      linkRows = Array.prototype.slice.call(linkWrap.querySelectorAll(":scope > [data-link-row]"));
+      linkRows.forEach(function (r, ri) {
+        var upBtn = r.querySelector('[data-action="link-up"]');
+        var downBtn = r.querySelector('[data-action="link-down"]');
+        if (upBtn) upBtn.disabled = ri === 0;
+        if (downBtn) downBtn.disabled = ri === linkRows.length - 1;
+      });
       syncJson();
       return;
     }

@@ -23,7 +23,7 @@
       <tbody>
         {% for s in wdata.sources %}
         <tr>
-          <td>{{ s.name }}{% if s.slug %} <code>{{ s.slug }}</code>{% endif %}</td>
+          <td>{{ s.name }}</td>
           <td>
             {% if s.status == 'healthy' %}<span class="text-success">healthy</span>
             {% elif s.status == 'stale' %}<span class="text-muted">stale</span>
@@ -82,19 +82,18 @@
     <div class="stack stack--tight">
       {% for s in wdata.schedules %}
       <div class="widget-entry-card">
-        <strong>{{ s.name }}</strong> ({{ s.source }})
+        <strong>{{ s.name }}</strong>
         <span class="text-muted">{{ s.success_count }} / {{ s.failure_count }} (lifetime)</span>
       </div>
       {% endfor %}
     </div>
     {% else %}
     <table class="table {% if style == 'compact' %}table--compact{% endif %}">
-      <thead><tr><th>Name</th><th>Source</th><th>Last Run</th><th>Next Run</th><th>OK / Fail (lifetime)</th></tr></thead>
+      <thead><tr><th>Name</th><th>Last Run</th><th>Next Run</th><th>OK / Fail (lifetime)</th></tr></thead>
       <tbody>
         {% for s in wdata.schedules %}
         <tr>
           <td>{{ s.name }}</td>
-          <td>{{ s.source }}</td>
           <td>{{ s.last_run.strftime('%Y-%m-%d %H:%M') if s.last_run else 'never' }}</td>
           <td>{{ s.next_run.strftime('%Y-%m-%d %H:%M') if s.next_run else '-' }}</td>
           <td>{{ s.success_count }} / {{ s.failure_count }}</td>
@@ -107,27 +106,29 @@
   <p class="text-muted">No schedules configured.</p>
   {% endif %}
 {% elif disp == "metric_summary" %}
-  {% if wdata %}
+  {% if wdata and (wdata.points or wdata.counters) %}
   <div class="grid-auto {% if style == 'compact' %}widget-summary--compact{% elif style == 'cards' %}widget-summary--cards{% endif %}" style="--grid-min: 8em; --grid-gap: 0.5rem;">
     <div class="stat">
-      <div class="stat__label">Retained</div>
-      <div class="stat__value">{{ wdata.total }}</div>
+      <div class="stat__label">Series</div>
+      <div class="stat__value">{{ wdata.series }}</div>
     </div>
     <div class="stat">
-      <div class="stat__label">Last hour (retained)</div>
+      <div class="stat__label">Points</div>
+      <div class="stat__value">{{ wdata.points }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat__label">Last hour</div>
       <div class="stat__value">{{ wdata.last_hour }}</div>
     </div>
+    {% for c in wdata.counters %}
     <div class="stat">
-      <div class="stat__label">Processed</div>
-      <div class="stat__value stat__value--positive">{{ wdata.processed }}</div>
+      <div class="stat__label">{{ c.name }}</div>
+      <div class="stat__value">{{ c.value }}</div>
     </div>
-    <div class="stat">
-      <div class="stat__label">Failed</div>
-      <div class="stat__value stat__value--negative">{{ wdata.failed }}</div>
-    </div>
+    {% endfor %}
   </div>
   {% else %}
-  <p class="text-muted">No data available.</p>
+  <p class="text-muted">No metrics yet.</p>
   {% endif %}
 {% else %}
 <p class="text-muted">Unknown system display.</p>
