@@ -1,15 +1,19 @@
-"""Parse / migrate / merge shared dashboard widget layouts."""
+"""Parse / merge shared dashboard widget layouts."""
 from __future__ import annotations
 
 import json
 import secrets
 from typing import Any
 
+# Single source of truth for GridStack resolution (JS + CSS read these via the template).
+GRID_COLUMNS = 36
+GRID_CELL_HEIGHT = 40  # px
+GRID_MARGIN = 6  # px
 
-DEFAULT_W = 6
+COL_FULL = GRID_COLUMNS
+DEFAULT_W = max(1, GRID_COLUMNS // 2)
 DEFAULT_H = 3
 TABLE_H = 4
-COL_FULL = 12
 
 _TALL_TYPES = frozenset({"system", "display", "links"})
 _TALL_DISPLAYS = frozenset({
@@ -19,6 +23,18 @@ _TALL_DISPLAYS = frozenset({
 
 def new_widget_id() -> str:
     return "w_" + secrets.token_hex(4)
+
+
+def grid_stack_column_css(columns: int) -> str:
+    """Emit .gs-N width/left percentage rules for GridStack column count N."""
+    n = max(1, int(columns))
+    pct = 100.0 / n
+    parts = [f".gs-{n}>.grid-stack-item{{width:{pct:.4f}%}}"]
+    for k in range(1, n + 1):
+        parts.append(f'.gs-{n}>.grid-stack-item[gs-w="{k}"]{{width:{pct * k:.4f}%}}')
+        if k < n:
+            parts.append(f'.gs-{n}>.grid-stack-item[gs-x="{k}"]{{left:{pct * k:.4f}%}}')
+    return "".join(parts)
 
 
 def parse_layout_config(raw) -> dict:
@@ -55,7 +71,6 @@ def migrate_widgets(widgets: list[dict]) -> tuple[list[dict], bool]:
     out = []
     for w in widgets:
         item = dict(w)
-        legacy = not item.get("id") and all(item.get(k) is None for k in ("x", "y", "w", "h"))
         if not item.get("id"):
             item["id"] = new_widget_id()
             changed = True
@@ -64,7 +79,7 @@ def migrate_widgets(widgets: list[dict]) -> tuple[list[dict], bool]:
         defaults = {
             "x": 0,
             "y": y,
-            "w": COL_FULL if legacy else DEFAULT_W,
+            "w": DEFAULT_W,
             "h": _default_h(wtype, display),
         }
         for key, default in defaults.items():
@@ -78,7 +93,7 @@ def migrate_widgets(widgets: list[dict]) -> tuple[list[dict], bool]:
             item["h"] = max(1, int(item["h"]))
         except (TypeError, ValueError):
             item["x"], item["y"] = 0, y
-            item["w"] = COL_FULL if legacy else DEFAULT_W
+            item["w"] = DEFAULT_W
             item["h"] = _default_h(wtype, display)
             changed = True
         if not isinstance(item.get("config"), dict):

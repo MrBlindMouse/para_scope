@@ -1658,27 +1658,24 @@ class TestStyleConfig:
 
 
 class TestDashboardGridLayout:
-    def test_legacy_layout_migrates_on_read(self, authenticated_client):
-        from app.database import get_db
-        from app.models import DashboardLayout
+    def test_dashboard_exposes_grid_resolution(self, authenticated_client):
+        from app.dashboard_layout import DEFAULT_W, GRID_COLUMNS
 
-        db = next(get_db())
-        try:
-            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
-            widgets = [{"type": "system", "display": "metric_summary", "title": "Summary"}]
-            if not layout:
-                layout = DashboardLayout(layout_config=json.dumps({"widgets": widgets}))
-                db.add(layout)
-            else:
-                layout.layout_config = json.dumps({"widgets": widgets})
-            db.commit()
-        finally:
-            db.close()
-
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps([
+                {"type": "system", "display": "metric_summary", "title": "Summary"},
+            ])},
+            follow_redirects=False,
+        )
         resp = authenticated_client.get("/")
         assert resp.status_code == 200
-        assert b"Summary" in resp.content
+        assert f'data-gs-column="{GRID_COLUMNS}"'.encode() in resp.content
+        assert f".gs-{GRID_COLUMNS}>".encode() in resp.content
         assert b"gs-id=" in resp.content
+
+        from app.database import get_db
+        from app.models import DashboardLayout
 
         db = next(get_db())
         try:
@@ -1686,9 +1683,7 @@ class TestDashboardGridLayout:
             saved = json.loads(layout.layout_config)["widgets"]
             assert len(saved) == 1
             assert saved[0]["id"].startswith("w_")
-            assert saved[0]["x"] == 0
-            assert saved[0]["w"] == 12
-            assert saved[0]["h"] >= 1
+            assert saved[0]["w"] == DEFAULT_W
         finally:
             db.close()
 

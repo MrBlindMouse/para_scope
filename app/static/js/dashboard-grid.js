@@ -11,13 +11,16 @@
     var el = document.getElementById("dashboard-grid");
     if (!el || typeof GridStack === "undefined") return;
 
+    var column = parseInt(el.getAttribute("data-gs-column") || "12", 10);
+    var cellHeight = parseInt(el.getAttribute("data-gs-cell-height") || "40", 10);
+    var margin = parseInt(el.getAttribute("data-gs-margin") || "6", 10);
     var grid = GridStack.init({
-      column: 24,
-      cellHeight: 40,
-      margin: 6,
+      column: column,
+      cellHeight: cellHeight,
+      margin: margin,
       float: false,
       staticGrid: true,
-      disableOneColumnMode: false,
+      disableOneColumnMode: true,
       handle: ".card__header",
     }, el);
 

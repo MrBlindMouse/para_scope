@@ -27,8 +27,9 @@ from app.security import (
 from app.pipeline import evaluate_and_dispatch
 from app.widgets import fetch_widget_data, get_widget_types, validate_widget_bindings
 from app.dashboard_layout import (
-    find_widget, layout_json, merge_geometry, migrate_widgets,
-    normalize_for_save, parse_layout_config,
+    GRID_CELL_HEIGHT, GRID_COLUMNS, GRID_MARGIN,
+    find_widget, grid_stack_column_css, layout_json, merge_geometry,
+    migrate_widgets, normalize_for_save, parse_layout_config,
 )
 from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
@@ -146,7 +147,17 @@ async def root(request: Request, db: Session = Depends(get_db)):
             wtype, db, widget_config=w.get("config") or {}, display=disp,
         )
     return ctx.templates.TemplateResponse(
-        request, "index.html", {"user": user, "widgets": widgets, "widget_data": widget_data}
+        request,
+        "index.html",
+        {
+            "user": user,
+            "widgets": widgets,
+            "widget_data": widget_data,
+            "grid_columns": GRID_COLUMNS,
+            "grid_cell_height": GRID_CELL_HEIGHT,
+            "grid_margin": GRID_MARGIN,
+            "grid_column_css": grid_stack_column_css(GRID_COLUMNS),
+        },
     )
 
 

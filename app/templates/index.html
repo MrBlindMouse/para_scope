@@ -33,7 +33,11 @@
 {% block content %}
 {% if widgets %}
 <link rel="stylesheet" href="/static/vendor/gridstack/gridstack.min.css">
-<div class="grid-stack dashboard-grid" id="dashboard-grid">
+<style>{{ grid_column_css | safe }}</style>
+<div class="grid-stack dashboard-grid" id="dashboard-grid"
+     data-gs-column="{{ grid_columns }}"
+     data-gs-cell-height="{{ grid_cell_height }}"
+     data-gs-margin="{{ grid_margin }}">
   {% for widget in widgets %}
     {% set wid = widget.id %}
     {% set wdata = widget_data.get(wid, {}) %}
@@ -44,7 +48,7 @@
          gs-id="{{ wid }}"
          gs-x="{{ widget.x | default(0) }}"
          gs-y="{{ widget.y | default(0) }}"
-         gs-w="{{ widget.w | default(6) }}"
+         gs-w="{{ widget.w | default((grid_columns / 2)|int) }}"
          gs-h="{{ widget.h | default(3) }}">
       <div class="grid-stack-item-content">
         <div class="card" data-widget="{{ widget.type }}" data-widget-id="{{ wid }}" id="widget-{{ wid }}">
