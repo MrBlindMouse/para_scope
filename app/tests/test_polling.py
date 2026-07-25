@@ -128,7 +128,7 @@ def test_http_poll_retries_then_fails(db, source):
 def test_http_poll_requires_url(db, source):
     from app.pollers import http_poll
     schedule = _make_schedule(db, source, handler_url="")
-    with pytest.raises(ValueError, match="handler_url"):
+    with pytest.raises(ValueError, match="Poll URL"):
         http_poll(schedule, db)
 
 

@@ -15,7 +15,7 @@ import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, SourceStatus, EventTypeRecord, PollingSchedule, ScheduleType,
+    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
     ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
     PushSubscription, Field, FieldLogEntry,
 )
@@ -44,7 +44,7 @@ async def push_vapid_public_key():
     cfg = vapid_config()
     if not cfg:
         return JSONResponse(
-            {"error": "Web Push is not configured (set PARA_SCOPE_VAPID_* env vars)"},
+            {"error": "Browser notifications aren’t set up on this server"},
             status_code=503,
         )
     return {"public_key": cfg["public_key"]}
@@ -66,7 +66,7 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db)):
     p256dh = (keys.get("p256dh") or "").strip()
     auth = (keys.get("auth") or "").strip()
     if not endpoint or not p256dh or not auth:
-        return JSONResponse({"error": "endpoint and keys.p256dh/auth required"}, status_code=400)
+        return JSONResponse({"error": "Couldn’t save notification subscription"}, status_code=400)
 
     existing = db.query(PushSubscription).filter(PushSubscription.endpoint == endpoint).first()
     if existing:
@@ -94,7 +94,7 @@ async def push_unsubscribe(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     endpoint = (body.get("endpoint") or "").strip()
     if not endpoint:
-        return JSONResponse({"error": "endpoint required"}, status_code=400)
+        return JSONResponse({"error": "Missing subscription details"}, status_code=400)
     sub = (
         db.query(PushSubscription)
         .filter(
@@ -180,7 +180,7 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
             widget_config=config, display=display or wdata.get("display"),
         )
     except Exception:
-        return HTMLResponse(f'<p class="text-muted">Unknown widget: {widget_type}</p>')
+        return HTMLResponse('<p class="text-muted">Unknown widget</p>')
     return HTMLResponse(html)
 
 
@@ -250,7 +250,7 @@ async def save_dashboard(request: Request, db: Session = Depends(get_db)):
         widgets = json.loads(widgets_raw) if widgets_raw else []
     except json.JSONDecodeError:
         return RedirectResponse(
-            url=ctx.flash_url("/config/dashboard", error="Invalid widget data"),
+            url=ctx.flash_url("/config/dashboard", error="Couldn’t read the dashboard settings"),
             status_code=303,
         )
 

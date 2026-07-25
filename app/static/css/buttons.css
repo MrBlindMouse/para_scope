@@ -67,8 +67,8 @@
     flex-shrink: 0;
   }
 
-  .btn--icon[data-subscribed="1"] .icon--bell-on,
-  .btn--icon:not([data-subscribed="1"]) .icon--bell-off {
+  .btn--icon[data-subscribed="1"] .icon--bell-off,
+  .btn--icon:not([data-subscribed="1"]) .icon--bell-on {
     display: none;
   }
 }

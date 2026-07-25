@@ -13,7 +13,7 @@ COL_FULL = 12
 
 _TALL_TYPES = frozenset({"system", "display", "links"})
 _TALL_DISPLAYS = frozenset({
-    "source_health", "recent_events", "poller_status", "logbook_list", "table", "list",
+    "source_health", "recent_events", "poller_status", "logbook_list", "table", "list", "board",
 })
 
 
@@ -139,6 +139,7 @@ def normalize_for_save(widgets: list[Any]) -> list[dict]:
         item = {
             "type": w["type"],
             "title": w.get("title") or w.get("label") or w["type"],
+            "show_title": bool(w["show_title"]) if "show_title" in w else True,
             "config": w.get("config") if isinstance(w.get("config"), dict) else {},
         }
         if w.get("display"):

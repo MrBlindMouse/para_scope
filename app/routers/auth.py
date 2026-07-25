@@ -15,7 +15,7 @@ import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, SourceStatus, EventTypeRecord, PollingSchedule, ScheduleType,
+    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
     ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
     PushSubscription, Field, FieldLogEntry,
 )
@@ -25,12 +25,6 @@ from app.security import (
     SESSION_MAX_AGE_SECONDS,
 )
 from app.pipeline import evaluate_and_dispatch
-from app.widgets import fetch_widget_data, get_widget_types
-from app.dashboard_layout import (
-    find_widget, layout_json, merge_geometry, migrate_widgets,
-    normalize_for_save, parse_layout_config,
-)
-from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
 
 from app import webctx as ctx
@@ -88,7 +82,7 @@ async def setup_post(
     except ValueError:
         return ctx.templates.TemplateResponse(
             request, "setup.html",
-            {"error": "Account created, but PARA_SCOPE_SECRET_KEY is required to sign in. Set it and log in."},
+            {"error": "Account created. Set the server secret key, then log in."},
         )
 
 
@@ -130,7 +124,7 @@ async def login_post(
     except ValueError:
         return ctx.templates.TemplateResponse(
             request, "login.html",
-            {"error": "Server misconfigured: PARA_SCOPE_SECRET_KEY is required"},
+            {"error": "Can’t sign in — server secret key isn’t set"},
         )
     ctx._audit_log(db, request, "login_success", user_id=user.id)
     return response

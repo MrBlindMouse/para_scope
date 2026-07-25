@@ -16,7 +16,7 @@ import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, SourceStatus, EventTypeRecord, PollingSchedule, ScheduleType,
+    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
     ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
     PushSubscription, Field, FieldLogEntry,
 )
@@ -26,11 +26,6 @@ from app.security import (
     SESSION_MAX_AGE_SECONDS,
 )
 from app.pipeline import evaluate_and_dispatch
-from app.widgets import fetch_widget_data, get_widget_types
-from app.dashboard_layout import (
-    find_widget, layout_json, merge_geometry, migrate_widgets,
-    normalize_for_save, parse_layout_config,
-)
 from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
 from app.themes import (
@@ -43,14 +38,6 @@ from app.themes import (
 from app import webctx as ctx
 
 router = APIRouter()
-
-# route: /config/secrets
-@router.get("/config/secrets")
-async def config_secrets_redirect():
-    return RedirectResponse(url="/config/pipeline", status_code=303)
-
-
-# Legacy POST creates → pipeline (non-HTMX / tests)
 
 # route: /config/style
 @router.get("/config/style")
@@ -196,31 +183,30 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
 @router.post("/config/secrets")
 async def create_secret(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
-    name = (form.get("name") or "").strip()
     scoped_to_type = (form.get("scoped_to_type") or "source").strip()
     scoped_to_id_str = form.get("scoped_to_id", "").strip()
     value = (form.get("value") or "").strip()
 
-    if not name or not scoped_to_id_str or not value:
-        return ctx._pipeline_redirect(error="Name, scoped_to_id, and value are required")
+    if not scoped_to_id_str or not value:
+        return ctx._pipeline_redirect(error="Target and value are required")
 
     try:
         scoped_to_id = int(scoped_to_id_str)
     except ValueError:
-        return ctx._pipeline_redirect(error="scoped_to_id must be a number")
+        return ctx._pipeline_redirect(error="Target must be a number")
 
     try:
         encrypted_value = encrypt_secret(value)
-    except ValueError as e:
-        return ctx._pipeline_redirect(error=str(e))
+    except ValueError:
+        return ctx._pipeline_redirect(error="Server secret key isn't set — can't store secrets")
     secret = Secret(
-        name=name, scoped_to_type=scoped_to_type,
+        scoped_to_type=scoped_to_type,
         scoped_to_id=scoped_to_id, encrypted_value=encrypted_value,
     )
     db.add(secret)
     db.commit()
-    ctx._audit_log(db, request, "secret.create", resource_type="secret", resource_id=secret.id, details={"name": name})
-    return ctx._pipeline_redirect(success=f"Secret '{name}' created")
+    ctx._audit_log(db, request, "secret.create", resource_type="secret", resource_id=secret.id)
+    return ctx._pipeline_redirect(success="Secret created")
 
 
 
@@ -230,12 +216,11 @@ async def delete_secret(request: Request, secret_id: int, db: Session = Depends(
     secret = db.query(Secret).filter(Secret.id == secret_id).first()
     if not secret:
         return ctx._pipeline_redirect(error="Secret not found")
-    name = secret.name
     sid = secret.id
     db.delete(secret)
     db.commit()
-    ctx._audit_log(db, request, "secret.delete", resource_type="secret", resource_id=sid, details={"name": name})
-    return ctx._pipeline_redirect(success=f"Secret '{name}' deleted")
+    ctx._audit_log(db, request, "secret.delete", resource_type="secret", resource_id=sid)
+    return ctx._pipeline_redirect(success="Secret deleted")
 
 
 # ── Config: Audit Log ───────────────────────────────────────────────────────

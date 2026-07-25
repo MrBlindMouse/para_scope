@@ -11,18 +11,6 @@ from app.database import Base
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
-class SourceStatus(str, enum.Enum):
-    ENABLED = "enabled"
-    DISABLED = "disabled"
-    ERROR = "error"
-
-
-class ActionStatus(str, enum.Enum):
-    ENABLED = "enabled"
-    DISABLED = "disabled"
-    FAILED = "failed"
-
-
 class ScheduleType(str, enum.Enum):
     INTERVAL = "interval"
     CRON = "cron"
@@ -49,7 +37,6 @@ class Secret(Base):
     __tablename__ = "secrets"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(200), nullable=False)  # human-readable label
     scoped_to_type = Column(String(50), nullable=False)  # e.g. 'source', 'action'
     scoped_to_id = Column(Integer, nullable=False)  # FK to the owning entity
     encrypted_value = Column(Text, nullable=False)
@@ -73,12 +60,7 @@ class Source(Base):
     description = Column(Text, default="")
     tags = Column(JSON, default=list)  # list[str]
     icon = Column(String(100), default="")
-    base_url = Column(String(500), default="")  # legacy; unused in UI
-    status = Column(
-        SAEnum(SourceStatus, native_enum=False, values_callable=lambda e: [m.value for m in e]),
-        default=SourceStatus.ENABLED,
-    )  # legacy mirror; runtime uses `enabled` only
-    enabled = Column(Boolean, default=True)  # sole enable/disable source of truth
+    enabled = Column(Boolean, default=True)
     config = Column(JSON, default=dict)  # adapter-specific config
     webhook_secret_id = Column(Integer, ForeignKey("secrets.id"), nullable=True)
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
@@ -103,6 +85,7 @@ class EventTypeRecord(Base):
     name = Column(String(200), nullable=False)  # e.g. 'client.created', 'order.paid'
     description = Column(Text, default="")
     schema_hint = Column(JSON, default=dict)  # extraction hints / JSON schema
+    enabled = Column(Boolean, default=True)  # paused types still ingest; rules skip them
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     source = relationship("Source", back_populates="event_types")
@@ -148,11 +131,7 @@ class ActionInstance(Base):
     source_id = Column(Integer, ForeignKey("sources.id"), nullable=False, index=True)
     action_type = Column(String(100), nullable=False)  # field_push | http_forward | web_push
     config = Column(JSON, default=dict)  # action-specific config
-    status = Column(
-        SAEnum(ActionStatus, native_enum=False, values_callable=lambda e: [m.value for m in e]),
-        server_default=ActionStatus.ENABLED.value,
-    )  # legacy mirror; runtime uses `enabled` only
-    enabled = Column(Boolean, default=True)  # sole enable/disable source of truth
+    enabled = Column(Boolean, default=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"), nullable=True)
     secret_id_2 = Column(Integer, ForeignKey("secrets.id"), nullable=True)  # key+secret auth
     created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -5,7 +5,7 @@
 
 <form method="get" class="stack stack--dense mb">
   <div class="filter-bar">
-    <input name="user_id" type="number" class="input" placeholder="User ID" value="{{ user_id_filter or '' }}">
+    <input name="user_id" type="number" class="input" placeholder="User" value="{{ user_id_filter or '' }}">
     <input name="action" type="text" class="input filter-bar__wide" placeholder="Action (e.g. source.create)" value="{{ action_filter or '' }}">
     <button type="submit" class="btn btn--primary">Filter</button>
     {% if user_id_filter or action_filter %}

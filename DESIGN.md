@@ -1,10 +1,6 @@
-**Modular Event Dashboard – Design Document**  
-
-*Working title: Para-Scope*
-
 Version: 0.1  
 
-Date: 2026-07-17  
+Date: 2026-07-17 (updated 2026-07-24 to match shipped codebase)  
 
 Status: Living design. **AGENTS.md** is the ops contract for agents; this document is vision plus an explicit shipped-vs-planned split below.
 
@@ -20,21 +16,31 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 - In-memory login and webhook rate limits (single-process ceiling)
 - In-process APScheduler pollers; HTMX dashboard refresh (not SSE)
 - Action/poller registries in-process (not a plugin directory)
+- Shared Fields as first-class sinks used by both actions and widgets
+- Vanilla CSS (37signals/Fizzy-inspired, OKLCH tokens, cascade layers)
+- GridStack layout + Chart.js widgets
+- Web Push via VAPID (optional env keys)
+- systemd + nginx production path documented; pure git + venv primary distribution
 
 **Planned / not in v0.1 (do not treat as implemented):**
 
-- PostgreSQL as a first-class backend, YAML/JSON config export-import, durable queue / dead-letter
-- SSE live event tail, TOTP/WebAuthn/OIDC, API tokens
-- Condition rate limits / time windows; formal plugin/adapter packaging and “Writing a Source Adapter” guides
+- Durable queue / dead-letter
+- SSE live event tail
+- TOTP / WebAuthn / OIDC
+- API tokens
+- Condition rate limits / time windows
+- Formal plugin/adapter packaging and “Writing a Source Adapter” guides
 - Mandatory webhook secrets in production (operator guidance only today)
+- Multi-role auth (admin vs viewer)
+- Migrations (Alembic or equivalent)
 
 ---
 
 ### 1. Vision and Purpose
 
-A self-hosted, single-process (or lightly multi-process) Python application that acts as a unified event hub and operational dashboard for personal or small-team infrastructure and projects.  
+A self-hosted, single-process Python application that acts as a unified event hub and operational dashboard for personal or small-team infrastructure and projects.
 
-Users register **Sources** (Flit PKM, trading bots, e-commerce/payment providers, Uptime Kuma, custom services, etc.). Each source can emit events via verified webhooks and/or be actively polled on configurable schedules. Incoming events are normalized, filtered, and routed to one or more **Actions**. A modular web dashboard provides graphs, event logs, status overviews, and configuration surfaces.  
+Users register **Sources**. Each source can emit events via verified webhooks and/or be actively polled on configurable schedules. Incoming events are normalized, filtered by **Rules** (with conditions), and routed to one or more **Actions**. Shared **Fields** act as durable sinks (logbooks, counters, values, toggles). A modular web dashboard provides status tiles, graphs, event logs, and configuration surfaces.
 
 The system prioritizes:
 
@@ -50,12 +56,12 @@ It is deliberately *not* a full observability platform (Prometheus/Grafana repla
 - Clean registration and lifecycle management of heterogeneous sources.
 - Reliable, verified webhook ingestion with custom event types per source.
 - Flexible polling as a first-class peer to webhooks.
-- Composable actions triggered by events (with conditions).
+- Composable actions triggered by events (with simple field-match conditions).
 - Persistent event history + aggregated metrics suitable for graphs and audit logs.
 - Attractive, modular, authenticated web dashboard built with FastAPI + Jinja2 + HTMX + vanilla CSS.
 - Strong authentication and secret handling.
 - Easy local development and deployment from a pure git repository.
-- Clear extension points so new sources and actions can be added without core changes.
+- Clear extension points so new pollers and actions can be added without core changes.
 - Reasonable defaults and progressive complexity so a single user can start quickly while power users can go deep.
 
 ### 3. Non-Goals
@@ -71,129 +77,134 @@ It is deliberately *not* a full observability platform (Prometheus/Grafana repla
 
 **Source**  
 
-A registered origin of events. Examples: Flit, Verdant Prints / payment provider, alpaca trading bot, Uptime Kuma instance, generic HTTP endpoint, custom script.  
+A registered origin of events. Examples: Flit PKM, trading bots, e-commerce/payment providers, Uptime Kuma, custom services, system metrics collectors, etc.
 
 A source owns:
 
-- Identity and metadata (name, description, tags, icon, base URL if relevant)
-- Authentication / verification material for webhooks (secrets, optional signature schemes)
+- Identity and metadata (name, slug, description, tags, icon)
+- Authentication / verification material for webhooks (optional secret)
 - Zero or more webhook event type definitions
 - Zero or more independent polling schedules
 - Associated secrets (API keys, tokens) used by pollers or actions
-- Status (enabled/disabled, last seen, health)
+- Enabled flag and last-seen timestamp
 
 **Event Type**  
 
-A named kind of occurrence belonging to a source (e.g. `client.created`, `order.paid`, `position.opened`, `monitor.down`).  
+A named kind of occurrence belonging to a source (e.g. `on_success`, `on_failure`, `client.created`, `monitor.down`).  
 
-Carries a schema hint or extraction rules so the system can pull useful fields into a normalized envelope.
+Carries optional schema hints. Poll sources automatically receive `on_success` / `on_failure`. An optional `always` type can be added on poll or webhook sources and fires on every poll run / accepted webhook.
 
 **Event**  
 
-A concrete occurrence. Normalized internal representation plus the original payload. Immutable once accepted.
+A concrete occurrence. Normalized internal representation plus the original payload. Immutable once accepted. Carries processing status (`pending` | `processed` | `failed`).
 
 **Polling Schedule**  
 
-A named, independent job attached to a source: interval (or cron), target (URL, query, or custom handler), optional parameters, timeout, and retry policy. Multiple schedules per source are first-class.
+A named, independent job attached to a source: interval or cron, handler type (`http_get` / `http_post` / … or custom registered handlers), URL + params, timeout, and retry count. Multiple schedules per source are first-class. Jobs run in-process via APScheduler with jitter and consecutive-failure backoff.
 
 **Action**  
 
-A side-effect that can be attached to one or more event types (or to a source more broadly). Examples:  write to log store, update a counter/metric, forward HTTP webhook, run a short transformation.  
+A side-effect attached to rules. Built-in types:
 
-Actions support simple field-match conditions (exact, not, gt/lt, contains, regex). Rate limiting and time windows are planned, not shipped.
+- `field_push` — write to a shared Field (logbook append, counter increment/decrement/reset, value set, toggle)
+- `http_forward` — outbound HTTP request (supports auth secrets, custom headers/body)
+- `web_push` — browser push notification via VAPID
+
+Actions are dispatched by rules. Rules support field-match conditions (exact, not, gt/lt, contains, regex) on dotted paths. List segment `*` means “any element” in conditions (correlated across fields that share the same list); when those conditions match, the same indexes apply to `*` in that rule’s action/template paths. Without starred conditions, `*` is the first element. Rate limiting and time windows are planned, not shipped.
 
 **Rule**  
 
-The binding of event type(s) + optional conditions → one or more actions (with ordering or parallel execution semantics).
+The binding of event type(s) + optional conditions → one or more actions (ordered by `order_index`).
+
+**Field**  
+
+Global named sink used by both actions and widgets:
+
+- `logbook` — append-only entries (pruned to max_entries); history for charts/series
+- `counter` — numeric current value only (increment / decrement / reset; no time-series)
+- `value` — string state
+- `toggle` — boolean state
 
 **Dashboard View / Widget**  
 
-A modular visualization or control surface that consumes events, metrics, or source status. Layouts are user-configurable at a basic level.
+Modular visualization or control surface (status, charts, series, links, system info, display). Layout is stored in `DashboardLayout` and edited via GridStack. Widgets refresh via HTMX.
 
 ### 5. High-Level Architecture
 
 Single primary process (FastAPI application) that hosts:
 
 - HTTP server (dashboard + webhook ingress endpoints)
-- Background scheduler for polling jobs
+- Background scheduler for polling jobs (APScheduler)
 - Event processing pipeline (receive → normalize → filter → execute actions → persist)
-- Lightweight task mechanism for reliability (in-process `BackgroundTasks` today; durable queue planned)
+- In-process background work (no durable queue yet)
 - Auth middleware and session management
-- Static file serving for CSS, HTMX, and any small client assets
+- Static file serving for CSS, HTMX, Chart.js, GridStack
 
-Storage defaults to SQLite for zero-config simplicity. PostgreSQL is a planned option, not a supported path in v0.1.
+Storage defaults to SQLite for zero-config simplicity. PostgreSQL is planned, not a supported path in v0.1.
 
-Runtime configuration (sources, rules, schedules, dashboard layouts) lives in the database. Versionable YAML/JSON export/import is planned. The git repository contains the application code, templates, static assets, and documentation.
+Runtime configuration (sources, rules, schedules, dashboard layouts, fields) lives in the database. YAML/JSON export/import is planned. The git repository contains the application code, templates, static assets, and documentation.
 
 Data flow (simplified):
 
-1. External system → Webhook POST (verified) **or** internal poller runs
-2. Ingress / Poller produces a raw event
-3. Normalization layer produces a canonical Event
-4. Rule engine evaluates matching rules and conditions
-5. Matching Actions are executed (immediate retries in-process; no dead-letter queue yet)
-6. Event and any derived metrics are persisted
+1. External system → Webhook POST (verified when secret configured) **or** internal poller runs
+2. Ingress / Poller produces a raw result
+3. Normalization produces a canonical Event (via `ingest_event`)
+4. Rule engine evaluates matching rules and conditions (`evaluate_and_dispatch`)
+5. Matching Actions are executed (immediate; no dead-letter queue yet)
+6. Event and any derived metrics / field updates are persisted
 7. Dashboard and HTMX-polled feeds consume the stores
 
 ### 6. Detailed Component Responsibilities
 
 **Source Registry &amp; Management**  
 
-CRUD for sources, event type registration, secret association, enable/disable, health tracking. Provides the admin UI surface and the programmatic API used by the rest of the system.
+CRUD for sources, event type registration, secret association, enable/disable, health tracking. Provides the admin UI surface at `/config/pipeline` and related routes.
 
 **Webhook Ingress**  
 
-Per-source (or shared with source discrimination) HTTPS endpoints.  
+`POST /webhook/{slug}`.  
 
 Responsibilities:
 
-- Signature / secret verification (support common schemes: HMAC-SHA256, etc., and allow custom verifiers)
-- Replay protection / basic rate limiting
-- Event type extraction and validation against registered types
-- Immediate acknowledgment (202) while processing continues asynchronously where possible
-- Clear error responses and logging for misconfigured senders
+- Signature verification when a webhook secret is configured (`X-Webhook-Timestamp` + HMAC-SHA256 of `{timestamp}.{raw_body}`)
+- Body size limit (256 KB)
+- Event type extraction (`X-Event-Type` header or body `event_type` / `type`)
+- Optional side-emission of an `always` event type when present on the source
+- Immediate processing into the shared pipeline
+- Clear error responses
+
+Unsigned sources are accepted (convenient for local/dev).
 
 **Polling Engine**  
 
-A scheduler (APScheduler-style or equivalent) that runs independent jobs.  
+APScheduler-backed. Each schedule knows its source, interval/cron, handler type, and parameters.  
 
-Each schedule knows its source, interval/cron, handler, and parameters.  
+Handlers today are HTTP variants registered via `register_poller`. Custom handlers (system metrics, Docker status, etc.) follow the same contract and can be added by registering a callable.
 
-Handlers can be:
-
-- Generic HTTP GET/POST with JSON extraction
-- Source-specific Python callables registered via the extension mechanism
-- Simple script execution (carefully sandboxed or restricted)
-
-Jobs report success/failure, latency, and extracted events back into the same pipeline as webhooks. Jitter, concurrency limits, and per-source backoff are important.
+Jobs report success/failure, latency, and extracted data back into the same pipeline as webhooks. Interval schedules receive jitter and consecutive-failure backoff.
 
 **Event Pipeline**  
 
-- Acceptance and normalization
-- Optional enrichment
-- Rule matching and condition evaluation
-- Action dispatch (parallel where safe, ordered when declared)
+- Acceptance and normalization (`app/ingest.py`)
+- Rule matching and condition evaluation (`app/pipeline.py`)
+- Action dispatch
 - Persistence of the event and side-effect outcomes
-- Emission of internal system events (for the dashboard’s own observability)
+- Status tracking on the Event itself
 
 **Action Engine**  
 
-Registry of action types. Each action receives the normalized event + its own configuration.  
+Registry of action types (`register_action`). Each action receives the normalized event + its own configuration.  
 
-Built-in actions should cover notifications (webPush and api based), metric updates, logging, and HTTP egress.  
-
-Custom actions are added via the extension points.  
-
-Actions are expected to be idempotent where practical and to report structured results.
+Built-in actions cover field updates, HTTP egress, and Web Push. Custom actions are added via the same in-process registration.
 
 **Storage Layer**  
 
-Two main concerns:
+- Event log (queryable by time, source, type, correlation ID)
+- MetricPoint time-series (linked to sources and/or fields)
+- Field state + FieldLogEntry (for logbooks)
+- AuditLog
 
-- Event log (append-only, query-able by time, source, type, correlation ID, full-text on key fields)
-- Metrics / time-series (counters, gauges, simple histograms or pre-aggregated buckets for graphs)
-
-Retention policies, down-sampling, and optional archival are configurable. The design should allow swapping the backend later without rewriting the whole application.
+Schema evolution uses `Base.metadata.create_all()` plus explicit `ensure_schema` patches (no Alembic).
 
 **Dashboard (FastAPI + Jinja2 + HTMX + vanilla CSS)**  
 
@@ -201,58 +212,65 @@ Server-rendered with progressive enhancement.
 
 Key surfaces:
 
-- Overview / status board (sources health, recent critical events)
-- Per-source detail pages
-- Global and filtered event log with search (HTMX partials; SSE live tail planned)
-- Graphing views (time-range selectors, multiple series)
-- Configuration UI for sources, schedules, rules, and actions
-- System health and audit views
+- `/` — modular widget dashboard (GridStack)
+- `/events` — event log
+- `/metrics` — metric views
+- `/system` — system / poller health
+- `/config/pipeline` — sources, events, rules, actions
+- `/config/dashboard` — widget layout
+- `/config/style` — theme / appearance
+- `/config/users`, `/config/schedules`, audit log, help
 
-Widgets are modular: a page is composed of reusable partials that can be refreshed independently via HTMX. Layout preferences are stored per user.
+Widgets are modular partials refreshed independently via HTMX. Layout is shared for the install (not per-user in v0.1).
 
 **Authentication &amp; Authorization**  
 
-- Strong session-based auth for the dashboard (password today; optional TOTP/WebAuthn or OIDC planned)
-- Single user type: any authenticated user has full access (no admin/viewer roles)
-- Per-source webhook secrets and action credentials stored encrypted at rest
-- API tokens for programmatic access (planned)
-- Audit log of authentication events and configuration changes
-- CSRF protection, optional secure cookies (`PARA_SCOPE_SECURE_COOKIES`), rate limiting on login and webhooks (in-memory, single-process)
+- Cookie-based session auth (`session_username`)
+- Password hashing with bcrypt
+- CSRF protection
+- Optional `PARA_SCOPE_SECURE_COOKIES`
+- In-memory login rate limiting
+- Any authenticated user has full access (no admin/viewer split yet)
+- Secrets encrypted at rest with Fernet (`PARA_SCOPE_SECRET_KEY`)
+- Audit log of authentication and configuration changes
 
-### 7. Data Model (Conceptual)
+### 7. Data Model (Conceptual → Actual)
 
-Core entities (high-level):
+Core entities present in `app/models.py`:
 
-- User (for dashboard auth)
-- Source (id, name, slug, type/adapter, config, secrets references, enabled, timestamps)
-- EventType (belongs to Source, name, description, schema/extraction hints)
-- PollingSchedule (belongs to Source, name, cron/interval, handler, params, enabled)
-- Rule (name, event type filters or source-wide, conditions, list of Action bindings, enabled)
-- ActionInstance (type, configuration, secrets references, enabled)
-- Field (global sink: logbook / counter / value / toggle — used by `field_push` and widgets)
-- Event (id, source_id, event_type, timestamp, normalized fields, raw payload, correlation_id, processing status)
-- MetricPoint or aggregated series (source, field, name, timestamp, value, tags)
-- AuditLog / SystemEvent
-- DashboardLayout (shared install widget layout) + AppSettings (global theme)
+- `User`
+- `Secret` (encrypted, scoped)
+- `Source`
+- `EventTypeRecord`
+- `PollingSchedule`
+- `Rule`
+- `ActionInstance`
+- `Event`
+- `Field` + `FieldLogEntry`
+- `MetricPoint`
+- `AuditLog`
+- `DashboardLayout`
+- `AppSettings` (theme, font, background)
+- `PushSubscription`
 
 Relationships are straightforward; the design favors clarity over extreme normalization.
 
 ### 8. Extensibility Model
 
-The system exposes in-process registration hooks (`register_action` / `register_poller`) today. A richer plugin directory or entry-point packaging is planned for:
+Today the system exposes simple in-process registration hooks:
 
-- Source adapters (help with default event types, specialized pollers, verification schemes)
-- Action types
-- Custom extraction / normalization logic
-- Dashboard widgets or visualization helpers
+- `register_poller(handler_type, fn)` in `app/pollers.py`
+- `register_action(action_type, handler)` in `app/actions.py`
 
-A new action or poller is addable by registering a callable in the appropriate module. Core stays unaware of specific integrations (Flit, trading bots, Stripe-like providers, etc.).
+A richer plugin directory or entry-point packaging is planned. Core stays unaware of specific integrations.
+
+New pollers only need to return a result dict (`ok`, `data`, optional `raw` / `response_time_ms`). The rest of the pipeline (event creation, `on_success` / `on_failure` / optional `always`, rules, actions) remains identical.
 
 ### 9. Configuration Philosophy
 
 - Runtime configuration and state live in the database.
-- Example configs and full YAML/JSON export/import are planned for GitOps-style workflows.
-- Environment variables (`.env`) handle bootstrap concerns (database URL, secret key, secure cookies, VAPID, etc.).
+- Environment variables (`.env`) handle bootstrap concerns (`PARA_SCOPE_SECRET_KEY`, secure cookies, VAPID keys, database URL, log level, uploads dir).
+- YAML/JSON export/import is planned but not shipped.
 - No requirement for a complex configuration management system.
 
 ### 10. Deployment &amp; Operations (Pure Git Repository)
@@ -261,24 +279,21 @@ Primary distribution method: clone the git repository.
 
 Expected developer / operator workflow:
 
-- Create a Python virtual environment (uv, poetry, or plain venv + pip)
-- Install dependencies from a lockfile or requirements
-- Copy and edit a small example configuration / .env
-- Run database migrations / initialization
-- Start the application with uvicorn (or an equivalent ASGI server) under a process supervisor if desired (systemd, supervisord, etc.)
-- Place a reverse proxy (Nginx, Caddy, etc.) in front for TLS and additional hardening
+- Create a Python virtual environment (`uv` recommended)
+- Install dependencies from `requirements.txt`
+- Copy `.env.example` → `.env` and set at least `PARA_SCOPE_SECRET_KEY`
+- Start with `uvicorn app.main:app` (single worker)
+- First visit goes to `/setup` to create the initial user (or use `create_user.py`)
 
-The repository contains:
+Production path (documented in README):
 
-- Application source
-- Jinja templates and static assets (vanilla CSS, vendored HTMX/Chart.js/GridStack)
-- Schema evolution via `create_all` + `ensure_schema` (no migration scripts yet)
-- Documentation (this design doc + AGENTS.md + README)
-- Simple scripts for common tasks (`create_user.py`; config export planned)
+- systemd unit running a single uvicorn worker bound to localhost
+- nginx reverse proxy + Certbot for TLS
+- `PARA_SCOPE_SECURE_COOKIES=1`
 
-No Dockerfiles or compose files are required or encouraged as the primary path, although community contributions of that nature can live in a separate folder or repository.
+No Dockerfiles are required or encouraged as the primary path.
 
-Backup strategy: database file (or logical dump) + exported configuration YAML. Secrets should be handled carefully (encrypted or external secret store).
+Backup strategy: database file + care with the secret key. Config export is planned.
 
 ### 11. Security Considerations
 
@@ -286,38 +301,38 @@ Backup strategy: database file (or logical dump) + exported configuration YAML. 
 - Secrets encrypted at rest (Fernet); decryption key is `PARA_SCOPE_SECRET_KEY`.
 - Principle of least privilege for action credentials.
 - Input validation and size limits on webhook payloads.
-- Rate limiting on login; webhook abuse protection is recommended at the reverse proxy and may be added in-process later.
+- Rate limiting on login (in-memory); webhook abuse protection recommended at the reverse proxy.
 - Secure cookie flag opt-in via env; TLS termination left to the reverse proxy.
 - Auditability of configuration and privileged actions.
+- CSRF protection on state-changing forms.
 
 ### 12. Observability of the System Itself
 
-The dashboard includes a system section showing:
+The dashboard includes a system section showing poller job status, recent runs, success/failure counts, and related health.  
 
-- Poller job status and recent runs
-- Webhook acceptance rates and errors
-- Action success/failure counts
-- Queue depths or processing lag
-- Basic resource usage if easily available
-
-Internal events are treated like any other source so the same pipeline can alert on problems with the dashboard itself.
+Internal events can be treated like any other source so the same pipeline can alert on problems with the dashboard itself. Self-metrics (job lag, action failures, DB size) are a natural future extension.
 
 ### 13. Open Questions and Future Extensions
 
-- Exact metrics storage approach (pure SQLite tables vs embedded time-series vs external).
-- How sophisticated the condition language needs to be on day one.
-- Degree of multi-tenancy / workspace isolation required for broader adoption.
-- Whether to support outbound webhook signing and delivery guarantees as a first-class action.
-- Long-term data retention and cold storage story.
-- Official packaging (PyPI application entry point, standalone binary via PyInstaller/Nuitka, etc.).
-- Naming and branding.
+- Exact metrics storage approach and retention/down-sampling.
+- Whether condition language needs OR groups or length ops.
+- Degree of multi-tenancy / workspace isolation (if any).- Outbound webhook signing and delivery guarantees.
+- Long-term data retention and cold storage.
+- Official packaging (PyPI entry point, standalone binary, etc.).
+- Richer plugin packaging vs keeping simple in-process registration.
+- Non-HTTP pollers (system resources, Docker, systemd, cert expiry, etc.) — high value and low weight.
+- Source templates / quick-add for common monitors.
+- Simple backup/export and event retention UI.
+- Test / dry-run of rules.
+- Thin convenience notify wrappers on top of `http_forward` only if UX gain is clear.
 
-### 14. Success Criteria for an Initial Usable Version
+### 14. Success Criteria for an Initial Usable Version (v0.1 status)
 
-- A user can register at least two different sources (one webhook-heavy, one polling-heavy).
-- Events appear in a live log and can trigger at least notifications + metric updates.
-- Basic graphs show trends over 24h / 7d.
-- Configuration can be performed through the UI (YAML export planned).
-- The entire system runs from a git clone + virtualenv with minimal ceremony.
-- Strong authentication protects the dashboard.
-- Adding a simple new action or source adapter is documented and reasonably straightforward.
+- ✅ A user can register webhook and poll sources.
+- ✅ Events appear in the event log and can trigger `field_push`, `http_forward`, and `web_push`.
+- ✅ Basic graphs and modular widgets are available.
+- ✅ Configuration is performed through the UI.
+- ✅ The entire system runs from a git clone + virtualenv with minimal ceremony.
+- ✅ Strong session authentication protects the dashboard.
+- ⏳ Adding a simple new action or poller is documented and straightforward (registration hooks exist; richer guides planned).
+- ⏳ Config export and PostgreSQL support remain future work.

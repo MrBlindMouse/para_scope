@@ -13,14 +13,14 @@
 
   {% if source.source_type == "poll" %}
   <p class="text-muted">
-    Poll sources emit <code>on_success</code> or <code>on_failure</code> automatically.
-    Add an event named <code>always</code> to also fire on every run (success and failure).
-    Other custom names only fire when a schedule’s <code>handler_params.event_type</code> matches.
+    Polls create success and failure events automatically.
+    Name one <code>always</code> to run on every check.
+    Custom names only fire if the schedule’s event name matches.
   </p>
   {% else %}
   <p class="text-muted">
-    Once any event type exists, webhook callers must send a matching name via
-    <code>X-Event-Type</code> or body field <code>event_type</code> / <code>type</code>.
+    Once you add event names, senders must include a matching type (header or body field).
+    Add <code>always</code> to also run on every delivery.
   </p>
   {% endif %}
 
@@ -30,9 +30,9 @@
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About event name"
               {% if source.source_type == "poll" %}
-              data-tip="Built-ins: on_success, on_failure (seeded). Optional: always (fires every poll). Or a custom name wired via handler_params.event_type."
+              data-tip="Built-in: on_success, on_failure. Optional: always (every run). Custom names need a matching schedule setting."
               {% else %}
-              data-tip="Stable identifier the producer sends (e.g. order.paid). Must match X-Event-Type or body event_type/type once types are registered."
+              data-tip="Name the sender uses (e.g. order.paid). Must match what the sender includes once types exist. Optional: always."
               {% endif %}
       >?</button>
     </span>
@@ -46,7 +46,7 @@
       Description
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About event description"
-              data-tip="Optional note for humans. Shown on the pipeline chain; not sent to producers.">?</button>
+              data-tip="Optional note for you. Shown on the pipeline; senders don’t see it.">?</button>
     </span>
     <textarea name="description" rows="2" class="input"
               placeholder="{% if source.source_type == 'poll' %}Poll completed successfully{% else %}Fired when an order is paid{% endif %}">{% if is_edit %}{{ event.description }}{% endif %}</textarea>

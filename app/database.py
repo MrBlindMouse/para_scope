@@ -37,13 +37,12 @@ _SCHEMA_PATCHES = {
         "last_error": "TEXT DEFAULT ''",
         "schedule_type": "VARCHAR(8) DEFAULT 'interval'",
     },
-    "sources": {
-        "status": "VARCHAR(20) DEFAULT 'enabled'",
-    },
     "actions": {
-        "status": "VARCHAR(20) DEFAULT 'enabled'",
         "source_id": "INTEGER",
         "secret_id_2": "INTEGER",
+    },
+    "event_types": {
+        "enabled": "BOOLEAN DEFAULT 1",
     },
     "metric_points": {
         "field_id": "INTEGER",
@@ -91,6 +90,20 @@ def ensure_schema():
             ))
             conn.execute(text("DROP TABLE dashboard_layouts"))
             conn.execute(text("ALTER TABLE dashboard_layouts_new RENAME TO dashboard_layouts"))
+
+        # Drop legacy Source.base_url / Source.status / ActionInstance.status
+        source_cols = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(sources)"))
+        }
+        if "base_url" in source_cols:
+            conn.execute(text("ALTER TABLE sources DROP COLUMN base_url"))
+        if "status" in source_cols:
+            conn.execute(text("ALTER TABLE sources DROP COLUMN status"))
+        action_drop_cols = {
+            row[1] for row in conn.execute(text("PRAGMA table_info(actions)"))
+        }
+        if "status" in action_drop_cols:
+            conn.execute(text("ALTER TABLE actions DROP COLUMN status"))
 
         # Migrate legacy schedule_type values (webhook/poll → interval)
         sched_cols = {

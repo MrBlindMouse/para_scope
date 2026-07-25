@@ -46,6 +46,12 @@
     color: var(--color-positive);
   }
 
+  .pipeline-event--paused,
+  .pipeline-rule--paused,
+  .pipeline-action--paused {
+    opacity: 0.72;
+  }
+
   .pipeline-chain__flow {
     display: grid;
     grid-template-columns: minmax(8rem, 12rem) auto max-content auto max-content;

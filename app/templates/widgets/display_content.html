@@ -1,21 +1,10 @@
 {% set disp = display or wdata.display or "logbook_list" %}
 {% set style = (widget_config.style if widget_config else None) or wdata.style or "code" %}
-{% set canvas_id = "chart-" ~ (widget_id or "display") %}
+{% set tone = wdata.tone if wdata else none %}
+{% if tone %}<div class="widget-tone widget-tone--{{ tone }}">{% endif %}
 {% if wdata and wdata.error %}
 <p class="text-muted">{{ wdata.error }}</p>
 {% elif disp == "logbook_list" %}
-  {% if wdata.series %}
-  <div class="widget-chart widget-chart--spark">
-    <canvas id="{{ canvas_id }}"
-            data-widget-chart="series"
-            data-chart-display="sparkline"
-            data-chart-style="default"
-            data-spark="1"
-            data-series='{{ wdata.series | tojson }}'
-            data-label="{{ wdata.name or '' }}"
-            data-unit="{{ wdata.unit or '' }}"></canvas>
-  </div>
-  {% endif %}
   {% if wdata.entries %}
     {% if style == "timeline" %}
     <ul class="widget-timeline">
@@ -24,7 +13,11 @@
         <span class="widget-timeline__dot" aria-hidden="true"></span>
         <div>
           <span class="text-muted">{{ e.timestamp }}</span>
+          {% if e.text is defined and e.text is not none %}
+          <div class="widget-kv">{{ e.text }}</div>
+          {% else %}
           <code class="widget-list__code">{{ e.value | tojson }}</code>
+          {% endif %}
         </div>
       </li>
       {% endfor %}
@@ -34,7 +27,11 @@
       {% for e in wdata.entries %}
       <div class="widget-entry-card">
         <span class="text-muted">{{ e.timestamp }}</span>
+        {% if e.text is defined and e.text is not none %}
+        <div class="widget-kv">{{ e.text }}</div>
+        {% else %}
         <code class="widget-list__code">{{ e.value | tojson }}</code>
+        {% endif %}
       </div>
       {% endfor %}
     </div>
@@ -43,7 +40,11 @@
       {% for e in wdata.entries %}
       <li class="widget-list__item">
         <span class="text-muted">{{ e.timestamp }}</span>
+        {% if e.text is defined and e.text is not none %}
+        <div class="widget-kv">{{ e.text }}</div>
+        {% else %}
         <code class="widget-list__code">{{ e.value | tojson }}</code>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>
@@ -53,18 +54,6 @@
   {% endif %}
 {% elif disp == "kv_text" %}
   <div class="widget-kv widget-kv--{{ style }}">{{ wdata.text or '' }}</div>
-{% elif disp == "stat" %}
-  {% set signed_cls = '' %}
-  {% if style == 'signed' and wdata.sign == 'positive' %}
-    {% set signed_cls = 'stat__value--positive' %}
-  {% elif style == 'signed' and wdata.sign == 'negative' %}
-    {% set signed_cls = 'stat__value--negative' %}
-  {% endif %}
-  <div class="stat {% if style == 'hero' or style == 'plain' or style == 'signed' %}stat--xl{% endif %} {% if style == 'compact' %}stat--compact{% endif %}">
-    <div class="stat__value {{ signed_cls }}">
-      {{ wdata.value }}{% if wdata.unit %} <span class="stat__unit">{{ wdata.unit }}</span>{% endif %}
-    </div>
-  </div>
 {% elif disp == "toggle" %}
   {% set on = wdata.value %}
   <div class="widget-toggle widget-toggle--{{ style }}" data-on="{{ '1' if on else '0' }}">
@@ -80,6 +69,36 @@
       <span class="widget-toggle__text">{{ 'On' if on else 'Off' }}</span>
     {% endif %}
   </div>
+{% elif disp == "board" %}
+  {% set board_items = wdata["items"] if wdata else none %}
+  {% if board_items %}
+  <ul class="widget-board stack stack--tight">
+    {% for it in board_items %}
+    <li class="widget-board__row{% if it.kind != 'toggle' %} widget-board__row--kv{% endif %}{% if it.tone %} widget-tone widget-tone--{{ it.tone }}{% endif %}">
+      {% if it.kind == "toggle" %}
+      <span class="widget-board__name">{{ it.name }}</span>
+      <div class="widget-toggle widget-toggle--{{ it.style }}" data-on="{{ '1' if it.value else '0' }}">
+        {% if it.style == "led" %}
+          <span class="widget-toggle__led" aria-hidden="true"></span>
+          <span class="widget-toggle__label">{{ 'On' if it.value else 'Off' }}</span>
+        {% elif it.style == "badge" %}
+          <span class="badge {% if it.value %}badge--success{% else %}badge--negative{% endif %}">{{ 'On' if it.value else 'Off' }}</span>
+        {% elif it.style == "switch" %}
+          <span class="widget-toggle__switch" aria-hidden="true"><span class="widget-toggle__knob"></span></span>
+          <span class="widget-toggle__label">{{ 'On' if it.value else 'Off' }}</span>
+        {% else %}
+          <span class="widget-toggle__text">{{ 'On' if it.value else 'Off' }}</span>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="widget-kv widget-kv--{{ it.style }}">{{ it.text or '' }}</div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="text-muted">{{ wdata.error or 'No board entries.' }}</p>
+  {% endif %}
 {% elif disp == "table" %}
   {% if wdata.rows %}
   <table class="table {% if style == 'compact' %}table--compact{% endif %} {% if style == 'striped' %}table--striped{% endif %}">
@@ -100,3 +119,4 @@
 {% else %}
 <p class="text-muted">Unknown display mode.</p>
 {% endif %}
+{% if tone %}</div>{% endif %}

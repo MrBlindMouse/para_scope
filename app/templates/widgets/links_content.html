@@ -1,6 +1,8 @@
 {% set disp = display or wdata.display or "list" %}
 {% set style = (widget_config.style if widget_config else None) or wdata.style or "default" %}
 {% set link_items = wdata.get("items") if wdata else none %}
+{% set tone = wdata.tone if wdata else none %}
+{% if tone %}<div class="widget-tone widget-tone--{{ tone }}">{% endif %}
 {% if wdata and wdata.error %}
 <p class="text-muted">{{ wdata.error }}</p>
 {% elif link_items %}
@@ -8,7 +10,10 @@
   <div class="flex items-center gap flex-wrap widget-links widget-links--{{ style }}">
     {% for it in link_items %}
     <a class="btn {% if style == 'emphasized' %}btn--primary{% elif style == 'compact' %}btn--sm{% else %}btn--primary{% endif %}"
-       href="{{ it.url }}" target="_blank" rel="noopener noreferrer">{{ it.label }}</a>
+       href="{{ it.url }}" target="_blank" rel="noopener noreferrer">
+      {% if it.favicon %}<img class="widget-link__favicon" src="{{ it.favicon }}" alt="" width="16" height="16" loading="lazy" onerror="this.hidden=true">{% endif %}
+      <span>{{ it.label }}</span>
+    </a>
     {% endfor %}
   </div>
   {% elif disp == "icon_grid" %}
@@ -16,17 +21,19 @@
     {% for it in link_items %}
     <a class="widget-link-tile {% if style == 'emphasized' %}widget-link-tile--emphasized{% elif style == 'compact' %}widget-link-tile--compact{% endif %}"
        href="{{ it.url }}" target="_blank" rel="noopener noreferrer">
-      {% if it.icon %}<div class="widget-link-tile__icon">{{ it.icon }}</div>{% endif %}
-      <div>{{ it.label }}</div>
+      {% if it.favicon %}<img class="widget-link__favicon widget-link__favicon--lg" src="{{ it.favicon }}" alt="" width="24" height="24" loading="lazy" onerror="this.hidden=true">{% endif %}
+      <span>{{ it.label }}</span>
     </a>
     {% endfor %}
   </div>
   {% else %}
   <ul class="stack stack--tight widget-list widget-links--{{ style }}">
     {% for it in link_items %}
-    <li class="{% if style == 'emphasized' %}widget-list__item{% endif %}">
-      {% if it.icon %}<span aria-hidden="true">{{ it.icon }} </span>{% endif %}
-      <a href="{{ it.url }}" target="_blank" rel="noopener noreferrer">{{ it.label }}</a>
+    <li class="widget-link-row{% if style == 'emphasized' %} widget-list__item{% endif %}">
+      <a class="widget-link-row__a" href="{{ it.url }}" target="_blank" rel="noopener noreferrer">
+        {% if it.favicon %}<img class="widget-link__favicon" src="{{ it.favicon }}" alt="" width="16" height="16" loading="lazy" onerror="this.hidden=true">{% endif %}
+        <span>{{ it.label }}</span>
+      </a>
     </li>
     {% endfor %}
   </ul>
@@ -34,3 +41,4 @@
 {% else %}
 <p class="text-muted">No links configured.</p>
 {% endif %}
+{% if tone %}</div>{% endif %}

@@ -21,7 +21,7 @@
       <li class="stack stack--tight">
         <p class="text-muted">
           #{{ e.id }}
-          · {% if e.event_type_id and types_by_id.get(e.event_type_id) %}{{ types_by_id[e.event_type_id].name }}{% else %}(no type){% endif %}
+          · {% if e.event_type_id and types_by_id.get(e.event_type_id) %}{{ types_by_id[e.event_type_id].name }}{% else %}No type{% endif %}
           · {{ e.status or "pending" }}
           · {{ e.timestamp }}
         </p>

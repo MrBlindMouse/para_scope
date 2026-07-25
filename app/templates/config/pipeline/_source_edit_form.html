@@ -27,14 +27,14 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About source type"
-              data-tip="Webhook: external systems POST events to /webhook/{slug}. Poll: Para-Scope fetches a URL on a schedule and turns the response into events.">?</button>
+              data-tip="Webhook: others send events to you. Poll: Para-Scope checks a URL on a schedule.">?</button>
     </span>
     <select name="source_type" class="input" id="source-type">
       <option value="webhook" {% if st == 'webhook' %}selected{% endif %}>Webhook</option>
       <option value="poll" {% if st == 'poll' %}selected{% endif %}>Poll</option>
     </select>
   </label>
-  <p class="text-muted">Slug (from name): <code>{{ source.slug }}</code></p>
+  <p class="text-muted">URL name: <code>{{ source.slug }}</code></p>
 
   <fieldset class="stack" id="webhook-secret-fields">
     <legend>
@@ -42,23 +42,18 @@
         Webhook secret (optional)
         <button type="button" class="field-tip" tabindex="0"
                 aria-label="About webhook secret"
-                data-tip="Shared secret used to verify HMAC-SHA256 signatures (X-Webhook-Signature). Leave empty for unsigned local/dev traffic.">?</button>
+                data-tip="Optional shared password so only trusted senders are accepted. Leave blank if you don’t need verification.">?</button>
       </span>
     </legend>
     {% if webhook_secret %}
-      <p class="text-muted">Current secret: <strong>{{ webhook_secret.name }}</strong></p>
+      <p class="text-muted">Webhook secret is configured.</p>
       <label class="flex items-center gap">
         <input type="checkbox" name="clear_webhook_secret" value="1">
         Remove webhook secret
       </label>
     {% endif %}
     <label class="stack">
-      {% if webhook_secret %}New secret name{% else %}Secret name{% endif %}
-      <input name="webhook_secret_name" type="text" class="input" placeholder="Webhook HMAC key"
-             value="">
-    </label>
-    <label class="stack">
-      {% if webhook_secret %}New secret value{% else %}Secret value{% endif %}
+      Secret value
       <input name="webhook_secret_value" type="password" class="input" autocomplete="new-password">
     </label>
   </fieldset>
@@ -73,7 +68,7 @@
         Schedule type
         <button type="button" class="field-tip" tabindex="0"
                 aria-label="About schedule type"
-                data-tip="Interval runs every N seconds. Cron uses a five-field expression (minute hour day month weekday).">?</button>
+                data-tip="Interval: every N seconds. Cron: a schedule like 0 * * * * (every hour).">?</button>
       </span>
       <select name="schedule_type" class="input" id="sched-type">
         <option value="interval" {% if sched_type != 'cron' %}selected{% endif %}>Interval</option>
@@ -93,7 +88,7 @@
           Cron Expression
           <button type="button" class="field-tip" tabindex="0"
                   aria-label="About cron expression"
-                  data-tip="Five fields: minute hour day-of-month month day-of-week. Example: 0 * * * * = every hour on the hour.">?</button>
+                  data-tip="Five fields: minute hour day month weekday. Example: 0 * * * * = every hour.">?</button>
         </span>
         <input name="cron_expression" type="text" class="input" placeholder="0 * * * *"
                value="{{ schedule.cron_expression if schedule else '' }}">
@@ -101,34 +96,34 @@
     </div>
     <label class="stack">
       <span class="field-label">
-        Handler Type
+        Request method
         <button type="button" class="field-tip" tabindex="0"
-                aria-label="About handler type"
-                data-tip="HTTP method used when polling the Handler URL.">?</button>
+                aria-label="About request method"
+                data-tip="How Para-Scope requests the URL.">?</button>
       </span>
       <select name="handler_type" class="input">
         {% set ht = schedule.handler_type if schedule else 'http_get' %}
         {% for t in ['http_get', 'http_post', 'http_put', 'http_delete'] %}
-          <option value="{{ t }}" {% if ht == t %}selected{% endif %}>{{ t }}</option>
+          <option value="{{ t }}" {% if ht == t %}selected{% endif %}>{{ t | http_method_label }}</option>
         {% endfor %}
       </select>
     </label>
     <label class="stack">
       <span class="field-label">
-        Handler URL
+        URL to check
         <button type="button" class="field-tip" tabindex="0"
-                aria-label="About handler URL"
-                data-tip="Full URL Para-Scope requests on each poll run. Required for polling.">?</button>
+                aria-label="About poll URL"
+                data-tip="Full URL Para-Scope requests on each poll. Required for polling.">?</button>
       </span>
       <input name="handler_url" type="text" class="input" placeholder="https://api.example.com/data"
              value="{{ schedule.handler_url if schedule else '' }}">
     </label>
     <label class="stack">
       <span class="field-label">
-        Handler Params (JSON)
+        Extra settings (JSON)
         <button type="button" class="field-tip" tabindex="0"
-                aria-label="About handler params"
-                data-tip='Optional JSON object. Supported keys: query, headers, body (POST/PUT), json_path (dotted path into the response), event_type.'>?</button>
+                aria-label="About extra settings"
+                data-tip="Optional. Advanced: headers, query, body, which response field to keep, event name.">?</button>
       </span>
       <textarea name="handler_params" rows="2" class="input">{{ handler_params_json }}</textarea>
     </label>
@@ -138,7 +133,7 @@
           Timeout (s)
           <button type="button" class="field-tip" tabindex="0"
                   aria-label="About timeout"
-                  data-tip="Seconds to wait for the HTTP response before failing that attempt.">?</button>
+                  data-tip="Seconds to wait before giving up.">?</button>
         </span>
         <input name="timeout_seconds" type="number" min="1" class="input"
                value="{{ schedule.timeout_seconds if schedule else 30 }}">
@@ -148,7 +143,7 @@
           Retries
           <button type="button" class="field-tip" tabindex="0"
                   aria-label="About retries"
-                  data-tip="Extra attempts after a failed poll before the run is marked failed.">?</button>
+                  data-tip="Extra tries after a failure.">?</button>
         </span>
         <input name="retry_count" type="number" min="0" class="input"
                value="{{ schedule.retry_count if schedule else 0 }}">

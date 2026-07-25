@@ -20,7 +20,7 @@
   }
 
   function setLabel(subscribed) {
-    var label = subscribed ? "Disable notifications" : "Enable notifications";
+    var label = subscribed ? "Notifications Enabled" : "Notifications Disabled";
     btn.dataset.subscribed = subscribed ? "1" : "0";
     btn.setAttribute("aria-label", label);
     btn.setAttribute("title", label);
@@ -46,7 +46,7 @@
     var keyResp = await fetch("/api/push/vapid-public-key");
     if (!keyResp.ok) {
       var err = await keyResp.json().catch(function () { return {}; });
-      alert(err.error || "Web Push is not configured (missing VAPID keys).");
+      alert(err.error || "Browser notifications aren’t set up");
       return;
     }
     var keyData = await keyResp.json();

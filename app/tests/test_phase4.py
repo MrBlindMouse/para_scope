@@ -65,7 +65,7 @@ def test_web_push_requires_vapid(db_session_factory, monkeypatch):
         )
         db.add_all([event, action])
         db.commit()
-        with pytest.raises(ValueError, match="VAPID"):
+        with pytest.raises(ValueError, match="Browser notifications"):
             run_registered_action(db, event, action)
     finally:
         db.close()
@@ -145,7 +145,7 @@ def test_http_forward_requires_url(db_session_factory):
         )
         db.add_all([event, action])
         db.commit()
-        with pytest.raises(ValueError, match="url"):
+        with pytest.raises(ValueError, match="Forward URL"):
             run_registered_action(db, event, action)
     finally:
         db.close()
@@ -183,7 +183,7 @@ def test_unknown_poller_records_last_error(db_session_factory, source_id):
         s2 = TestSession()
         try:
             updated = s2.query(PollingSchedule).filter_by(id=sched.id).first()
-            assert "Unknown poller handler_type" in updated.last_error
+            assert "Unknown poll method" in updated.last_error
             assert updated.failure_count == 1
         finally:
             s2.close()

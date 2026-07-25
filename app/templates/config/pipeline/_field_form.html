@@ -19,12 +19,12 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About field types"
-              data-tip="logbook: append-only JSON entries. counter: numeric. value: string. toggle: on/off. Type locks after create.">?</button>
+              data-tip="Logbook: growing list. Counter: number. Value: text. Toggle: on/off. Type can’t change later.">?</button>
     </span>
     <select name="field_type" class="input" id="field-type-select" autofocus
             {% if is_edit %}disabled{% endif %}>
       {% for t in field_types %}
-        <option value="{{ t }}" {% if ft == t %}selected{% endif %}>{{ t }}</option>
+        <option value="{{ t }}" {% if ft == t %}selected{% endif %}>{{ t | field_type_label }}</option>
       {% endfor %}
     </select>
     {% if is_edit %}
@@ -35,7 +35,7 @@
 
   {# ── logbook ── #}
   <div id="field-params-logbook" class="stack field-type-params" {% if ft != 'logbook' %}hidden{% endif %}>
-    <p class="text-muted">Append-only JSON log. field_push adds entries; widgets can transform for display.</p>
+    <p class="text-muted">Growing list of entries. Actions can add entries; widgets can display them.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"
@@ -52,7 +52,7 @@
 
   {# ── counter ── #}
   <div id="field-params-counter" class="stack field-type-params" {% if ft != 'counter' %}hidden{% endif %}>
-    <p class="text-muted">Numeric counter. field_push can increment, decrement, or reset. Starts at 0.</p>
+    <p class="text-muted">A number. Actions can add, subtract, or reset. Starts at 0.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"
@@ -63,7 +63,7 @@
 
   {# ── value ── #}
   <div id="field-params-value" class="stack field-type-params" {% if ft != 'value' %}hidden{% endif %}>
-    <p class="text-muted">Stores a single string. field_push replaces it from a literal or event key.</p>
+    <p class="text-muted">A single text value. Actions can replace it.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"
@@ -74,7 +74,7 @@
 
   {# ── toggle ── #}
   <div id="field-params-toggle" class="stack field-type-params" {% if ft != 'toggle' %}hidden{% endif %}>
-    <p class="text-muted">Boolean on/off. field_push sets it from a literal or event key. Starts off.</p>
+    <p class="text-muted">On or off. Actions can set it. Starts off.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"

@@ -56,7 +56,7 @@ python create_user.py
 Get a working pipeline after login (more detail in `/help`):
 
 1. **Open Pipeline** at `/config/pipeline`. Add a source (name required; slug is always derived from the name). Choose type **Webhook** (optional secret in the same dialog) or **Poll** (initial schedule required). Poll sources get `on_success` and `on_failure` events automatically (no auto-rules).
-2. **Add events** on the source chain (Source → Events → Rules). Once a source has types, webhooks must declare a matching type via the `X-Event-Type` header or body field `event_type` / `type`.
+2. **Add events** on the source chain (Source → Events → Rules). Once a source has producer types, webhooks must declare a matching type via the `X-Event-Type` header or body field `event_type` / `type`. Optional `always` also fires on every accepted webhook (and every poll run).
 3. **Ingest an event** — pick one path:
    - **Webhook:** `POST /webhook/{slug}` with a JSON body (see [Webhooks](#webhooks)).
    - **Poll:** schedules feed `on_success` / `on_failure` into the same pipeline (see [Polling](#polling)).
@@ -77,6 +77,8 @@ Successful polls emit `on_success` (or `handler_params.event_type` when set); fa
 ## Webhooks
 
 `POST /webhook/{slug}` accepts JSON (max body 256KB). If the source has a webhook secret, requests must include `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature` = HMAC-SHA256 of `{timestamp}.{raw_body}` (hex, optional `sha256=` prefix). Sources without a secret accept unsigned traffic (fine for local/dev; use a secret in production).
+
+If you add an event type named `always` (not created automatically), it also fires on every accepted delivery. Producers keep sending their normal type; `always` is a side-emission with `_webhook.trigger` set to `always`.
 
 Public health check: `GET /health`.
 

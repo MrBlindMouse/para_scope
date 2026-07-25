@@ -32,19 +32,19 @@
         </label>
       </div>
       <label class="stack">
-        Handler Type
+        Request method
         <select name="handler_type" class="input">
           {% for t in ['http_get', 'http_post', 'http_put', 'http_delete'] %}
-            <option value="{{ t }}">{{ t }}</option>
+            <option value="{{ t }}">{{ t | http_method_label }}</option>
           {% endfor %}
         </select>
       </label>
       <label class="stack">
-        Handler URL
+        URL to check
         <input name="handler_url" type="text" class="input" placeholder="https://api.example.com/data">
       </label>
       <label class="stack">
-        Handler Params (JSON)
+        Extra settings (JSON)
         <textarea name="handler_params" rows="2" class="input">{}</textarea>
       </label>
       <div class="flex items-center gap">
@@ -70,7 +70,7 @@
   <thead>
     <tr>
       <th>Type</th>
-      <th>Handler</th>
+      <th>Request</th>
       <th>Last / Next</th>
       <th>OK / Fail</th>
       <th>Actions</th>
@@ -86,7 +86,7 @@
           <code>{{ item.cron_expression or '-' }}</code>
         {% endif %}
       </td>
-      <td>{{ item.handler_type }}{% if item.handler_url %}: {{ item.handler_url }}{% endif %}</td>
+      <td>{{ item.handler_type | http_method_label }}{% if item.handler_url %}: {{ item.handler_url }}{% endif %}</td>
       <td>
         {{ item.last_run_at.strftime('%m-%d %H:%M') if item.last_run_at else 'never' }}
         /

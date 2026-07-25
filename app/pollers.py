@@ -37,7 +37,7 @@ def _build_headers(db, params: dict) -> dict:
         from app.models import Secret
         secret = db.query(Secret).filter(Secret.id == secret_id).first()
         if not secret:
-            raise ValueError(f"auth_secret_id {secret_id} not found")
+            raise ValueError("Polling secret not found")
         header_name = params.get("auth_header", "Authorization")
         prefix = params.get("auth_prefix", "Bearer ")
         headers[header_name] = f"{prefix}{decrypt_secret(secret.encrypted_value)}"
@@ -67,7 +67,7 @@ def http_poll(schedule: PollingSchedule, db) -> dict:
     method = _HTTP_METHODS.get(schedule.handler_type, "GET")
 
     if not schedule.handler_url:
-        raise ValueError("handler_url is required for HTTP polling")
+        raise ValueError("Poll URL is required")
 
     headers = _build_headers(db, params)
     timeout = schedule.timeout_seconds or 30
@@ -145,7 +145,7 @@ def run_schedule(schedule_id: int) -> bool:
         t0 = time.perf_counter()
         try:
             if handler is None:
-                raise ValueError(f"Unknown poller handler_type: {schedule.handler_type}")
+                raise ValueError("Unknown poll method")
             result = handler(schedule, db)
             elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
             if isinstance(result, dict) and result.get("response_time_ms") is None:

@@ -21,23 +21,23 @@
       </td></tr>
       <tr><th>Source</th><td>{{ source.name if source else '-' }}</td></tr>
       <tr><th>Event Type</th><td>{{ event_type.name if event_type else '-' }}</td></tr>
-      <tr><th>Correlation ID</th><td><code>{{ event.correlation_id or '-' }}</code></td></tr>
+      <tr><th>Tracking ID</th><td><code>{{ event.correlation_id or '-' }}</code></td></tr>
       {% if event.processing_error %}
-      <tr><th>Processing Error</th><td><pre class="code-block code-block--error">{{ event.processing_error }}</pre></td></tr>
+      <tr><th>Error</th><td><pre class="code-block code-block--error">{{ event.processing_error }}</pre></td></tr>
       {% endif %}
     </table>
   </div>
 </div>
 
 <div class="card mb">
-  <div class="card__header"><h2>Normalized Data</h2></div>
+  <div class="card__header"><h2>Event data</h2></div>
   <div class="card__body">
     <pre class="code-block code-block--scroll">{{ event.normalized_data | tojson(indent=2) if event.normalized_data else '(empty)' }}</pre>
   </div>
 </div>
 
 <div class="card mb">
-  <div class="card__header"><h2>Raw Payload</h2></div>
+  <div class="card__header"><h2>Original request</h2></div>
   <div class="card__body">
     <pre class="code-block code-block--scroll">{{ event.raw_payload or '(empty)' }}</pre>
   </div>

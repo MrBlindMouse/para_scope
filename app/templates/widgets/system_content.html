@@ -1,5 +1,7 @@
 {% set disp = display or wdata.display or "source_health" %}
 {% set style = (widget_config.style if widget_config else None) or wdata.style or "table" %}
+{% set tone = wdata.tone if wdata else none %}
+{% if tone %}<div class="widget-tone widget-tone--{{ tone }}">{% endif %}
 {% if wdata and wdata.error %}
 <p class="text-muted">{{ wdata.error }}</p>
 {% elif disp == "source_health" %}
@@ -133,3 +135,4 @@
 {% else %}
 <p class="text-muted">Unknown system display.</p>
 {% endif %}
+{% if tone %}</div>{% endif %}

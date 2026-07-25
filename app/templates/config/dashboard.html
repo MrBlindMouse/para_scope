@@ -5,7 +5,7 @@
 
 {% include 'components/alerts.html' %}
 
-<p class="mt">Add a widget kind, pick a display mode and style, configure Field sources, then save. Drag and resize on the main dashboard. Layout is shared for this install.</p>
+<p class="mt">Add a widget, choose how it looks, then save. Use the Fields button on a widget to see slugs for templates (<code>{{ '{{ slug.value }}' }}</code>). Everyone on this server shares this layout.</p>
 
 <form method="post" action="/config/dashboard" id="dashboard-form" class="stack">
   {% include 'components/csrf.html' %}
@@ -13,7 +13,7 @@
 
   <div class="flex items-center gap flex-wrap">
     <label class="stack form-field--xl form-field--grow">
-      Widget kind
+      Widget type
       <select id="widget-catalog" class="input">
         {% for w in available_widgets %}
         <option value="{{ w.type }}">{{ w.title }}</option>
@@ -32,6 +32,17 @@
   </div>
 </form>
 
+<dialog id="fields-slug-dialog" class="dialog">
+  <div class="stack dialog__form">
+    <header class="dialog__header flex items-center gap">
+      <h2 class="dialog__title">Field slugs</h2>
+      <button type="button" class="btn" data-fields-dialog-close>Close</button>
+    </header>
+    <p class="text-muted text-xs">Use in templates as <code>{{ '{{ slug.value }}' }}</code> (logbooks: paths into the latest entry).</p>
+    <div id="fields-slug-list" class="stack stack--dense"></div>
+  </div>
+</dialog>
+
 <script>
 (function () {
   var KINDS = {{ available_widgets | tojson }};
@@ -39,7 +50,7 @@
   KINDS.forEach(function (k) { KIND_BY_TYPE[k.type] = k; });
   var FIELDS = [
     {% for f in fields %}
-    {id: {{ f.id }}, name: {{ f.name | tojson }}, field_type: {{ f.field_type | tojson }}}{% if not loop.last %},{% endif %}
+    {id: {{ f.id }}, name: {{ f.name | tojson }}, slug: {{ f.slug | tojson }}, field_type: {{ f.field_type | tojson }}}{% if not loop.last %},{% endif %}
     {% endfor %}
   ];
   var initial = {{ current_widgets | tojson }};
@@ -48,7 +59,8 @@
   var emptyEl = document.getElementById("widgets-empty");
   var jsonEl = document.getElementById("widgets-json");
   var form = document.getElementById("dashboard-form");
-
+  var fieldsDialog = document.getElementById("fields-slug-dialog");
+  var fieldsListEl = document.getElementById("fields-slug-list");
   function kindTitle(type) {
     return (KIND_BY_TYPE[type] && KIND_BY_TYPE[type].title) || type;
   }
@@ -67,36 +79,95 @@
     return found || (kind.displays && kind.displays[0]) || null;
   }
 
-  function bindingFor(type, disp) {
-    var d = displayEntry(type, disp);
-    return (d && d.binding) || (KIND_BY_TYPE[type] && KIND_BY_TYPE[type].binding) || {cardinality: "none"};
-  }
-
   function defaultStyle(type, disp) {
     var d = displayEntry(type, disp);
     return (d && d.default_style) || "default";
   }
 
-  function fieldOptionsHtml(allowedTypes, selectedId) {
-    var opts = '<option value="">— select field —</option>';
-    FIELDS.forEach(function (f) {
-      if (allowedTypes && allowedTypes.length && allowedTypes.indexOf(f.field_type) < 0) return;
-      var sel = selectedId != null && String(selectedId) === String(f.id) ? " selected" : "";
-      opts += '<option value="' + f.id + '"' + sel + ">" +
-        f.name + " (" + f.field_type + ")</option>";
-    });
-    return opts;
+  function defaultTone(type, disp) {
+    if (type === "display" && (disp === "toggle" || disp === "board" || disp === "kv_text" || disp === "logbook_list")) return "conditional";
+    return "none";
   }
 
-  function fieldMultiSelectHtml(selectedIds) {
-    selectedIds = (selectedIds || []).map(String);
-    var html = '<select class="input" data-cfg="field_ids" multiple size="4">';
-    FIELDS.forEach(function (f) {
-      var sel = selectedIds.indexOf(String(f.id)) >= 0 ? " selected" : "";
-      html += '<option value="' + f.id + '"' + sel + ">" + f.name + " (" + f.field_type + ")</option>";
+  function normalizeTone(raw, type, disp) {
+    var t = (raw || "").toString().toLowerCase();
+    if (t === "none" || t === "conditional") return t;
+    return defaultTone(type, disp);
+  }
+
+  var FIELD_TYPE_LABELS = {logbook: "Logbook", counter: "Counter", value: "Value", toggle: "Toggle"};
+  var XFORM_LABELS = {mul: "×", div: "÷", add: "+", sub: "−", abs: "Absolute", round: "Round"};
+  var TONE_RULE_OPS = [
+    ["gt", ">"], ["lt", "<"], ["gte", "≥"], ["lte", "≤"], ["eq", "="], ["neq", "≠"]
+  ];
+  var TONE_RULE_COLORS = [
+    ["positive", "Green"], ["negative", "Red"], ["neutral", "Blue"]
+  ];
+  var BOARD_CELL_KINDS = [
+    {id: "toggle", title: "Toggle", field_types: ["toggle"],
+      styles: [["text_color", "On/Off text"], ["led", "Green/Red light"], ["badge", "Badge"], ["switch", "Switch"]]},
+    {id: "kv_text", title: "Key / text", field_types: null,
+      styles: [["plain", "Plain"], ["mono", "Monospace"], ["callout", "Callout"]]}
+  ];
+  var BOARD_CELL_KIND_IDS = BOARD_CELL_KINDS.map(function (k) { return k.id; });
+
+  function boardCellKindMeta(kind) {
+    for (var i = 0; i < BOARD_CELL_KINDS.length; i++) {
+      if (BOARD_CELL_KINDS[i].id === kind) return BOARD_CELL_KINDS[i];
+    }
+    return BOARD_CELL_KINDS[0];
+  }
+
+  function fieldTypeLabel(t) {
+    return FIELD_TYPE_LABELS[t] || t;
+  }
+
+  function fieldsWithSlugs() {
+    // Global slug namespace: every Field with a slug (use slug.value in templates).
+    return FIELDS.filter(function (f) {
+      return !!(f.slug || "").trim();
     });
-    html += "</select>";
-    return html;
+  }
+
+  function allowedFieldTypesForCard(card) {
+    // From widget binding: non-empty field_types → filter; empty/null → all (templates).
+    if (!card) return null;
+    var type = card.dataset.type || "";
+    var disp = card.dataset.display || defaultDisplay(type);
+    var entry = displayEntry(type, disp);
+    var binding = (entry && entry.binding) ||
+      (KIND_BY_TYPE[type] && KIND_BY_TYPE[type].binding) || null;
+    var types = binding && binding.field_types;
+    if (Array.isArray(types) && types.length) return types;
+    return null;
+  }
+
+  function openFieldsDialog(card) {
+    if (!fieldsDialog || !fieldsListEl) return;
+    var allowed = allowedFieldTypesForCard(card);
+    var rows = fieldsWithSlugs().filter(function (f) {
+      return !allowed || allowed.indexOf(f.field_type) >= 0;
+    });
+    if (!rows.length) {
+      fieldsListEl.innerHTML = '<p class="text-muted">No matching Fields.</p>';
+    } else {
+      fieldsListEl.innerHTML = rows.map(function (f) {
+        return '<div class="flex items-center gap flex-wrap justify-between">' +
+          '<code class="text-xs">' + escapeAttr(f.slug) + "</code>" +
+          '<span class="text-muted text-xs">' + escapeAttr(f.name) +
+            " · " + escapeAttr(fieldTypeLabel(f.field_type)) + "</span>" +
+          "</div>";
+      }).join("");
+    }
+    if (typeof fieldsDialog.showModal === "function") fieldsDialog.showModal();
+    else fieldsDialog.setAttribute("open", "");
+  }
+
+  function slugInputHtml(attr, value, label, placeholder) {
+    return '<label class="stack form-field--lg form-field--grow">' + (label || "Field") +
+      '<input type="text" class="input" ' + attr + ' placeholder="' +
+      escapeAttr(placeholder || "field-slug") + '" value="' +
+      escapeAttr(value || "") + '" spellcheck="false"></label>';
   }
 
   function normalize(raw) {
@@ -105,20 +176,43 @@
       var title = w.title || w.label || kindTitle(w.type);
       var disp = w.display || defaultDisplay(w.type);
       var cfg = w.config && typeof w.config === "object" ? Object.assign({}, w.config) : {};
-      if (!cfg.style) cfg.style = defaultStyle(w.type, disp);
-      // Migrate legacy series field_id → sources
-      if (w.type === "series" && cfg.field_id && !(Array.isArray(cfg.sources) && cfg.sources.length)) {
-        cfg.sources = [{
-          field_id: cfg.field_id,
-          label: "",
-          value_path: cfg.value_path || "",
-          transform: cfg.transform || []
-        }];
+      if (disp === "board") {
+        if (!cfg.cell_kind || BOARD_CELL_KIND_IDS.indexOf(cfg.cell_kind) < 0) {
+          cfg.cell_kind = "toggle";
+        }
+        var cells = [];
+        if (Array.isArray(cfg.cells) && cfg.cells.length) {
+          cfg.cells.forEach(function (c) {
+            if (!c) return;
+            if (cfg.cell_kind === "kv_text") {
+              var kvRow = {template: c.template || ""};
+              if (Array.isArray(c.transform) && c.transform.length) kvRow.transform = c.transform;
+              if (Array.isArray(c.tone_rules) && c.tone_rules.length) {
+                kvRow.tone_rules = c.tone_rules;
+              }
+              cells.push(kvRow);
+              return;
+            }
+            cells.push({field_slug: (c.field_slug || "").trim()});
+          });
+        }
+        if (!cells.length) {
+          cells = cfg.cell_kind === "kv_text" ? [{template: ""}] : [{field_slug: ""}];
+        }
+        cfg.cells = cells;
+        var meta0 = boardCellKindMeta(cfg.cell_kind);
+        var allowedStyles = meta0.styles.map(function (s) { return s[0]; });
+        if (!cfg.style || allowedStyles.indexOf(cfg.style) < 0) {
+          cfg.style = allowedStyles[0] || "plain";
+        }
       }
+      if (!cfg.style) cfg.style = defaultStyle(w.type, disp);
+      cfg.tone = normalizeTone(cfg.tone, w.type, disp);
       var entry = {
         type: w.type,
         display: disp,
         title: title,
+        show_title: w.show_title !== false,
         config: cfg
       };
       if (w.id) entry.id = w.id;
@@ -139,15 +233,15 @@
       html += '<div class="flex items-center gap flex-wrap" data-transform-row>' +
         '<select class="input form-field--sm" data-xform-op>' +
           ["mul","div","add","sub","abs","round"].map(function (o) {
-            return '<option value="' + o + '"' + (o === op ? " selected" : "") + ">" + o + "</option>";
+            return '<option value="' + o + '"' + (o === op ? " selected" : "") + ">" + (XFORM_LABELS[o] || o) + "</option>";
           }).join("") +
         "</select>" +
-        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="by / digits" value="' +
+        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="Amount or decimals" value="' +
           escapeAttr(by) + '">' +
         '<button type="button" class="btn" data-action="xform-remove">−</button>' +
       "</div>";
     });
-    html += '<button type="button" class="btn self-start" data-action="xform-add">Add transform step</button></div>';
+    html += '<button type="button" class="btn self-start" data-action="xform-add">Add calculation</button></div>';
     return html;
   }
 
@@ -179,7 +273,81 @@
     return html;
   }
 
-  function previewHtml(disp, style) {
+  function toneSelectHtml(type, disp, selected) {
+    var cur = normalizeTone(selected, type, disp);
+    var opts = [
+      ["none", "No background"],
+      ["conditional", "From rules (green / red / blue)"]
+    ];
+    var html = '<label class="stack form-field--lg">Background' +
+      '<select class="input" data-cfg="tone">';
+    opts.forEach(function (o) {
+      html += '<option value="' + o[0] + '"' + (o[0] === cur ? " selected" : "") + ">" +
+        o[1] + "</option>";
+    });
+    html += "</select></label>";
+    return html;
+  }
+
+  function toneRulesHtml(rules) {
+    rules = Array.isArray(rules) ? rules : [];
+    if (!rules.length) rules = [{expr: "value", op: "gt", compare: "0", tone: "positive"}];
+    var html = '<div class="stack stack--dense" data-tone-rules>' +
+      '<span class="text-muted">Background rules (first match wins). Use field paths and maths, e.g. <code>1/value</code>. ' +
+      '<code>=</code> / <code>≠</code> also accept strings, e.g. <code>flit_health.status</code> / <code>ok</code>.</span>';
+    rules.forEach(function (r) {
+      var expr = (r && r.expr) || "value";
+      var op = (r && r.op) || "gt";
+      var compare = (r && r.compare != null) ? r.compare : "0";
+      var tone = (r && r.tone) || "positive";
+      html += '<div class="flex items-center gap flex-wrap" data-tone-rule-row>' +
+        '<input type="text" class="input form-field--md" data-trule="expr" placeholder="value" value="' +
+          escapeAttr(expr) + '">' +
+        '<select class="input form-field--sm" data-trule="op">' +
+          TONE_RULE_OPS.map(function (o) {
+            return '<option value="' + o[0] + '"' + (o[0] === op ? " selected" : "") + ">" + o[1] + "</option>";
+          }).join("") +
+        "</select>" +
+        '<input type="text" class="input form-field--md" data-trule="compare" placeholder="ok or 0" value="' +
+          escapeAttr(compare) + '">' +
+        '<select class="input form-field--sm" data-trule="tone">' +
+          TONE_RULE_COLORS.map(function (o) {
+            return '<option value="' + o[0] + '"' + (o[0] === tone ? " selected" : "") + ">" + o[1] + "</option>";
+          }).join("") +
+        "</select>" +
+        '<button type="button" class="btn" data-action="tone-rule-remove">−</button>' +
+      "</div>";
+    });
+    html += '<button type="button" class="btn self-start" data-action="tone-rule-add">Add rule</button></div>';
+    return html;
+  }
+
+  function readToneRules(root) {
+    if (!root) return [];
+    var out = [];
+    root.querySelectorAll("[data-tone-rule-row]").forEach(function (row) {
+      var expr = (row.querySelector('[data-trule="expr"]') || {}).value || "";
+      var op = (row.querySelector('[data-trule="op"]') || {}).value || "gt";
+      var compare = (row.querySelector('[data-trule="compare"]') || {}).value || "";
+      var tone = (row.querySelector('[data-trule="tone"]') || {}).value || "positive";
+      expr = String(expr).trim();
+      compare = String(compare).trim();
+      if (!expr && !compare) return;
+      out.push({expr: expr || "value", op: op, compare: compare || "0", tone: tone});
+    });
+    return out;
+  }
+
+  function previewToneClass(type, disp, style, toneCfg) {
+    var tone = normalizeTone(toneCfg, type, disp);
+    if (tone === "none") return "";
+    if (disp === "toggle" || disp === "board" || disp === "kv_text") {
+      return " widget-tone widget-tone--positive";
+    }
+    return "";
+  }
+
+  function previewHtml(type, disp, style, toneCfg) {
     style = style || "default";
     var inner = "";
     if (disp === "toggle") {
@@ -192,11 +360,15 @@
               ? '<span class="widget-toggle__switch"><span class="widget-toggle__knob"></span></span><span class="widget-toggle__label">On</span>'
               : '<span class="widget-toggle__text">On</span>') +
         "</div>";
-    } else if (disp === "stat") {
-      inner = '<div class="stat ' + (style === "compact" ? "stat--compact" : "stat--xl") + '">' +
-        '<div class="stat__value' + (style === "signed" ? " stat__value--positive" : "") + '">42' +
-        (style === "hero" ? ' <span class="stat__unit">ms</span>' : "") +
-        "</div></div>";
+    } else if (disp === "board") {
+      inner = '<ul class="widget-board widget-preview__mini">' +
+        '<li class="widget-board__row"><span class="widget-board__name">Up</span>' +
+          '<div class="widget-toggle widget-toggle--led widget-toggle--sm" data-on="1">' +
+          '<span class="widget-toggle__led"></span><span class="widget-toggle__label">On</span></div></li>' +
+        '<li class="widget-board__row"><span class="widget-board__name">Ready</span>' +
+          '<div class="widget-toggle widget-toggle--led widget-toggle--sm" data-on="0">' +
+          '<span class="widget-toggle__led"></span><span class="widget-toggle__label">Off</span></div></li>' +
+        "</ul>";
     } else if (disp === "line" || disp === "area" || disp === "sparkline") {
       inner = seriesPreviewSvg(disp, style);
     } else if (disp === "pie" || disp === "doughnut") {
@@ -245,7 +417,8 @@
     } else {
       inner = '<span class="text-muted text-xs">' + escapeAttr(disp) + " · " + escapeAttr(style) + "</span>";
     }
-    return '<div class="widget-preview" data-preview>' + inner + "</div>";
+    return '<div class="widget-preview' + previewToneClass(type, disp, style, toneCfg) +
+      '" data-preview>' + inner + "</div>";
   }
 
   /** Sample points → SVG path for series style preview. */
@@ -331,26 +504,20 @@
       "</svg>";
   }
 
-  function seriesSourcesHtml(sources, allowedTypes) {
+  function seriesSourcesHtml(sources) {
     sources = Array.isArray(sources) ? sources : [];
-    if (!sources.length) sources = [{field_id: "", label: "", value_path: ""}];
-    var html = '<div class="stack stack--dense" data-series-sources><span class="text-muted">Series (one or more Fields)</span>';
+    if (!sources.length) sources = [{field_slug: "", label: ""}];
+    var html = '<div class="stack stack--dense" data-series-sources><span class="text-muted">Series</span>';
     sources.forEach(function (s) {
       html += '<div class="card card--compact" data-series-source>' +
         '<div class="card__body stack">' +
           '<div class="flex items-center gap flex-wrap">' +
-            '<label class="stack form-field--lg form-field--grow">Field' +
-              '<select class="input" data-ssrc="field_id">' +
-                fieldOptionsHtml(allowedTypes, s.field_id) +
-              "</select></label>" +
+            slugInputHtml('data-ssrc="field_slug"', (s.field_slug || "").trim(), "Field",
+              "my-log._poll.response_time_ms") +
             '<button type="button" class="btn self-end" data-action="series-src-remove">Remove</button>' +
           "</div>" +
           '<label class="stack form-field--lg">Label' +
             '<input type="text" class="input" data-ssrc="label" value="' + escapeAttr(s.label || "") + '">' +
-          "</label>" +
-          '<label class="stack form-field--2xl">Value path (logbook)' +
-            '<input type="text" class="input" data-ssrc="value_path" placeholder="_poll.response_time_ms" value="' +
-            escapeAttr(s.value_path || "") + '">' +
           "</label>" +
         "</div></div>";
     });
@@ -358,41 +525,21 @@
     return html;
   }
 
-  function chartSourcesHtml(sources, allowedTypes) {
+  function chartSourcesHtml(sources) {
     sources = Array.isArray(sources) ? sources : [];
-    if (!sources.length) sources = [{kind: "counter", field_id: "", label: ""}];
+    if (!sources.length) sources = [{field_slug: "", label: ""}];
     var html = '<div class="stack stack--dense" data-chart-sources><span class="text-muted">Sources</span>';
     sources.forEach(function (s) {
-      var kind = s.kind || "counter";
-      var typeFilter = [kind];
       html += '<div class="card card--compact" data-chart-source>' +
         '<div class="card__body stack">' +
           '<div class="flex items-center gap flex-wrap">' +
-            '<label class="stack form-field--md">Kind' +
-              '<select class="input" data-src="kind">' +
-                ["logbook","counter","value"].map(function (k) {
-                  return '<option value="' + k + '"' + (kind === k ? " selected" : "") + ">" + k + "</option>";
-                }).join("") +
-              "</select></label>" +
-            '<label class="stack form-field--lg form-field--grow">Field' +
-              '<select class="input" data-src="field_id">' +
-                fieldOptionsHtml(typeFilter, s.field_id) +
-              "</select></label>" +
+            slugInputHtml('data-src="field_slug"', (s.field_slug || "").trim(), "Field",
+              "counter-or-value-slug") +
             '<button type="button" class="btn self-end" data-action="src-remove">Remove</button>' +
           "</div>" +
           '<label class="stack form-field--lg">Label' +
             '<input type="text" class="input" data-src="label" value="' + escapeAttr(s.label || "") + '">' +
           "</label>" +
-          '<label class="stack form-field--2xl">Value path' +
-            '<input type="text" class="input" data-src="value_path" placeholder="_poll.response_time_ms" value="' +
-            escapeAttr(s.value_path || "") + '">' +
-          "</label>" +
-          '<label class="stack form-field--md">Agg' +
-            '<select class="input" data-src="agg">' +
-              ["sum","count"].map(function (a) {
-                return '<option value="' + a + '"' + ((s.agg || "sum") === a ? " selected" : "") + ">" + a + "</option>";
-              }).join("") +
-            "</select></label>" +
         "</div></div>";
     });
     html += '<button type="button" class="btn" data-action="src-add">Add source</button></div>';
@@ -401,13 +548,12 @@
 
   function linkItemsHtml(items) {
     items = Array.isArray(items) ? items : [];
-    if (!items.length) items = [{label: "", url: "", icon: ""}];
+    if (!items.length) items = [{label: "", url: ""}];
     var html = '<div class="stack stack--dense" data-link-items><span class="text-muted">Links</span>';
     items.forEach(function (it, i) {
       html += '<div class="flex items-center gap flex-wrap" data-link-row>' +
         '<input type="text" class="input form-field--md" data-link="label" placeholder="Label" value="' + escapeAttr(it.label || "") + '">' +
         '<input type="url" class="input form-field--grow" data-link="url" placeholder="https://…" value="' + escapeAttr(it.url || "") + '">' +
-        '<input type="text" class="input form-field--xs" data-link="icon" placeholder="Icon" value="' + escapeAttr(it.icon || "") + '">' +
         '<button type="button" class="btn" data-action="link-up"' + (i === 0 ? " disabled" : "") + ">Up</button>" +
         '<button type="button" class="btn" data-action="link-down"' + (i === items.length - 1 ? " disabled" : "") + ">Down</button>" +
         '<button type="button" class="btn" data-action="link-remove">−</button>' +
@@ -417,21 +563,85 @@
     return html;
   }
 
+  function boardCellsHtml(cells, cellKind, showToneRules) {
+    cells = Array.isArray(cells) ? cells : [];
+    if (!cells.length) {
+      cells = cellKind === "kv_text" ? [{template: ""}] : [{field_slug: ""}];
+    }
+    var html = '<div class="stack stack--dense" data-board-cells><span class="text-muted">Entries</span>';
+    cells.forEach(function (c) {
+      html += '<div class="card card--compact" data-board-cell>' +
+        '<div class="card__body stack">';
+      if (cellKind === "toggle") {
+        html += '<div class="flex items-center gap flex-wrap">' +
+          slugInputHtml('data-bcell="field_slug"', (c.field_slug || "").trim()) +
+          '<button type="button" class="btn self-end" data-action="board-cell-remove">Remove</button>' +
+          "</div>";
+      } else {
+        html += '<div class="flex items-center gap flex-wrap justify-between">' +
+          '<span class="text-muted text-xs">Template entry</span>' +
+          '<button type="button" class="btn" data-action="board-cell-remove">Remove</button>' +
+          "</div>";
+        html += '<label class="stack">Template' +
+          '<textarea class="input" data-bcell="template" rows="2" placeholder="{{ '{{ eurzar.value }}' }}">' +
+          escapeAttr(c.template || "") + "</textarea></label>" +
+          '<p class="text-muted text-xs">Use Field slugs: <code>{{ '{{ slug.value }}' }}</code>.</p>';
+        if (showToneRules) {
+          html += toneRulesHtml(c.tone_rules);
+        }
+      }
+      html += "</div></div>";
+    });
+    html += '<button type="button" class="btn" data-action="board-cell-add">Add entry</button></div>';
+    return html;
+  }
+
+  function boardConfigHtml(cfg, tone) {
+    var cellKind = cfg.cell_kind || "toggle";
+    var meta = boardCellKindMeta(cellKind);
+    var style = cfg.style || (meta.styles[0] && meta.styles[0][0]) || "plain";
+    var html = '<div class="flex items-center gap flex-wrap">' +
+      '<label class="stack form-field--lg">Cell type' +
+        '<select class="input" data-cfg="cell_kind">' +
+          BOARD_CELL_KINDS.map(function (k) {
+            return '<option value="' + k.id + '"' + (k.id === cellKind ? " selected" : "") + ">" + k.title + "</option>";
+          }).join("") +
+        "</select></label>" +
+      '<label class="stack form-field--lg">Style' +
+        '<select class="input" data-cfg="style">' +
+          meta.styles.map(function (s) {
+            return '<option value="' + s[0] + '"' + (s[0] === style ? " selected" : "") + ">" + s[1] + "</option>";
+          }).join("") +
+        "</select></label>" +
+      "</div>";
+    html += boardCellsHtml(
+      cfg.cells,
+      cellKind,
+      tone === "conditional" && cellKind === "kv_text"
+    );
+    return html;
+  }
+
   function configFieldsHtml(w) {
     var cfg = w.config || {};
     var disp = w.display || defaultDisplay(w.type);
     var style = cfg.style || defaultStyle(w.type, disp);
-    var bind = bindingFor(w.type, disp);
-    var allowed = bind.field_types || null;
+    var tone = normalizeTone(cfg.tone, w.type, disp);
     var html = '<div class="flex items-center gap flex-wrap">' +
       displaySelectHtml(w.type, disp) +
-      styleSelectHtml(w.type, disp, style) +
+      (disp === "board" ? "" : styleSelectHtml(w.type, disp, style)) +
+      toneSelectHtml(w.type, disp, tone) +
       "</div>";
-    html += previewHtml(disp, style);
+    if (disp === "board") {
+      html += boardConfigHtml(cfg, tone);
+      html += previewHtml(w.type, "board", cfg.style || "led", tone);
+    } else {
+      html += previewHtml(w.type, disp, style, tone);
+    }
 
     if (w.type === "series") {
       var rangeMode = (cfg.range_mode === "entries") ? "entries" : "hours";
-      html += seriesSourcesHtml(cfg.sources, allowed || ["counter", "logbook"]);
+      html += seriesSourcesHtml(cfg.sources);
       html += '<label class="stack form-field--md">Range mode' +
         '<select class="input" data-cfg="range_mode">' +
         '<option value="hours"' + (rangeMode === "hours" ? " selected" : "") + ">Hours</option>" +
@@ -451,52 +661,39 @@
     }
 
     if (w.type === "chart") {
-      html += '<label class="stack form-field--md">Range (hours)' +
-        '<input type="number" class="input" data-cfg="range_hours" min="1" max="8760" value="' +
-        (cfg.range_hours != null ? cfg.range_hours : 24) + '"></label>';
       html += '<label class="stack form-field--sm">Unit' +
         '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
-      html += chartSourcesHtml(cfg.sources, allowed);
+      html += chartSourcesHtml(cfg.sources);
     }
 
     if (w.type === "display") {
       if (disp === "logbook_list") {
-        html += '<label class="stack form-field--2xl">Field' +
-          '<select class="input" data-cfg="field_id">' +
-          fieldOptionsHtml(allowed || ["logbook"], cfg.field_id) +
-          "</select></label>";
+        var fieldRaw = (cfg.template || cfg.field_slug || "").trim();
+        html += slugInputHtml('data-cfg="logbook_field"', fieldRaw, "Field",
+          "logbook-slug or Status: {{ '{{ slug.path }}' }}");
         html += '<label class="stack form-field--md">Max lines' +
           '<input type="number" class="input" data-cfg="limit" min="1" max="100" value="' +
           (cfg.limit != null ? cfg.limit : 20) + '"></label>';
-        html += '<label class="stack form-field--2xl">Value path (sparkline)' +
-          '<input type="text" class="input" data-cfg="value_path" value="' + escapeAttr(cfg.value_path || "") + '"></label>';
-        html += '<label class="stack form-field--sm">Unit' +
-          '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
-        html += '<div class="stack"><span class="text-muted">Transforms</span>' + transformStepsHtml(cfg.transform) + "</div>";
+        if (tone === "conditional") {
+          html += toneRulesHtml(cfg.tone_rules);
+        }
       } else if (disp === "kv_text") {
-        html += '<label class="stack form-field--2xl">Field (optional)' +
-          '<select class="input" data-cfg="field_id">' +
-          fieldOptionsHtml(null, cfg.field_id) +
-          "</select></label>";
         html += '<label class="stack">Template' +
-          '<textarea class="input" data-cfg="template" rows="3" placeholder="Status: {{ '{{_poll.outcome}}' }}">' +
-          escapeAttr(cfg.template || "") + "</textarea></label>";
-      } else if (disp === "stat") {
-        html += '<label class="stack form-field--2xl">Field' +
-          '<select class="input" data-cfg="field_id">' +
-          fieldOptionsHtml(allowed || ["counter", "value"], cfg.field_id) +
-          "</select></label>";
-        html += '<label class="stack form-field--sm">Unit' +
-          '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
-        html += '<div class="stack"><span class="text-muted">Transforms</span>' + transformStepsHtml(cfg.transform) + "</div>";
+          '<textarea class="input" data-cfg="template" rows="3" placeholder="{{ '{{ eurzar.value }}' }} or EUR - R{{ '{{ 1/eurzar.value }}' }}">' +
+          escapeAttr(cfg.template || "") + "</textarea></label>" +
+          '<p class="text-muted text-xs">Any Field by slug: <code>{{ '{{ slug.value }}' }}</code>.</p>';
+        if (tone === "conditional") {
+          html += toneRulesHtml(cfg.tone_rules);
+        }
       } else if (disp === "toggle") {
-        html += '<label class="stack form-field--2xl">Field' +
-          '<select class="input" data-cfg="field_id">' +
-          fieldOptionsHtml(allowed || ["toggle"], cfg.field_id) +
-          "</select></label>";
+        html += slugInputHtml('data-cfg="field_slug"', (cfg.field_slug || "").trim());
       } else if (disp === "table") {
-        var ids = Array.isArray(cfg.field_ids) ? cfg.field_ids : [];
-        html += '<label class="stack form-field--2xl">Fields' + fieldMultiSelectHtml(ids) + "</label>";
+        var slugList = Array.isArray(cfg.field_slugs)
+          ? cfg.field_slugs.join(", ")
+          : (cfg.field_slugs || "").toString().trim();
+        html += '<label class="stack form-field--2xl">Fields (comma-separated)' +
+          '<input type="text" class="input" data-cfg="field_slugs" placeholder="a, b, c" value="' +
+          escapeAttr(slugList) + '" spellcheck="false"></label>';
       }
     }
 
@@ -545,6 +742,7 @@
               (w.id ? ' <code class="text-xs">' + escapeAttr(w.id) + "</code>" : "") +
             "</span>" +
             '<div class="flex items-center gap">' +
+              '<button type="button" class="btn" data-action="fields-help">Fields</button>' +
               '<button type="button" class="btn" data-action="up"' + (i === 0 ? " disabled" : "") + ">Up</button>" +
               '<button type="button" class="btn" data-action="down"' + (i === widgets.length - 1 ? " disabled" : "") + ">Down</button>" +
               '<button type="button" class="btn" data-action="remove">Remove</button>' +
@@ -553,6 +751,11 @@
           '<label class="stack form-field--2xl">Title' +
             '<input type="text" class="input" data-cfg="title" value="' + escapeAttr(w.title) + '">' +
           "</label>" +
+          '<label class="flex items-center gap">' +
+            '<input type="checkbox" data-cfg="show_title" value="1"' +
+              (w.show_title !== false ? " checked" : "") + ">" +
+            "Show title" +
+          "</label>" +
           configFieldsHtml(w) +
         "</div>";
       listEl.appendChild(card);
@@ -560,9 +763,10 @@
     syncJson();
   }
 
-  function readTransforms(card) {
+  function readTransforms(listEl) {
     var steps = [];
-    card.querySelectorAll("[data-transform-row]").forEach(function (row) {
+    if (!listEl) return steps;
+    listEl.querySelectorAll(":scope > [data-transform-row]").forEach(function (row) {
       var op = (row.querySelector("[data-xform-op]") || {}).value || "div";
       var byEl = row.querySelector("[data-xform-by]");
       var byRaw = byEl ? byEl.value : "";
@@ -578,22 +782,45 @@
     return steps;
   }
 
+  function cardTransformList(card) {
+    var found = null;
+    card.querySelectorAll("[data-transform-list]").forEach(function (list) {
+      if (!list.closest("[data-board-cell]")) found = list;
+    });
+    return found;
+  }
+
+  function readBoardCells(card) {
+    var cells = [];
+    card.querySelectorAll("[data-board-cell]").forEach(function (box) {
+      var cell = {};
+      box.querySelectorAll("[data-bcell]").forEach(function (el) {
+        var key = el.getAttribute("data-bcell");
+        var raw = el.value;
+        if (raw === "" || raw == null) return;
+        cell[key] = (typeof raw === "string") ? raw.trim() : raw;
+      });
+      var steps = readTransforms(box.querySelector("[data-transform-list]"));
+      if (steps.length) cell.transform = steps;
+      var cellRules = readToneRules(box.querySelector("[data-tone-rules]"));
+      if (cellRules.length) cell.tone_rules = cellRules;
+      cells.push(cell);
+    });
+    return cells;
+  }
+
   function readChartSources(card) {
     var sources = [];
     card.querySelectorAll("[data-chart-source]").forEach(function (box) {
       var src = {};
       box.querySelectorAll("[data-src]").forEach(function (el) {
         var key = el.getAttribute("data-src");
+        if (key === "kind" || key === "value_path" || key === "field_kind" || key === "agg") return;
         var raw = el.value;
         if (raw === "" || raw == null) return;
-        if (key === "field_id") {
-          var n = parseInt(raw, 10);
-          if (!isNaN(n)) src[key] = n;
-        } else {
-          src[key] = raw;
-        }
+        src[key] = (typeof raw === "string") ? raw.trim() : raw;
       });
-      if (src.field_id) sources.push(src);
+      if (src.field_slug) sources.push(src);
     });
     return sources;
   }
@@ -606,14 +833,9 @@
         var key = el.getAttribute("data-ssrc");
         var raw = el.value;
         if (raw === "" || raw == null) return;
-        if (key === "field_id") {
-          var n = parseInt(raw, 10);
-          if (!isNaN(n)) src[key] = n;
-        } else {
-          src[key] = raw;
-        }
+        src[key] = (typeof raw === "string") ? raw.trim() : raw;
       });
-      if (src.field_id) sources.push(src);
+      if (src.field_slug) sources.push(src);
     });
     return sources;
   }
@@ -639,10 +861,12 @@
       if (!type) return;
       var titleInput = card.querySelector('[data-cfg="title"]');
       var displayEl = card.querySelector('[data-cfg="display"]');
+      var showTitleEl = card.querySelector('[data-cfg="show_title"]');
       var entry = {
         type: type,
         display: displayEl ? displayEl.value : (card.dataset.display || defaultDisplay(type)),
         title: titleInput ? titleInput.value.trim() || kindTitle(type) : kindTitle(type),
+        show_title: showTitleEl ? !!showTitleEl.checked : true,
       };
       if (card.dataset.id) entry.id = card.dataset.id;
       ["x", "y", "w", "h"].forEach(function (k) {
@@ -654,44 +878,90 @@
       var config = {};
       card.querySelectorAll("[data-cfg]").forEach(function (el) {
         var key = el.getAttribute("data-cfg");
-        if (key === "title" || key === "display") return;
-        if (key === "field_ids") {
-          var selected = [];
-          Array.prototype.forEach.call(el.selectedOptions || [], function (opt) {
-            var n = parseInt(opt.value, 10);
-            if (!isNaN(n)) selected.push(n);
-          });
-          if (selected.length) config.field_ids = selected;
-          return;
-        }
+        if (key === "title" || key === "display" || key === "show_title") return;
         var raw = el.value;
         if (raw === "" || raw == null) return;
-        if (key === "field_id" || key === "limit" || key === "range_hours" || key === "range_entries" || key === "stale_threshold_hours") {
+        if (key === "limit" || key === "range_hours" || key === "range_entries" || key === "stale_threshold_hours") {
           var n = parseInt(raw, 10);
           if (!isNaN(n)) config[key] = n;
         } else {
-          config[key] = raw;
+          config[key] = (typeof raw === "string") ? raw.trim() : raw;
         }
       });
-      if (type === "display" && (entry.display === "logbook_list" || entry.display === "stat")) {
-        var steps = readTransforms(card);
-        if (steps.length) config.transform = steps;
+      if (type === "display" && entry.display === "kv_text") {
+        delete config.field_slug;
+        var rulesRoot = card.querySelector("[data-tone-rules]");
+        if (config.tone === "conditional" && rulesRoot) {
+          config.tone_rules = readToneRules(rulesRoot);
+        } else {
+          delete config.tone_rules;
+        }
+        delete config.transform;
+        delete config.unit;
+      }
+      if (type === "display" && entry.display === "logbook_list") {
+        var rawField = (config.logbook_field || config.template || config.field_slug || "").trim();
+        delete config.logbook_field;
+        delete config.value_path;
+        delete config.unit;
+        delete config.transform;
+        if (rawField.indexOf("{{ '{{' }}") >= 0) {
+          config.template = rawField;
+          delete config.field_slug;
+        } else if (rawField) {
+          config.field_slug = rawField;
+          delete config.template;
+        } else {
+          delete config.field_slug;
+          delete config.template;
+        }
+        var lbRules = card.querySelector("[data-tone-rules]");
+        if (config.tone === "conditional" && lbRules) {
+          config.tone_rules = readToneRules(lbRules);
+        } else {
+          delete config.tone_rules;
+        }
+      }
+      if (type === "display" && entry.display === "table" && config.field_slugs) {
+        config.field_slugs = String(config.field_slugs).split(",").map(function (s) {
+          return s.trim();
+        }).filter(Boolean);
+      }
+      if (type === "display" && entry.display === "board") {
+        delete config.tone_rules; // rules live on each cell
+        if (!config.cell_kind) config.cell_kind = "toggle";
+        var boardCells = readBoardCells(card);
+        if (boardCells.length) config.cells = boardCells;
+        delete config.transform;
+        delete config.unit;
+        delete config.template;
       }
       if (type === "series") {
         var ss = readSeriesSources(card);
         if (ss.length) config.sources = ss;
-        delete config.field_id;
         delete config.value_path;
       }
       if (type === "chart") {
         var sources = readChartSources(card);
         if (sources.length) config.sources = sources;
+        delete config.range_hours;
+        delete config.range_mode;
+        delete config.range_entries;
       }
       if (type === "links") {
         var items = readLinkItems(card);
         if (items.length) config.items = items;
       }
-      if (!config.style) config.style = defaultStyle(type, entry.display);
+      if (!config.style) {
+        if (entry.display === "board") {
+          var bm = boardCellKindMeta(config.cell_kind || "toggle");
+          config.style = (bm.styles[0] && bm.styles[0][0]) || "plain";
+        } else {
+          config.style = defaultStyle(type, entry.display);
+        }
+      }
+      if (!config.tone) config.tone = defaultTone(type, entry.display);
+      else config.tone = normalizeTone(config.tone, type, entry.display);
       entry.config = config;
       widgets.push(entry);
     });
@@ -718,7 +988,8 @@
       type: type,
       display: disp,
       title: kindTitle(type),
-      config: {style: defaultStyle(type, disp)}
+      show_title: true,
+      config: {style: defaultStyle(type, disp), tone: defaultTone(type, disp)}
     });
     setWidgets(widgets);
   });
@@ -726,8 +997,7 @@
   listEl.addEventListener("change", function (e) {
     var el = e.target;
     var cfgKey = el && el.getAttribute("data-cfg");
-    var srcKey = el && el.getAttribute("data-src");
-    if (cfgKey === "display" || cfgKey === "range_mode" || cfgKey === "style") {
+    if (cfgKey === "display" || cfgKey === "range_mode" || cfgKey === "style" || cfgKey === "tone" || cfgKey === "cell_kind") {
       var card = el.closest(".card");
       if (!card) return;
       var widgets = readFromDom();
@@ -736,11 +1006,37 @@
         if (cfgKey === "display") {
           widgets[i].display = el.value;
           widgets[i].config = widgets[i].config || {};
-          widgets[i].config.style = defaultStyle(widgets[i].type, el.value);
+          if (el.value === "board") {
+            widgets[i].config.cell_kind = widgets[i].config.cell_kind || "toggle";
+            var bm = boardCellKindMeta(widgets[i].config.cell_kind);
+            widgets[i].config.style = (bm.styles[0] && bm.styles[0][0]) || "led";
+            if (!(Array.isArray(widgets[i].config.cells) && widgets[i].config.cells.length)) {
+              widgets[i].config.cells = [{field_slug: ""}];
+            }
+          } else {
+            widgets[i].config.style = defaultStyle(widgets[i].type, el.value);
+          }
+          if (!widgets[i].config.tone || widgets[i].config.tone === "conditional" || widgets[i].config.tone === "none") {
+            widgets[i].config.tone = defaultTone(widgets[i].type, el.value);
+          }
+        }
+        if (cfgKey === "cell_kind") {
+          widgets[i].config = widgets[i].config || {};
+          widgets[i].config.cell_kind = el.value;
+          var bm2 = boardCellKindMeta(el.value);
+          widgets[i].config.style = (bm2.styles[0] && bm2.styles[0][0]) || "plain";
+          widgets[i].config.cells = el.value === "kv_text" ? [{template: ""}] : [{field_slug: ""}];
+          delete widgets[i].config.transform;
+          delete widgets[i].config.unit;
+          delete widgets[i].config.template;
         }
         if (cfgKey === "style") {
           widgets[i].config = widgets[i].config || {};
           widgets[i].config.style = el.value;
+        }
+        if (cfgKey === "tone") {
+          widgets[i].config = widgets[i].config || {};
+          widgets[i].config.tone = el.value;
         }
         if (cfgKey === "range_mode") {
           widgets[i].config = widgets[i].config || {};
@@ -750,14 +1046,6 @@
         return;
       }
     }
-    if (srcKey === "kind") {
-      var card2 = el.closest(".card");
-      if (!card2) return;
-      var widgets2 = readFromDom();
-      var i2 = parseInt(card2.dataset.index, 10);
-      if (!isNaN(i2) && widgets2[i2]) setWidgets(widgets2);
-      return;
-    }
     syncJson();
   });
 
@@ -765,6 +1053,11 @@
     var btn = e.target.closest("[data-action]");
     if (!btn) return;
     var action = btn.getAttribute("data-action");
+
+    if (action === "fields-help") {
+      openFieldsDialog(btn.closest(".card"));
+      return;
+    }
 
     if (action === "xform-add") {
       var list = btn.closest("[data-transform-list]");
@@ -790,6 +1083,36 @@
       syncJson();
       return;
     }
+    if (action === "tone-rule-add") {
+      var trList = btn.closest("[data-tone-rules]");
+      if (!trList) return;
+      var row = document.createElement("div");
+      row.className = "flex items-center gap flex-wrap";
+      row.setAttribute("data-tone-rule-row", "");
+      row.innerHTML =
+        '<input type="text" class="input form-field--md" data-trule="expr" placeholder="value" value="value">' +
+        '<select class="input form-field--sm" data-trule="op">' +
+          TONE_RULE_OPS.map(function (o) {
+            return '<option value="' + o[0] + '"' + (o[0] === "gt" ? " selected" : "") + ">" + o[1] + "</option>";
+          }).join("") +
+        "</select>" +
+        '<input type="text" class="input form-field--md" data-trule="compare" placeholder="ok or 0" value="0">' +
+        '<select class="input form-field--sm" data-trule="tone">' +
+          TONE_RULE_COLORS.map(function (o) {
+            return '<option value="' + o[0] + '"' + (o[0] === "positive" ? " selected" : "") + ">" + o[1] + "</option>";
+          }).join("") +
+        "</select>" +
+        '<button type="button" class="btn" data-action="tone-rule-remove">−</button>';
+      trList.insertBefore(row, btn);
+      syncJson();
+      return;
+    }
+    if (action === "tone-rule-remove") {
+      var trRow = btn.closest("[data-tone-rule-row]");
+      if (trRow) trRow.remove();
+      syncJson();
+      return;
+    }
     if (action === "src-add") {
       var wrap = btn.closest("[data-chart-sources]");
       if (!wrap) return;
@@ -799,7 +1122,7 @@
       if (!widgets[i]) return;
       widgets[i].config = widgets[i].config || {};
       widgets[i].config.sources = widgets[i].config.sources || [];
-      widgets[i].config.sources.push({kind: "counter", field_id: "", label: ""});
+      widgets[i].config.sources.push({field_slug: "", label: ""});
       setWidgets(widgets);
       return;
     }
@@ -816,13 +1139,34 @@
       if (!widgetsS[iS]) return;
       widgetsS[iS].config = widgetsS[iS].config || {};
       widgetsS[iS].config.sources = widgetsS[iS].config.sources || [];
-      widgetsS[iS].config.sources.push({field_id: "", label: "", value_path: ""});
+      widgetsS[iS].config.sources.push({field_slug: "", label: ""});
       setWidgets(widgetsS);
       return;
     }
     if (action === "series-src-remove") {
       var ssrc = btn.closest("[data-series-source]");
       if (ssrc) ssrc.remove();
+      syncJson();
+      return;
+    }
+    if (action === "board-cell-add") {
+      var widgetsB = readFromDom();
+      var cardB = btn.closest("[data-index]");
+      if (!cardB) return;
+      var iB = parseInt(cardB.dataset.index, 10);
+      if (!widgetsB[iB]) return;
+      widgetsB[iB].config = widgetsB[iB].config || {};
+      widgetsB[iB].config.cells = widgetsB[iB].config.cells || [];
+      var blank = (widgetsB[iB].config.cell_kind || "toggle") === "kv_text"
+        ? {template: ""}
+        : {field_slug: ""};
+      widgetsB[iB].config.cells.push(blank);
+      setWidgets(widgetsB);
+      return;
+    }
+    if (action === "board-cell-remove") {
+      var bcell = btn.closest("[data-board-cell]");
+      if (bcell) bcell.remove();
       syncJson();
       return;
     }
@@ -833,7 +1177,7 @@
       if (!widgets2[i2]) return;
       widgets2[i2].config = widgets2[i2].config || {};
       widgets2[i2].config.items = widgets2[i2].config.items || [];
-      widgets2[i2].config.items.push({label: "", url: "", icon: ""});
+      widgets2[i2].config.items.push({label: "", url: ""});
       setWidgets(widgets2);
       return;
     }
@@ -896,6 +1240,15 @@
 
   listEl.addEventListener("input", function () { syncJson(); });
   form.addEventListener("submit", function () { syncJson(); });
+
+  if (fieldsDialog) {
+    fieldsDialog.addEventListener("click", function (e) {
+      if (e.target.closest("[data-fields-dialog-close]")) {
+        if (typeof fieldsDialog.close === "function") fieldsDialog.close();
+        else fieldsDialog.removeAttribute("open");
+      }
+    });
+  }
 
   setWidgets(initial);
 })();

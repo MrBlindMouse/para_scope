@@ -153,7 +153,7 @@ def _create_source(client, name="Test Source", slug=None, source_type="webhook")
         })
 
     resp = client.post(
-        "/config/sources",
+        "/config/pipeline/sources",
         data=data,
         follow_redirects=False,
     )
@@ -311,20 +311,12 @@ class TestAuth:
         resp = client.get("/config/pipeline", follow_redirects=False)
         assert resp.status_code == 200
 
-    def test_legacy_config_urls_redirect(self, client, test_user):
-        token = create_session_token("testadmin")
-        client.cookies.set("session_username", token)
-        for path in ("/config/sources", "/config/rules", "/config/actions", "/config/secrets"):
-            resp = client.get(path, follow_redirects=False)
-            assert resp.status_code == 303
-            assert "/config/pipeline" in str(resp.headers.get("location", ""))
-
     def test_csrf_rejects_post_without_token(self, client, test_user):
         token = create_session_token("testadmin")
         client.cookies.set("session_username", token)
         # No csrf_token cookie / form field
         resp = client.post(
-            "/config/sources",
+            "/config/pipeline/sources",
             data={"name": "X", "source_type": "webhook", "description": ""},
             follow_redirects=False,
         )
@@ -332,7 +324,7 @@ class TestAuth:
 
     def test_csrf_accepts_matching_token(self, authenticated_client):
         resp = authenticated_client.post(
-            "/config/sources",
+            "/config/pipeline/sources",
             data={"name": "CSRF Ok", "source_type": "webhook", "description": ""},
             follow_redirects=False,
         )
@@ -386,7 +378,7 @@ class TestSourcesCRUD:
 
     def test_create_source(self, authenticated_client):
         resp = authenticated_client.post(
-            "/config/sources",
+            "/config/pipeline/sources",
             data={"name": "My API", "source_type": "webhook", "description": "Test source"},
             follow_redirects=False,
         )
@@ -396,14 +388,14 @@ class TestSourcesCRUD:
         try:
             src = db.query(Source).filter(Source.name == "My API").first()
             assert src is not None
-            assert src.slug == "my-api"
+            assert src.slug == "my_api"
             assert src.source_type == "webhook"
         finally:
             db.close()
 
     def test_create_source_requires_name(self, authenticated_client):
         resp = authenticated_client.post(
-            "/config/sources",
+            "/config/pipeline/sources",
             data={"name": "", "source_type": "webhook"},
             follow_redirects=False,
         )
@@ -413,13 +405,13 @@ class TestSourcesCRUD:
 
     def test_slug_auto_from_name_and_uniquified(self, authenticated_client):
         resp1 = authenticated_client.post(
-            "/config/sources",
+            "/config/pipeline/sources",
             data={"name": "Same Name", "source_type": "webhook", "description": ""},
             follow_redirects=False,
         )
         assert resp1.status_code == 303
         resp2 = authenticated_client.post(
-            "/config/sources",
+            "/config/pipeline/sources",
             data={"name": "Same Name", "source_type": "webhook", "description": ""},
             follow_redirects=False,
         )
@@ -430,7 +422,7 @@ class TestSourcesCRUD:
             slugs = sorted(
                 s.slug for s in db.query(Source).filter(Source.name == "Same Name").all()
             )
-            assert slugs == ["same-name", "same-name-2"]
+            assert slugs == ["same_name", "same_name_2"]
         finally:
             db.close()
 
@@ -439,12 +431,6 @@ class TestSourcesCRUD:
         resp = authenticated_client.get("/config/pipeline")
         assert resp.status_code == 200
         assert "List Test" in resp.text
-
-    def test_edit_source_page(self, authenticated_client):
-        sid, slug = _create_source(authenticated_client, name="Edit Me", slug="edit-me")
-        resp = authenticated_client.get(f"/config/source/{sid}/edit", follow_redirects=False)
-        assert resp.status_code == 303
-        assert "/config/pipeline" in str(resp.headers.get("location", ""))
 
     def test_edit_source_partial(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Edit Partial", slug="edit-partial")
@@ -456,8 +442,8 @@ class TestSourcesCRUD:
         assert 'id="webhook-secret-fields"' in resp.text
 
     def test_edit_source_not_found(self, authenticated_client):
-        resp = authenticated_client.get("/config/source/9999/edit", follow_redirects=False)
-        assert resp.status_code == 303
+        resp = authenticated_client.get("/config/pipeline/source/9999/partials/edit-form")
+        assert resp.status_code == 404
 
     def test_update_source(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Old Name", slug="old-name")
@@ -473,7 +459,7 @@ class TestSourcesCRUD:
         try:
             src = db.query(Source).filter(Source.id == sid).first()
             assert src.name == "New Name"
-            assert src.slug == "new-name"
+            assert src.slug == "new_name"
         finally:
             db.close()
 
@@ -519,7 +505,6 @@ class TestSourcesCRUD:
                 "name": "Wh Edit",
                 "source_type": "webhook",
                 "description": "",
-                "webhook_secret_name": "New Key",
                 "webhook_secret_value": "supersecret",
             },
             follow_redirects=False,
@@ -531,7 +516,7 @@ class TestSourcesCRUD:
             src = db.query(Source).filter(Source.id == sid).first()
             assert src.webhook_secret_id is not None
             secret = db.query(Secret).filter(Secret.id == src.webhook_secret_id).first()
-            assert secret.name == "New Key"
+            assert secret.encrypted_value is not None
         finally:
             db.close()
 
@@ -551,16 +536,10 @@ class TestSourcesCRUD:
 # ── Config: Event Types ──────────────────────────────────────────────────────
 
 class TestEventTypes:
-    def test_get_event_types_redirects_to_pipeline(self, authenticated_client):
-        sid, slug = _create_source(authenticated_client, name="ET Source", slug="et-source")
-        resp = authenticated_client.get(f"/config/source/{sid}/event-types", follow_redirects=False)
-        assert resp.status_code == 303
-        assert "/config/pipeline" in resp.headers.get("location", "")
-
     def test_create_event_type(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="ET Source", slug="et-source")
         resp = authenticated_client.post(
-            f"/config/source/{sid}/event-types",
+            f"/config/pipeline/source/{sid}/events",
             data={"name": "api_error", "description": "API returned error"},
             follow_redirects=False,
         )
@@ -569,7 +548,7 @@ class TestEventTypes:
     def test_create_event_type_requires_name(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="ET Source", slug="et-source")
         resp = authenticated_client.post(
-            f"/config/source/{sid}/event-types",
+            f"/config/pipeline/source/{sid}/events",
             data={"name": "", "description": ""},
             follow_redirects=False,
         )
@@ -591,7 +570,7 @@ class TestEventTypes:
     def test_delete_event_type(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="ET Source", slug="et-source")
         authenticated_client.post(
-            f"/config/source/{sid}/event-types",
+            f"/config/pipeline/source/{sid}/events",
             data={"name": "to-delete", "description": ""},
             follow_redirects=False,
         )
@@ -744,8 +723,8 @@ class TestActions:
         finally:
             db.close()
         resp = authenticated_client.post(
-            "/config/actions",
-            data={"action_type": "field_push", "source_id": str(sid),
+            f"/config/pipeline/source/{sid}/actions",
+            data={"action_type": "field_push",
                   "field_id": str(fid), "field_type": "counter", "counter_op": "increment", "delta": "1"},
             follow_redirects=False,
         )
@@ -753,20 +732,11 @@ class TestActions:
         loc = str(resp.headers.get("location", ""))
         assert "error" not in loc
 
-    def test_create_action_requires_source(self, authenticated_client):
-        resp = authenticated_client.post(
-            "/config/actions",
-            data={"action_type": "web_push", "title": "T", "body": "B"},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        assert "error" in str(resp.headers.get("location", ""))
-
     def test_create_field_push_requires_field(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Act Src", slug="act-src-name")
         resp = authenticated_client.post(
-            "/config/actions",
-            data={"action_type": "field_push", "source_id": str(sid)},
+            f"/config/pipeline/source/{sid}/actions",
+            data={"action_type": "field_push"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -775,8 +745,8 @@ class TestActions:
     def test_create_http_forward_requires_url(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Act Src", slug="act-src-json")
         resp = authenticated_client.post(
-            "/config/actions",
-            data={"action_type": "http_forward", "source_id": str(sid), "url": "", "method": "POST"},
+            f"/config/pipeline/source/{sid}/actions",
+            data={"action_type": "http_forward", "url": "", "method": "POST"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -785,21 +755,21 @@ class TestActions:
     def test_list_actions_on_pipeline(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Act List", slug="act-list")
         authenticated_client.post(
-            "/config/actions",
-            data={"action_type": "web_push", "source_id": str(sid),
+            f"/config/pipeline/source/{sid}/actions",
+            data={"action_type": "web_push",
                   "title": "Hello", "body": "World", "url": "/"},
             follow_redirects=False,
         )
         resp = authenticated_client.get("/config/pipeline")
         assert resp.status_code == 200
-        assert "web_push" in resp.text
+        assert "Notify → Hello" in resp.text or "Browser notification" in resp.text
         assert "Unused actions" in resp.text
 
     def test_delete_action(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Act Del", slug="act-del")
         authenticated_client.post(
-            "/config/actions",
-            data={"action_type": "web_push", "source_id": str(sid),
+            f"/config/pipeline/source/{sid}/actions",
+            data={"action_type": "web_push",
                   "title": "ToDelete", "body": "x", "url": "/"},
             follow_redirects=False,
         )
@@ -822,13 +792,13 @@ class TestRules:
         """Create source + event type + action for rule creation."""
         sid, slug = _create_source(client, name="Rule Source", slug="rule-source")
         client.post(
-            f"/config/source/{sid}/event-types",
+            f"/config/pipeline/source/{sid}/events",
             data={"name": "error", "description": ""},
             follow_redirects=False,
         )
         client.post(
-            "/config/actions",
-            data={"action_type": "web_push", "source_id": str(sid),
+            f"/config/pipeline/source/{sid}/actions",
+            data={"action_type": "web_push",
                   "title": "Notify", "body": "hi", "url": "/"},
             follow_redirects=False,
         )
@@ -837,9 +807,8 @@ class TestRules:
     def test_pipeline_shows_rules(self, authenticated_client):
         sid = self._setup(authenticated_client)
         authenticated_client.post(
-            "/config/rules",
-            data={"source_id": str(sid),
-                  "event_type_ids": "[]", "conditions": "{}",
+            f"/config/pipeline/source/{sid}/rules",
+            data={"event_type_ids": "[]", "conditions": "{}",
                   "action_ids": "[]", "order_index": "0"},
             follow_redirects=False,
         )
@@ -858,9 +827,8 @@ class TestRules:
         finally:
             db.close()
         resp = authenticated_client.post(
-            "/config/rules",
-            data={"source_id": str(sid),
-                  "event_type_ids": f"[{et_id}]", "conditions": '{"severity": "high"}',
+            f"/config/pipeline/source/{sid}/rules",
+            data={"event_type_ids": f"[{et_id}]", "conditions": '{"severity": "high"}',
                   "action_ids": f"[{action_id}]", "order_index": "10"},
             follow_redirects=False,
         )
@@ -871,8 +839,8 @@ class TestRules:
         sid = self._setup(authenticated_client)
         other_sid, _ = _create_source(authenticated_client, name="Other", slug="other-rule-src")
         authenticated_client.post(
-            "/config/actions",
-            data={"action_type": "web_push", "source_id": str(other_sid),
+            f"/config/pipeline/source/{other_sid}/actions",
+            data={"action_type": "web_push",
                   "title": "Other", "body": "x", "url": "/"},
             follow_redirects=False,
         )
@@ -888,9 +856,8 @@ class TestRules:
         finally:
             db.close()
         resp = authenticated_client.post(
-            "/config/rules",
-            data={"source_id": str(sid),
-                  "event_type_ids": "[]", "conditions": "{}",
+            f"/config/pipeline/source/{sid}/rules",
+            data={"event_type_ids": "[]", "conditions": "{}",
                   "action_ids": f"[{oid}]", "order_index": "0"},
             follow_redirects=False,
         )
@@ -900,8 +867,8 @@ class TestRules:
     def test_create_rule_bad_conditions(self, authenticated_client):
         sid = self._setup(authenticated_client)
         resp = authenticated_client.post(
-            "/config/rules",
-            data={"source_id": str(sid), "event_type_ids": "[]",
+            f"/config/pipeline/source/{sid}/rules",
+            data={"event_type_ids": "[]",
                   "conditions": "{bad", "action_ids": "[]", "order_index": "0"},
             follow_redirects=False,
         )
@@ -918,8 +885,8 @@ class TestRules:
         finally:
             db.close()
         authenticated_client.post(
-            "/config/rules",
-            data={"source_id": str(sid), "event_type_ids": "[]",
+            f"/config/pipeline/source/{sid}/rules",
+            data={"event_type_ids": "[]",
                   "conditions": "{}", "action_ids": f"[{action_id}]", "order_index": "0"},
             follow_redirects=False,
         )
@@ -1019,7 +986,7 @@ class TestRuleFirstPipeline:
         finally:
             db.close()
         pipeline = authenticated_client.get("/config/pipeline")
-        assert "web_push" in pipeline.text
+        assert "Notify →" in pipeline.text or "Browser notification" in pipeline.text
         assert "Unused actions" not in pipeline.text
 
     def test_edit_event_rule_action(self, authenticated_client):
@@ -1367,7 +1334,7 @@ class TestHelp:
         assert 'href="/help"' in resp.text
         assert "config-nav__link--active" in resp.text
         assert 'id="fields"' in resp.text
-        assert "logbook" in resp.text
+        assert "Logbook" in resp.text
 
     def test_help_requires_auth(self, client):
         client.cookies.clear()
@@ -1454,6 +1421,56 @@ class TestDashboardLayout:
         resp = authenticated_client.get("/")
         assert resp.status_code == 200
         assert b"Health" in resp.content
+        assert b"card__header" in resp.content
+
+    def test_widget_show_title_false_hides_header(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        widgets = [{
+            "type": "system",
+            "display": "source_health",
+            "title": "Hidden Title",
+            "show_title": False,
+        }]
+        resp = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = json.loads(layout.layout_config)["widgets"]
+            assert saved[0]["show_title"] is False
+            assert saved[0]["title"] == "Hidden Title"
+        finally:
+            db.close()
+
+        home = authenticated_client.get("/")
+        assert home.status_code == 200
+        assert b"Hidden Title" not in home.content
+        assert b'card__header' not in home.content
+
+    def test_widget_show_title_defaults_true(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        widgets = [{"type": "system", "display": "metric_summary", "title": "Summary"}]
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = json.loads(layout.layout_config)["widgets"]
+            assert saved[0].get("show_title") is True
+        finally:
+            db.close()
 
     def test_save_multiple_same_type_widgets(self, authenticated_client):
         from app.database import get_db
@@ -1465,15 +1482,12 @@ class TestDashboardLayout:
             b = Field(name="Log B", slug="log-b", field_type="logbook", config={}, state={})
             db.add_all([a, b])
             db.commit()
-            db.refresh(a)
-            db.refresh(b)
-            id_a, id_b = a.id, b.id
         finally:
             db.close()
 
         widgets = [
-            {"type": "display", "display": "logbook_list", "title": "First log", "config": {"field_id": id_a, "limit": 5}},
-            {"type": "display", "display": "logbook_list", "title": "Second log", "config": {"field_id": id_b, "limit": 15}},
+            {"type": "display", "display": "logbook_list", "title": "First log", "config": {"field_slug": "log-a", "limit": 5}},
+            {"type": "display", "display": "logbook_list", "title": "Second log", "config": {"field_slug": "log-b", "limit": 15}},
         ]
         resp = authenticated_client.post(
             "/config/dashboard",
@@ -1491,11 +1505,11 @@ class TestDashboardLayout:
             assert saved[0]["type"] == "display"
             assert saved[0]["display"] == "logbook_list"
             assert saved[0]["title"] == "First log"
-            assert saved[0]["config"]["field_id"] == id_a
+            assert saved[0]["config"]["field_slug"] == "log-a"
             assert saved[0]["config"]["limit"] == 5
             assert saved[1]["type"] == "display"
             assert saved[1]["title"] == "Second log"
-            assert saved[1]["config"]["field_id"] == id_b
+            assert saved[1]["config"]["field_slug"] == "log-b"
             assert saved[1]["config"]["limit"] == 15
         finally:
             db.close()
@@ -1756,6 +1770,162 @@ class TestWidgetTransforms:
         )
         assert series == [{"ts": ts.isoformat(), "v": 1.0}]
 
+    def test_eval_expr_and_compare(self):
+        from app.widget_transforms import eval_expr, eval_compare, resolve_tone_rules
+
+        data = {"value": 19.5}
+        assert eval_expr("1/value", data) == pytest.approx(1 / 19.5)
+        assert eval_expr("value + 0.5", data) == 20.0
+        assert eval_expr("1/0", data) is None
+        assert eval_expr("__import__('os')", data) is None
+        assert eval_compare("value", "gt", "3", data) is True
+        assert eval_compare("1/value", "lt", "0.1", data) is True
+        assert eval_compare("value", "eq", "19.5", data) is True
+        str_data = {"flit_health": {"status": "ok"}}
+        assert eval_compare("flit_health.status", "eq", "ok", str_data) is True
+        assert eval_compare("flit_health.status", "neq", "down", str_data) is True
+        assert eval_compare("flit_health.status", "eq", "down", str_data) is False
+        assert eval_compare("flit_health.status", "gt", "ok", str_data) is False
+        assert eval_compare("flit_health.code", "lt", "0", {"flit_health": {"code": -1}}) is True
+        assert resolve_tone_rules(
+            [
+                {"expr": "value", "op": "gt", "compare": "100", "tone": "positive"},
+                {"expr": "value", "op": "gt", "compare": "3", "tone": "negative"},
+            ],
+            data,
+        ) == "negative"
+        assert resolve_tone_rules([], data) == "neutral"
+        assert resolve_tone_rules(
+            [{"expr": "flit_health.status", "op": "eq", "compare": "ok", "tone": "positive"}],
+            str_data,
+        ) == "positive"
+
+    def test_kv_template_math(self):
+        from app.widgets import _render_kv_template
+
+        assert _render_kv_template("EUR - R{{ 1/value }}", {"value": 20}) == "EUR - R0.05"
+        assert _render_kv_template("x={{value}}", {"value": "ok"}) == "x=ok"
+        assert _render_kv_template(
+            "{{ eur_zar.value }}",
+            {"eur_zar": {"value": "19.5"}},
+        ) == "19.5"
+        assert _render_kv_template("{{ missing.value }}", {"eurzar": {"value": 1}}) == ""
+
+    def test_global_slug_namespace(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+        from app.widgets import fetch_widget_data, fields_snapshot
+
+        db = next(get_db())
+        try:
+            gbp = Field(
+                name="EURGBP", slug="eurgbp", field_type="value",
+                config={}, state={"value": "0.86"},
+            )
+            zar = Field(
+                name="EURZAR", slug="eurzar", field_type="value",
+                config={}, state={"value": "19.5"},
+            )
+            log = Field(
+                name="FX Log", slug="fx_log", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add_all([gbp, zar, log])
+            db.flush()
+            now = datetime.now(timezone.utc)
+            db.add(FieldLogEntry(
+                field_id=log.id, timestamp=now - timedelta(minutes=5),
+                value={"rate": 1.0, "quote": "OLD"},
+            ))
+            db.add(FieldLogEntry(
+                field_id=log.id, timestamp=now,
+                value={"rate": 19.5, "quote": "ZAR"},
+            ))
+            db.commit()
+
+            snap = fields_snapshot(db)
+            assert snap["eurgbp"]["value"] == "0.86"
+            assert snap["eurzar"]["value"] == "19.5"
+            assert snap["fx_log"]["quote"] == "ZAR"
+
+            # Multi-slug template with no bound Field
+            multi = fetch_widget_data(
+                "display", db, display="kv_text",
+                widget_config={
+                    "template": "GBP {{ eurgbp.value }} / ZAR {{ eurzar.value }}",
+                    "tone": "conditional",
+                    "tone_rules": [
+                        {"expr": "eurzar.value", "op": "gt", "compare": "19", "tone": "positive"},
+                        {"expr": "eurzar.value", "op": "lt", "compare": "19", "tone": "negative"},
+                    ],
+                },
+            )
+            assert multi["text"] == "GBP 0.86 / ZAR 19.5"
+            assert multi["tone"] == "positive"
+
+            # Logbook latest under slug
+            log_kv = fetch_widget_data(
+                "display", db, display="kv_text",
+                widget_config={"template": "{{ fx_log.quote }} {{ fx_log.rate }}"},
+            )
+            assert log_kv["text"] == "ZAR 19.5"
+
+            # Slug path from snap (no field_slug binding on kv_text)
+            by_slug = fetch_widget_data(
+                "display", db, display="kv_text",
+                widget_config={"template": "{{ eurgbp.value }}"},
+            )
+            assert by_slug["text"] == "0.86"
+
+            # Board entry with no Field — slug-only template
+            board = fetch_widget_data(
+                "display", db, display="board",
+                widget_config={
+                    "cell_kind": "kv_text",
+                    "tone": "conditional",
+                    "cells": [{
+                        "template": "{{ eurzar.value }}",
+                        "tone_rules": [
+                            {"expr": "eurzar.value", "op": "gt", "compare": "10", "tone": "positive"},
+                        ],
+                    }],
+                },
+            )
+            assert board["items"][0]["text"] == "19.5"
+            assert board["items"][0]["tone"] == "positive"
+            assert board["items"][0]["field_id"] is None
+        finally:
+            db.close()
+
+    def test_series_field_slug_sources(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Slug Series", slug="slug-series", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.flush()
+            now = datetime.now(timezone.utc)
+            db.add(FieldLogEntry(
+                field_id=field.id, timestamp=now,
+                value={"n": 42},
+            ))
+            db.commit()
+            data = fetch_widget_data("series", db, display="line", widget_config={
+                "sources": [{"field_slug": "slug-series.n"}],
+                "range_mode": "entries",
+                "range_entries": 10,
+            })
+            assert not data.get("error"), data
+            assert data["series"][0]["points"][-1]["v"] == 42.0
+        finally:
+            db.close()
+
     def test_series_from_logbook_path(self, authenticated_client):
         from app.database import get_db
         from app.models import Field, FieldLogEntry
@@ -1764,7 +1934,7 @@ class TestWidgetTransforms:
         db = next(get_db())
         try:
             field = Field(
-                name="Speed Log", slug="speed-log", field_type="logbook",
+                name="Speed Log", slug="speed_log", field_type="logbook",
                 config={"max_entries": 50}, state={},
             )
             db.add(field)
@@ -1780,9 +1950,10 @@ class TestWidgetTransforms:
             ))
             db.commit()
             data = fetch_widget_data("series", db, display="line", widget_config={
-                "field_id": field.id,
-                "value_path": "_poll.response_time_ms",
-                "transform": [{"op": "div", "by": 1000}],
+                "sources": [{
+                    "field_slug": "speed_log._poll.response_time_ms",
+                    "transform": [{"op": "div", "by": 1000}],
+                }],
                 "unit": "s",
                 "range_hours": 24,
             })
@@ -1794,41 +1965,35 @@ class TestWidgetTransforms:
             assert pts[1]["v"] == 0.5
 
             ldata = fetch_widget_data("display", db, display="logbook_list", widget_config={
-                "field_id": field.id,
-                "value_path": "_poll.response_time_ms",
-                "transform": [{"op": "div", "by": 1000}],
-                "unit": "s",
+                "template": "rt {{ speed_log._poll.response_time_ms }}",
             })
-            assert len(ldata["series"]) == 2
-            assert ldata["series"][0]["v"] == 0.25
+            assert len(ldata["entries"]) == 2
+            assert ldata["entries"][0]["text"] == "rt 500"
+            assert ldata["entries"][1]["text"] == "rt 250"
         finally:
             db.close()
 
-    def test_chart_aggregates_logbook_and_counter(self, authenticated_client):
+    def test_chart_counter_and_value(self, authenticated_client):
         from app.database import get_db
-        from app.models import Field, FieldLogEntry
+        from app.models import Field
         from app.widgets import fetch_widget_data
 
         db = next(get_db())
         try:
-            log = Field(name="Outcomes", slug="outcomes", field_type="logbook",
-                        config={"max_entries": 50}, state={})
             counter = Field(name="Hits", slug="hits", field_type="counter",
                             config={}, state={"value": 42})
-            db.add_all([log, counter])
-            db.flush()
-            now = datetime.now(timezone.utc)
-            db.add(FieldLogEntry(field_id=log.id, timestamp=now, value={"ok": 1}))
-            db.add(FieldLogEntry(field_id=log.id, timestamp=now, value={"ok": 1}))
+            val = Field(name="Latency", slug="latency", field_type="value",
+                        config={}, state={"value": "3.5"})
+            db.add_all([counter, val])
             db.commit()
             data = fetch_widget_data("chart", db, display="pie", widget_config={
                 "sources": [
-                    {"kind": "logbook", "field_id": log.id, "label": "Events", "agg": "count"},
-                    {"kind": "counter", "field_id": counter.id, "label": "Hits"},
+                    {"field_slug": "hits", "label": "Hits"},
+                    {"field_slug": "latency", "label": "Latency"},
                 ],
             })
-            assert data["labels"] == ["Events", "Hits"]
-            assert data["values"] == [2.0, 42.0]
+            assert data["labels"] == ["Hits", "Latency"]
+            assert data["values"] == [42.0, 3.5]
         finally:
             db.close()
 
@@ -1839,12 +2004,17 @@ class TestWidgetTransforms:
         try:
             data = fetch_widget_data("links", db, display="list", widget_config={
                 "items": [
-                    {"label": "Docs", "url": "https://example.com/docs"},
+                    {"label": "Docs", "url": "https://example.com/docs", "icon": "★"},
                     {"label": "Bad", "url": ""},
+                    {"label": "Local", "url": "ftp://files.example/x"},
                 ],
             })
-            assert len(data["items"]) == 1
+            assert len(data["items"]) == 2
             assert data["items"][0]["label"] == "Docs"
+            assert data["items"][0]["favicon"] == "https://example.com/favicon.ico"
+            assert "icon" not in data["items"][0]
+            assert data["items"][1]["label"] == "Local"
+            assert data["items"][1]["favicon"] == ""
         finally:
             db.close()
 
@@ -1858,12 +2028,11 @@ class TestWidgetTransforms:
             counter = Field(name="C", slug="c-bad-tog", field_type="counter", config={}, state={"value": 0})
             db.add(counter)
             db.commit()
-            cid = counter.id
         finally:
             db.close()
         widgets = [{
             "type": "display", "display": "toggle", "title": "Bad",
-            "config": {"field_id": cid, "style": "led"},
+            "config": {"field_slug": "c-bad-tog", "style": "led"},
         }]
         resp = authenticated_client.post(
             "/config/dashboard",
@@ -1884,27 +2053,238 @@ class TestWidgetTransforms:
             db.commit()
             data = fetch_widget_data(
                 "display", db, display="toggle",
-                widget_config={"field_id": field.id, "style": "led"},
+                widget_config={"field_slug": "up-style", "style": "led"},
             )
             assert data["value"] is True
             assert data["style"] == "led"
+            assert data["tone"] == "positive"
         finally:
             db.close()
+
+    def test_widget_tone_conditional(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout, Field
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            tog = Field(name="Tone Tog", slug="tone_tog", field_type="toggle", config={}, state={"value": False})
+            ctr = Field(name="Tone Ctr", slug="tonectr", field_type="counter", config={}, state={"value": -3})
+            db.add_all([tog, ctr])
+            db.commit()
+
+            off = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "tone_tog"},
+            )
+            assert off["tone"] == "negative"
+
+            kv_neg = fetch_widget_data(
+                "display", db, display="kv_text",
+                widget_config={
+                    "template": "{{ tonectr.value }}",
+                    "tone": "conditional",
+                    "tone_rules": [
+                        {"expr": "tonectr.value", "op": "lt", "compare": "0", "tone": "negative"},
+                        {"expr": "tonectr.value", "op": "gt", "compare": "0", "tone": "positive"},
+                    ],
+                },
+            )
+            assert kv_neg["display"] == "kv_text"
+            assert kv_neg["text"] == "-3"
+            assert kv_neg["tone"] == "negative"
+
+            none_cfg = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "tone_tog", "tone": "none"},
+            )
+            assert "tone" not in none_cfg
+
+            links = fetch_widget_data(
+                "links", db, display="list",
+                widget_config={
+                    "tone": "conditional",
+                    "items": [{"label": "Docs", "url": "https://example.com"}],
+                },
+            )
+            assert "tone" not in links  # no input condition
+
+            from app.models import FieldLogEntry
+            from datetime import datetime, timezone
+
+            lb = Field(name="Tone Log", slug="tonelog", field_type="logbook", config={}, state={})
+            db.add(lb)
+            db.flush()
+            db.add(FieldLogEntry(
+                field_id=lb.id,
+                timestamp=datetime.now(timezone.utc),
+                value={"code": -1},
+            ))
+            db.commit()
+            lb_tone = fetch_widget_data(
+                "display", db, display="logbook_list",
+                widget_config={
+                    "field_slug": "tonelog",
+                    "tone": "conditional",
+                    "tone_rules": [
+                        {"expr": "tonelog.code", "op": "lt", "compare": "0", "tone": "negative"},
+                        {"expr": "tonelog.code", "op": "gt", "compare": "0", "tone": "positive"},
+                    ],
+                },
+            )
+            assert lb_tone["tone"] == "negative"
+        finally:
+            db.close()
+
+        widgets = [
+            {
+                "type": "display", "display": "toggle", "title": "T",
+                "config": {"field_slug": "tone_tog", "tone": "conditional"},
+            },
+            {
+                "type": "display", "display": "toggle", "title": "Off bg",
+                "config": {"field_slug": "tone_tog", "tone": "none"},
+            },
+        ]
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = json.loads(layout.layout_config)["widgets"]
+            w_tog = saved[0]["id"]
+            w_none = saved[1]["id"]
+        finally:
+            db.close()
+
+        tog_html = authenticated_client.get(f"/widgets/display?id={w_tog}")
+        assert tog_html.status_code == 200
+        assert b"widget-tone--negative" in tog_html.content
+
+        none_html = authenticated_client.get(f"/widgets/display?id={w_none}")
+        assert none_html.status_code == 200
+        assert b"widget-tone--" not in none_html.content
+
+
+    def test_board_homogeneous(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout, Field
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            a = Field(name="Board Up", slug="board_up", field_type="toggle", config={}, state={"value": True})
+            b = Field(name="Board Ready", slug="board_ready", field_type="toggle", config={}, state={"value": False})
+            c = Field(name="Board Hits", slug="board_hits", field_type="counter", config={}, state={"value": 1000})
+            d = Field(name="Board Lag", slug="board_lag", field_type="counter", config={}, state={"value": 50})
+            db.add_all([a, b, c, d])
+            db.commit()
+
+            # Toggle board via field_slug cells
+            toggles = fetch_widget_data(
+                "display", db, display="board",
+                widget_config={
+                    "cell_kind": "toggle",
+                    "style": "led",
+                    "cells": [
+                        {"field_slug": "board_up"},
+                        {"field_slug": "board_ready"},
+                    ],
+                },
+            )
+            assert toggles["display"] == "board"
+            assert toggles["cell_kind"] == "toggle"
+            assert len(toggles["items"]) == 2
+            assert toggles["items"][0]["style"] == "led"
+            assert toggles["tone"] == "neutral"
+
+            # Per-cell transforms + per-field tone rules on kv board
+            stats = fetch_widget_data(
+                "display", db, display="board",
+                widget_config={
+                    "cell_kind": "kv_text",
+                    "style": "plain",
+                    "tone": "conditional",
+                    "cells": [
+                        {
+                            "field_slug": "board_hits",
+                            "template": "{{value}} k",
+                            "transform": [{"op": "div", "by": 1000}],
+                            "tone_rules": [
+                                {"expr": "value", "op": "gt", "compare": "0", "tone": "positive"},
+                            ],
+                        },
+                        {
+                            "field_slug": "board_lag",
+                            "template": "{{value}} ms",
+                            "transform": [{"op": "mul", "by": 2}],
+                            "tone_rules": [
+                                {"expr": "value", "op": "lt", "compare": "0", "tone": "negative"},
+                                {"expr": "value", "op": "gt", "compare": "0", "tone": "neutral"},
+                            ],
+                        },
+                    ],
+                },
+            )
+            assert len(stats["items"]) == 2
+            assert stats["items"][0]["text"].startswith("1") and "k" in stats["items"][0]["text"]
+            assert "100" in stats["items"][1]["text"] and "ms" in stats["items"][1]["text"]
+            assert stats["items"][0]["tone"] == "positive"
+            assert stats["items"][1]["tone"] == "neutral"
+            assert "tone" not in stats
+
+            # Template-only kv cell (no field_slug)
+            template_only = fetch_widget_data(
+                "display", db, display="board",
+                widget_config={
+                    "cell_kind": "kv_text",
+                    "cells": [{"template": "{{ board_hits.value }}"}],
+                },
+            )
+            assert template_only["items"][0]["text"] == "1000"
+            assert template_only["items"][0]["field_id"] is None
+        finally:
+            db.close()
+
+        widgets = [{
+            "type": "display", "display": "board", "title": "Board",
+            "config": {
+                "cell_kind": "toggle",
+                "style": "led",
+                "cells": [{"field_slug": "board_up"}, {"field_slug": "board_ready"}],
+            },
+        }]
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = json.loads(layout.layout_config)["widgets"][0]
+            assert saved["config"]["cells"][0]["field_slug"] == "board_up"
+            wid = saved["id"]
+        finally:
+            db.close()
+        html = authenticated_client.get(f"/widgets/display?id={wid}")
+        assert html.status_code == 200
+        assert b"widget-board" in html.content
+        assert b"Board Up" in html.content and b"Board Ready" in html.content
+        assert b"widget-tone--neutral" in html.content
 
 
 # ── Config: Secrets ──────────────────────────────────────────────────────────
 
 class TestSecretsCRUD:
-    def test_get_secrets_redirects_to_pipeline(self, authenticated_client):
-        resp = authenticated_client.get("/config/secrets", follow_redirects=False)
-        assert resp.status_code == 303
-        assert "/config/pipeline" in str(resp.headers.get("location", ""))
-
     def test_create_secret(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Sec Src", slug="sec-src")
         resp = authenticated_client.post(
             "/config/secrets",
-            data={"name": "API Key", "scoped_to_type": "source",
+            data={"scoped_to_type": "source",
                   "scoped_to_id": str(sid), "value": "supersecret"},
             follow_redirects=False,
         )
@@ -1914,7 +2294,7 @@ class TestSecretsCRUD:
     def test_create_secret_requires_fields(self, authenticated_client):
         resp = authenticated_client.post(
             "/config/secrets",
-            data={"name": "", "scoped_to_type": "source",
+            data={"scoped_to_type": "source",
                   "scoped_to_id": "", "value": ""},
             follow_redirects=False,
         )
@@ -1926,14 +2306,14 @@ class TestSecretsCRUD:
         sid, _ = _create_source(authenticated_client, name="Sec Persist", slug="sec-persist")
         authenticated_client.post(
             "/config/secrets",
-            data={"name": "Test Secret", "scoped_to_type": "source",
+            data={"scoped_to_type": "source",
                   "scoped_to_id": str(sid), "value": "password123"},
             follow_redirects=False,
         )
         from app.database import get_db
         db = next(get_db())
         try:
-            secret = db.query(Secret).filter(Secret.name == "Test Secret").first()
+            secret = db.query(Secret).filter(Secret.scoped_to_id == sid).first()
             assert secret is not None
             assert secret.scoped_to_id == sid
         finally:
@@ -1943,14 +2323,14 @@ class TestSecretsCRUD:
         sid, _ = _create_source(authenticated_client, name="Sec Del", slug="sec-del")
         authenticated_client.post(
             "/config/secrets",
-            data={"name": "ToDelete", "scoped_to_type": "source",
+            data={"scoped_to_type": "source",
                   "scoped_to_id": str(sid), "value": "pass"},
             follow_redirects=False,
         )
         from app.database import get_db
         db = next(get_db())
         try:
-            secret = db.query(Secret).filter(Secret.name == "ToDelete").first()
+            secret = db.query(Secret).filter(Secret.scoped_to_id == sid).first()
             assert secret is not None
             secret_id = secret.id
         finally:
@@ -1970,7 +2350,7 @@ class TestSecretsCRUD:
             data={
                 "name": "Secured Source", "source_type": "webhook",
                 "description": "",
-                "webhook_secret_name": "Hook Key", "webhook_secret_value": "abc123",
+                "webhook_secret_value": "abc123",
             },
             follow_redirects=False,
         )
@@ -1980,11 +2360,10 @@ class TestSecretsCRUD:
         try:
             src = db.query(Source).filter(Source.name == "Secured Source").first()
             assert src is not None
-            assert src.slug == "secured-source"
+            assert src.slug == "secured_source"
             assert src.webhook_secret_id is not None
             secret = db.query(Secret).filter(Secret.id == src.webhook_secret_id).first()
             assert secret is not None
-            assert secret.name == "Hook Key"
         finally:
             db.close()
 
@@ -2008,7 +2387,7 @@ class TestSecretsCRUD:
         try:
             src = db.query(Source).filter(Source.name == "Polled Source").first()
             assert src is not None
-            assert src.slug == "polled-source"
+            assert src.slug == "polled_source"
             assert src.source_type == "poll"
             sched = db.query(PollingSchedule).filter(
                 PollingSchedule.source_id == src.id,
@@ -2078,7 +2457,8 @@ class TestSystemPage:
         assert "Retained events" in resp.text
         assert "max 500 per source" in resp.text
         assert "Webhook accepts" in resp.text
-        assert "lifetime audit" in resp.text
+        assert "All time" in resp.text
+        assert "in the last hour" in resp.text
         assert "Active jobs" in resp.text
         assert "OK / Fail (lifetime)" in resp.text
         assert "Event Status" not in resp.text
@@ -2103,7 +2483,7 @@ class TestSystemPage:
             db.close()
         resp = authenticated_client.get("/system")
         assert resp.status_code == 200
-        assert "pending pipeline processing" in resp.text
+        assert "waiting to be processed" in resp.text
 
 
 # ── Cascade Delete ──────────────────────────────────────────────────────────
@@ -2114,7 +2494,7 @@ class TestCascadeDelete:
         sid, slug = _create_source(authenticated_client, name="Cascade Test", slug="cascade-test")
 
         authenticated_client.post(
-            f"/config/source/{sid}/event-types",
+            f"/config/pipeline/source/{sid}/events",
             data={"name": "child_event", "description": ""},
             follow_redirects=False,
         )
@@ -2130,11 +2510,15 @@ class TestCascadeDelete:
         resp = authenticated_client.post(f"/config/source/{sid}/delete", follow_redirects=False)
         assert resp.status_code == 303
 
-        # Verify redirect still works (source gone; page always redirects to pipeline)
-        resp = authenticated_client.get(
-            f"/config/source/{sid}/event-types", follow_redirects=False
-        )
-        assert resp.status_code == 303  # redirects to pipeline
+        from app.database import get_db
+        from app.models import EventTypeRecord, PollingSchedule, Source
+        db = next(get_db())
+        try:
+            assert db.query(Source).filter(Source.id == sid).first() is None
+            assert db.query(EventTypeRecord).filter(EventTypeRecord.source_id == sid).count() == 0
+            assert db.query(PollingSchedule).filter(PollingSchedule.source_id == sid).count() == 0
+        finally:
+            db.close()
 
     def test_source_delete_with_events_and_metrics(self, authenticated_client):
         """Deleting a source with events FK'd to event types must not IntegrityError."""
@@ -2237,7 +2621,7 @@ class TestWebhookPipeline:
 
             # Create a secret for the webhook
             sec = Secret(
-                name="webhook-secret", scoped_to_type="source",
+                scoped_to_type="source",
                 scoped_to_id=src.id, encrypted_value=encrypt_secret("mysecret")
             )
             db.add(sec)
@@ -2278,7 +2662,7 @@ class TestWebhookPipeline:
         try:
             src = db.query(Source).filter(Source.slug == slug).first()
             sec = Secret(
-                name="bad-secret", scoped_to_type="source",
+                scoped_to_type="source",
                 scoped_to_id=src.id, encrypted_value=encrypt_secret("correctkey")
             )
             db.add(sec)
@@ -2316,7 +2700,7 @@ class TestWebhookPipeline:
         try:
             src = db.query(Source).filter(Source.slug == slug).first()
             sec = Secret(
-                name="nots-secret", scoped_to_type="source",
+                scoped_to_type="source",
                 scoped_to_id=src.id, encrypted_value=encrypt_secret("mysecret"),
             )
             db.add(sec)
@@ -2352,7 +2736,7 @@ class TestWebhookPipeline:
         try:
             src = db.query(Source).filter(Source.slug == slug).first()
             sec = Secret(
-                name="strip-secret", scoped_to_type="source",
+                scoped_to_type="source",
                 scoped_to_id=src.id, encrypted_value=encrypt_secret("mysecret"),
             )
             db.add(sec)
@@ -2506,6 +2890,184 @@ class TestPipeline:
         finally:
             db.close()
 
+    def test_paused_event_type_skips_all_rules(self, authenticated_client):
+        """Paused event types still exist on the event, but evaluate_rules returns []."""
+        sid, slug = _create_source(authenticated_client, name="Pause ET Src", slug="pause-et-src")
+        from app.database import get_db
+        from app.models import EventTypeRecord, Rule, Event
+        db = next(get_db())
+        try:
+            et = EventTypeRecord(source_id=sid, name="order.paid", enabled=True)
+            db.add(et)
+            db.commit()
+            db.refresh(et)
+
+            rule = Rule(
+                source_id=sid, event_type_ids=[et.id],
+                conditions={}, action_ids=[], order_index=0, enabled=True,
+            )
+            catch_all = Rule(
+                source_id=sid, event_type_ids=[],
+                conditions={}, action_ids=[], order_index=1, enabled=True,
+            )
+            db.add_all([rule, catch_all])
+            db.commit()
+
+            event = Event(
+                source_id=sid, event_type_id=et.id,
+                normalized_data={"ok": True}, raw_payload="{}", correlation_id="pause-et",
+            )
+            db.add(event)
+            db.commit()
+
+            from app.pipeline import evaluate_rules
+            assert len(evaluate_rules(db, event)) == 2
+
+            et.enabled = False
+            db.commit()
+            assert evaluate_rules(db, event) == []
+        finally:
+            db.close()
+
+    def test_toggle_event_type_persists_and_flips_label(self, authenticated_client):
+        sid, slug = _create_source(authenticated_client, name="Toggle ET", slug="toggle-et")
+        from app.database import get_db
+        from app.models import EventTypeRecord
+        db = next(get_db())
+        try:
+            et = EventTypeRecord(source_id=sid, name="ping", enabled=True)
+            db.add(et)
+            db.commit()
+            db.refresh(et)
+            et_id = et.id
+        finally:
+            db.close()
+
+        resp = authenticated_client.post(
+            f"/config/event-type/{et_id}/toggle",
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 200
+        assert "Activate" in resp.text
+        assert "Paused" in resp.text
+
+        db = next(get_db())
+        try:
+            et = db.query(EventTypeRecord).filter(EventTypeRecord.id == et_id).first()
+            assert et.enabled is False
+        finally:
+            db.close()
+
+        resp = authenticated_client.post(
+            f"/config/event-type/{et_id}/toggle",
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 200
+        assert "Pause" in resp.text
+
+    def test_toggle_rule_skips_evaluate_rules(self, authenticated_client):
+        sid, slug = _create_source(authenticated_client, name="Toggle Rule Src", slug="toggle-rule-src")
+        from app.database import get_db
+        from app.models import Rule, Event
+        db = next(get_db())
+        try:
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[], order_index=0, enabled=True,
+            )
+            db.add(rule)
+            db.commit()
+            db.refresh(rule)
+            rule_id = rule.id
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={}, raw_payload="{}", correlation_id="toggle-rule",
+            )
+            db.add(event)
+            db.commit()
+
+            from app.pipeline import evaluate_rules
+            assert len(evaluate_rules(db, event)) == 1
+        finally:
+            db.close()
+
+        resp = authenticated_client.post(
+            f"/config/rule/{rule_id}/toggle",
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 200
+        assert "Activate" in resp.text
+
+        db = next(get_db())
+        try:
+            event = db.query(Event).filter(Event.correlation_id == "toggle-rule").first()
+            from app.pipeline import evaluate_rules
+            assert evaluate_rules(db, event) == []
+            rule = db.query(Rule).filter(Rule.id == rule_id).first()
+            assert rule.enabled is False
+        finally:
+            db.close()
+
+    def test_toggle_action_skips_dispatch(self, authenticated_client, caplog):
+        sid, slug = _create_source(authenticated_client, name="Toggle Act Src", slug="toggle-act-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field, FieldLogEntry
+        import logging
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Toggle Act Log", slug="toggle-act-log", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.commit()
+
+            action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id}, enabled=True,
+            )
+            db.add(action)
+            db.commit()
+            db.refresh(action)
+            action_id = action.id
+            field_id = field.id
+
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[action.id], order_index=0, enabled=True,
+            )
+            db.add(rule)
+            db.commit()
+        finally:
+            db.close()
+
+        resp = authenticated_client.post(
+            f"/config/action/{action_id}/toggle",
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 200
+        assert "Activate" in resp.text
+
+        db = next(get_db())
+        try:
+            action = db.query(ActionInstance).filter(ActionInstance.id == action_id).first()
+            assert action.enabled is False
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"msg": "x"}, raw_payload="{}", correlation_id="toggle-act",
+            )
+            db.add(event)
+            db.commit()
+
+            from app.pipeline import evaluate_and_dispatch
+            with caplog.at_level(logging.INFO, logger="para_scope.pipeline"):
+                evaluate_and_dispatch(db, event)
+            assert db.query(FieldLogEntry).filter(FieldLogEntry.field_id == field_id).count() == 0
+        finally:
+            db.close()
+
     def test_dispatches_log_action(self, authenticated_client, caplog):
         """Log action appends to a logbook Field."""
         sid, slug = _create_source(authenticated_client, name="Log Action Source", slug="log-action-src")
@@ -2552,7 +3114,7 @@ class TestPipeline:
             db.close()
 
     def test_field_push_counter(self, authenticated_client):
-        """field_push increment creates MetricPoint records on a counter Field."""
+        """field_push increment updates counter state only (no MetricPoint history)."""
         sid, slug = _create_source(authenticated_client, name="Metric Source", slug="metric-src")
         from app.database import get_db
         from app.models import ActionInstance, Rule, Event, MetricPoint, Field
@@ -2579,11 +3141,9 @@ class TestPipeline:
             db.commit()
             from app.pipeline import evaluate_and_dispatch
             evaluate_and_dispatch(db, event)
-            mp = db.query(MetricPoint).filter(
+            assert db.query(MetricPoint).filter(
                 MetricPoint.source_id == sid, MetricPoint.field_id == field.id,
-            ).first()
-            assert mp is not None
-            assert mp.value == 1.0
+            ).count() == 0
             db.refresh(field)
             assert field.state["value"] == 1.0
         finally:
@@ -2810,7 +3370,7 @@ class TestPipeline:
             db.expire_all()
             ev = db.query(Event).filter(Event.correlation_id == "bad").first()
             assert ev.status == "failed"
-            assert "Could not resolve numeric value" in (ev.processing_error or "")
+            assert "Couldn’t find number" in (ev.processing_error or "")
         finally:
             db.close()
 
@@ -2838,7 +3398,7 @@ class TestPipeline:
             db.expire_all()
             ev = db.query(Event).filter(Event.correlation_id == "nof").first()
             assert ev.status == "failed"
-            assert "field_id" in (ev.processing_error or "")
+            assert "missing a field" in (ev.processing_error or "")
         finally:
             db.close()
 
@@ -2890,6 +3450,148 @@ class TestPipeline:
         assert evaluate_conditions(event, {"amount": {"eq": 5}}) is False
         assert evaluate_conditions(event, {"amount": {}}) is False
 
+    def test_conditions_star_any_item(self, authenticated_client):
+        from app.models import Event
+        from app.pipeline import evaluate_conditions
+        event = Event(
+            source_id=1,
+            normalized_data={"data": [{"status": "ok"}, {"status": "fail"}]},
+            raw_payload="{}",
+        )
+        assert evaluate_conditions(event, {"data.*.status": "fail"}) is True
+        assert evaluate_conditions(event, {"data.*.status": "pending"}) is False
+        assert evaluate_conditions(event, {"data.*.status": "ok"}) is True
+        empty = Event(source_id=1, normalized_data={"data": []}, raw_payload="{}")
+        assert evaluate_conditions(empty, {"data.*.status": "fail"}) is False
+        not_list = Event(source_id=1, normalized_data={"data": {"status": "fail"}}, raw_payload="{}")
+        assert evaluate_conditions(not_list, {"data.*.status": "fail"}) is False
+
+    def test_conditions_star_correlated_and(self, authenticated_client):
+        from app.models import Event
+        from app.pipeline import evaluate_conditions
+        same_row = Event(
+            source_id=1,
+            normalized_data={
+                "data": [
+                    {"base": "EUR", "quote": "ZAR"},
+                    {"base": "USD", "quote": "ZAR"},
+                ]
+            },
+            raw_payload="{}",
+        )
+        assert evaluate_conditions(
+            same_row, {"data.*.base": "USD", "data.*.quote": "ZAR"}
+        ) is True
+        split_rows = Event(
+            source_id=1,
+            normalized_data={
+                "data": [
+                    {"base": "USD", "quote": "EUR"},
+                    {"base": "EUR", "quote": "ZAR"},
+                ]
+            },
+            raw_payload="{}",
+        )
+        assert evaluate_conditions(
+            split_rows, {"data.*.base": "USD", "data.*.quote": "ZAR"}
+        ) is False
+
+    def test_conditions_star_with_plain(self, authenticated_client):
+        from app.models import Event
+        from app.pipeline import evaluate_conditions
+        event = Event(
+            source_id=1,
+            normalized_data={
+                "source": "fx",
+                "data": [{"base": "USD", "quote": "ZAR"}],
+            },
+            raw_payload="{}",
+        )
+        assert evaluate_conditions(
+            event, {"source": "fx", "data.*.base": "USD", "data.*.quote": "ZAR"}
+        ) is True
+        assert evaluate_conditions(
+            event, {"source": "other", "data.*.base": "USD"}
+        ) is False
+
+    def test_match_conditions_star_bindings(self, authenticated_client):
+        from app.pipeline import match_conditions
+
+        data = {
+            "value": [
+                {"base": "EUR", "quote": "AED", "rate": 4.1},
+                {"base": "EUR", "quote": "ZAR", "rate": 19.5},
+                {"base": "USD", "quote": "ZAR", "rate": 18.0},
+            ]
+        }
+        ok, bindings = match_conditions(
+            data, {"value.*.base": "EUR", "value.*.quote": "ZAR"}
+        )
+        assert ok is True
+        assert bindings == {"value": 1}
+        from app.fields import get_by_path
+        assert get_by_path(data, "value.*.rate", star_bindings=bindings) == 19.5
+
+    def test_star_binding_applies_to_field_push(self, authenticated_client):
+        """Rule * conditions bind action value_key * to the matched row."""
+        from app.database import SessionLocal
+        from app.models import Field, Source, EventTypeRecord, Rule, ActionInstance, Event
+        from app.pipeline import evaluate_and_dispatch
+
+        db = SessionLocal()
+        try:
+            field = Field(
+                name="zar-rate",
+                slug="zar-rate-bind",
+                field_type="value",
+                config={},
+                state={"value": ""},
+            )
+            src = Source(
+                name="FX", slug="fx-bind", source_type="webhook", enabled=True
+            )
+            db.add_all([field, src])
+            db.flush()
+            et = EventTypeRecord(source_id=src.id, name="on_success")
+            db.add(et)
+            db.flush()
+            action = ActionInstance(
+                action_type="field_push",
+                source_id=src.id,
+                config={"field_id": field.id, "value_key": "value.*.rate"},
+                enabled=True,
+            )
+            db.add(action)
+            db.flush()
+            rule = Rule(
+                source_id=src.id,
+                event_type_ids=[et.id],
+                conditions={"value.*.base": "EUR", "value.*.quote": "ZAR"},
+                action_ids=[action.id],
+                enabled=True,
+            )
+            db.add(rule)
+            event = Event(
+                source_id=src.id,
+                event_type_id=et.id,
+                correlation_id="fx-bind-1",
+                raw_payload="{}",
+                normalized_data={
+                    "value": [
+                        {"base": "EUR", "quote": "AED", "rate": 4.1},
+                        {"base": "EUR", "quote": "ZAR", "rate": 19.5},
+                    ]
+                },
+                status="pending",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            db.refresh(field)
+            assert field.state.get("value") == "19.5"
+        finally:
+            db.close()
+
 
 # ── Webhook Replay & Size Tests ─────────────────────────────────────────────
 
@@ -2916,7 +3618,7 @@ class TestWebhookReplaySize:
         try:
             src = db.query(Source).filter(Source.slug == slug).first()
             sec = Secret(
-                name="gone", scoped_to_type="source",
+                scoped_to_type="source",
                 scoped_to_id=src.id, encrypted_value=encrypt_secret("x"),
             )
             db.add(sec)
@@ -2970,7 +3672,7 @@ class TestWebhookReplaySize:
         try:
             src = db.query(Source).filter(Source.slug == slug).first()
             sec = Secret(
-                name="dup-secret", scoped_to_type="source",
+                scoped_to_type="source",
                 scoped_to_id=src.id, encrypted_value=encrypt_secret("mysecret")
             )
             db.add(sec)
@@ -3133,8 +3835,8 @@ class TestWebhookReplaySize:
             ev = db.query(Event).filter(Event.id == event.id).first()
             assert ev.status == "failed"
             # Should have 3 attempts (1 original + 2 retries)
-            assert "Attempt 1:" in ev.processing_error
-            assert "Attempt 3:" in ev.processing_error
+            assert "Try 1:" in ev.processing_error
+            assert "Try 3:" in ev.processing_error
         finally:
             db.close()
 
@@ -3145,19 +3847,31 @@ class TestMetricGraphRange:
     def test_series_respects_range_hours(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Graph Src", slug="graph-src")
         from app.database import get_db
-        from app.models import MetricPoint
+        from app.models import Field, FieldLogEntry
         from app.widgets import fetch_widget_data
         db = next(get_db())
         try:
+            field = Field(
+                name="Latency Hours", slug="latency-hours", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.flush()
             old = datetime.now(timezone.utc) - timedelta(hours=48)
             recent = datetime.now(timezone.utc) - timedelta(minutes=30)
-            db.add(MetricPoint(source_id=sid, name="latency", value=1.0, timestamp=old))
-            db.add(MetricPoint(source_id=sid, name="latency", value=2.0, timestamp=recent))
+            db.add(FieldLogEntry(
+                field_id=field.id, source_id=sid, timestamp=old, value={"ms": 1.0},
+            ))
+            db.add(FieldLogEntry(
+                field_id=field.id, source_id=sid, timestamp=recent, value={"ms": 2.0},
+            ))
             db.commit()
             data = fetch_widget_data(
                 "series", db, display="line",
-                widget_config={"metric_name": "latency", "range_hours": 24},
-                source_id=sid,
+                widget_config={
+                    "sources": [{"field_slug": "latency-hours.ms"}],
+                    "range_hours": 24,
+                },
             )
             assert len(data["series"]) == 1
             assert data["series"][0]["points"][0]["v"] == 2.0
@@ -3167,26 +3881,32 @@ class TestMetricGraphRange:
     def test_series_respects_range_entries(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Graph Entries Src", slug="graph-entries-src")
         from app.database import get_db
-        from app.models import MetricPoint
+        from app.models import Field, FieldLogEntry
         from app.widgets import fetch_widget_data
         db = next(get_db())
         try:
+            field = Field(
+                name="Latency Entries", slug="latency-entries", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.flush()
             now = datetime.now(timezone.utc)
             for i, hours_ago in enumerate((72, 48, 24, 2, 1)):
-                db.add(MetricPoint(
-                    source_id=sid, name="latency", value=float(i + 1),
+                db.add(FieldLogEntry(
+                    field_id=field.id, source_id=sid,
                     timestamp=now - timedelta(hours=hours_ago),
+                    value={"ms": float(i + 1)},
                 ))
             db.commit()
             data = fetch_widget_data(
                 "series", db, display="line",
                 widget_config={
-                    "metric_name": "latency",
+                    "sources": [{"field_slug": "latency-entries.ms"}],
                     "range_mode": "entries",
                     "range_entries": 2,
                     "range_hours": 1,
                 },
-                source_id=sid,
             )
             assert data["range_mode"] == "entries"
             assert len(data["series"]) == 1
@@ -3194,54 +3914,80 @@ class TestMetricGraphRange:
         finally:
             db.close()
 
-    def test_series_by_field_id(self, authenticated_client):
+    def test_series_by_field_slug(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Graph Field Src", slug="graph-field-src")
         from app.database import get_db
-        from app.models import MetricPoint, Field
+        from app.models import Field, FieldLogEntry
         from app.widgets import fetch_widget_data
         db = next(get_db())
         try:
             field = Field(
-                name="latency", slug="latency", field_type="counter",
-                config={}, state={"value": 2},
+                name="Latency By Slug", slug="latency-by-slug", field_type="logbook",
+                config={"max_entries": 50}, state={},
             )
             db.add(field)
             db.commit()
             recent = datetime.now(timezone.utc) - timedelta(minutes=30)
-            db.add(MetricPoint(
-                source_id=sid, field_id=field.id, name="latency",
-                value=2.0, timestamp=recent,
+            db.add(FieldLogEntry(
+                field_id=field.id, source_id=sid, timestamp=recent, value={"ms": 2.0},
             ))
             db.commit()
             data = fetch_widget_data(
                 "series", db, display="line",
-                widget_config={"field_id": field.id, "range_hours": 24},
+                widget_config={
+                    "sources": [{"field_slug": "latency-by-slug.ms"}],
+                    "range_hours": 24,
+                },
             )
-            assert data["name"] == "latency"
+            assert data["name"] == "Latency By Slug"
             assert len(data["series"]) == 1
             assert data["series"][0]["points"][0]["v"] == 2.0
+        finally:
+            db.close()
+
+    def test_series_rejects_counter_field(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Hits Only", slug="hits-only", field_type="counter",
+                config={}, state={"value": 9},
+            )
+            db.add(field)
+            db.commit()
+            data = fetch_widget_data(
+                "series", db, display="line",
+                widget_config={
+                    "sources": [{"field_slug": "hits-only.value"}],
+                    "range_hours": 24,
+                },
+            )
+            assert data.get("error")
+            assert "logbook" in data["error"].lower()
         finally:
             db.close()
 
     def test_series_multi_sources(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Multi Series Src", slug="multi-series-src")
         from app.database import get_db
-        from app.models import MetricPoint, Field
+        from app.models import Field, FieldLogEntry
         from app.widgets import fetch_widget_data
         db = next(get_db())
         try:
-            a = Field(name="A", slug="ser-a", field_type="counter", config={}, state={"value": 1})
-            b = Field(name="B", slug="ser-b", field_type="counter", config={}, state={"value": 2})
+            a = Field(name="A", slug="ser-a", field_type="logbook", config={"max_entries": 50}, state={})
+            b = Field(name="B", slug="ser-b", field_type="logbook", config={"max_entries": 50}, state={})
             db.add_all([a, b])
             db.commit()
             now = datetime.now(timezone.utc)
-            db.add(MetricPoint(source_id=sid, field_id=a.id, name="A", value=1.0, timestamp=now))
-            db.add(MetricPoint(source_id=sid, field_id=b.id, name="B", value=2.0, timestamp=now))
+            db.add(FieldLogEntry(field_id=a.id, source_id=sid, timestamp=now, value={"v": 1.0}))
+            db.add(FieldLogEntry(field_id=b.id, source_id=sid, timestamp=now, value={"v": 2.0}))
             db.commit()
             data = fetch_widget_data("series", db, display="line", widget_config={
                 "sources": [
-                    {"field_id": a.id, "label": "Alpha"},
-                    {"field_id": b.id, "label": "Beta"},
+                    {"field_slug": "ser-a.v", "label": "Alpha"},
+                    {"field_slug": "ser-b.v", "label": "Beta"},
                 ],
                 "range_hours": 24,
             })
@@ -3400,7 +4146,7 @@ class TestFields:
 
         page = authenticated_client.get("/config/pipeline")
         assert "Errors" in page.text
-        assert "logbook" in page.text
+        assert "Logbook" in page.text
 
         resp = authenticated_client.post(
             f"/config/pipeline/field/{fid}",
@@ -3550,7 +4296,7 @@ class TestFields:
             db.expire_all()
             field = db.query(Field).filter(Field.id == fid).first()
             assert field.state["value"] == 3
-            assert db.query(MetricPoint).filter(MetricPoint.field_id == fid).count() == 3
+            assert db.query(MetricPoint).filter(MetricPoint.field_id == fid).count() == 0
         finally:
             db.close()
 
@@ -3561,11 +4307,11 @@ class TestFields:
         db = next(get_db())
         try:
             counter = Field(
-                name="Widget Counter", slug="widget-counter", field_type="counter",
+                name="Widget Counter", slug="widget_counter", field_type="counter",
                 config={}, state={"value": 7},
             )
             logbook = Field(
-                name="Widget Log", slug="widget-log", field_type="logbook",
+                name="Widget Log", slug="widget_log", field_type="logbook",
                 config={"max_entries": 10}, state={},
             )
             db.add_all([counter, logbook])
@@ -3573,11 +4319,17 @@ class TestFields:
             db.add(FieldLogEntry(field_id=logbook.id, value="hello"))
             db.commit()
 
-            vdata = fetch_widget_data("display", db, display="stat", widget_config={"field_id": counter.id})
-            assert vdata["value"] == 7
-            assert vdata["name"] == "Widget Counter"
+            vdata = fetch_widget_data(
+                "display", db, display="kv_text",
+                widget_config={"template": "{{ widget_counter.value }}"},
+            )
+            assert vdata["display"] == "kv_text"
+            assert vdata["text"] == "7"
 
-            ldata = fetch_widget_data("display", db, display="logbook_list", widget_config={"field_id": logbook.id})
+            ldata = fetch_widget_data(
+                "display", db, display="logbook_list",
+                widget_config={"field_slug": "widget_log"},
+            )
             assert ldata["name"] == "Widget Log"
             assert len(ldata["entries"]) == 1
             assert ldata["entries"][0]["value"] == "hello"
@@ -3593,21 +4345,23 @@ class TestFields:
         try:
             src = Source(name="MS", slug="ms-summary", source_type="webhook", enabled=True)
             counter = Field(
-                name="Hits", slug="ms-hits", field_type="counter",
+                name="Summary Hits", slug="ms-hits", field_type="counter",
                 config={}, state={"value": 3},
             )
             db.add_all([src, counter])
             db.flush()
             now = datetime.now(timezone.utc)
-            db.add(MetricPoint(source_id=src.id, field_id=counter.id, name="Hits", value=3.0, timestamp=now))
+            db.add(MetricPoint(source_id=src.id, field_id=counter.id, name="Summary Hits", value=3.0, timestamp=now))
             db.add(MetricPoint(source_id=src.id, name="latency", value=1.5, timestamp=now))
             db.commit()
 
-            data = fetch_widget_data("system", db, display="metric_summary", widget_config={})
+            data = fetch_widget_data(
+                "system", db, display="metric_summary", widget_config={}, source_id=src.id,
+            )
             assert data["series"] == 2
             assert data["points"] == 2
             assert data["last_hour"] == 2
-            assert {"name": "Hits", "value": 3.0} in data["counters"]
+            assert {"name": "Summary Hits", "value": 3.0} in data["counters"]
         finally:
             db.close()
 

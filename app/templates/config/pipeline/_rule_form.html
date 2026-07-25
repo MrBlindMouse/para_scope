@@ -19,7 +19,7 @@
       Event Types
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About event types on rules"
-              data-tip="Hold Ctrl/Cmd for multiple. Empty = all events for this source. Use Add rule on an event to pre-select it.">?</button>
+              data-tip="Select one or more (Ctrl/Cmd). Leave empty to match all events from this source.">?</button>
     </span>
     <select name="event_type_ids" class="input" multiple size="4" autofocus>
       {% for et in event_types %}
@@ -31,10 +31,10 @@
 
   <label class="stack">
     <span class="field-label">
-      Order Index
+      Priority
       <button type="button" class="field-tip" tabindex="0"
-              aria-label="About order index"
-              data-tip="Lower numbers run first when several rules match the same event. All matching rules still run — this only sets order.">?</button>
+              aria-label="About priority"
+              data-tip="Lower numbers run first when several rules match. All matching rules still run.">?</button>
     </span>
     <input name="order_index" type="number" min="0"
            value="{{ rule.order_index if is_edit else 0 }}" class="input">

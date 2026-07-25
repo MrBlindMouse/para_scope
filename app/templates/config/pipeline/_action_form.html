@@ -29,11 +29,11 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About action types"
-              data-tip="field_push: write into a Field. web_push: Title/Body with {{ '{{source}}' }} placeholders. http_forward: POST event JSON to a URL (optional secrets).">?</button>
+              data-tip="Update field: change a stored Field. Notify: title/body can include {{ '{{source}}' }}. Call URL: send the event to another service.">?</button>
     </span>
     <select name="action_type" class="input" id="action-type-select">
       {% for t in action_types %}
-        <option value="{{ t }}" {% if is_edit and action.action_type == t %}selected{% elif not is_edit and t == 'field_push' %}selected{% endif %}>{{ t }}</option>
+        <option value="{{ t }}" {% if is_edit and action.action_type == t %}selected{% elif not is_edit and t == 'field_push' %}selected{% endif %}>{{ t | action_type_label }}</option>
       {% endfor %}
     </select>
   </label>
@@ -48,7 +48,7 @@
           <option value="{{ f.id }}"
                   data-field-type="{{ f.field_type }}"
                   {% if cfg.get('field_id') == f.id %}selected{% endif %}>
-            {{ f.name }} ({{ f.field_type }})
+            {{ f.name }} ({{ f.field_type | field_type_label }})
           </option>
         {% endfor %}
       </select>
@@ -59,18 +59,18 @@
       <label class="stack">
         Value source
         <select name="logbook_mode" class="input" id="logbook-mode">
-          <option value="event" {% if 'value' not in cfg and not cfg.get('value_key') %}selected{% endif %}>Whole event</option>
-          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Event key</option>
-          <option value="literal" {% if 'value' in cfg and not cfg.get('value_key') %}selected{% endif %}>Literal</option>
+          <option value="event" {% if 'value' not in cfg and not cfg.get('value_key') %}selected{% endif %}>Entire event</option>
+          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Value from event</option>
+          <option value="literal" {% if 'value' in cfg and not cfg.get('value_key') %}selected{% endif %}>Fixed text</option>
         </select>
       </label>
       <label class="stack" id="logbook-key-wrap" hidden>
-        Event key
+        Value from event
         <input name="value_key" type="text" class="input" id="logbook-value-key"
-               value="{{ cfg.get('value_key') or '' }}" placeholder="status or _poll.outcome">
+               value="{{ cfg.get('value_key') or '' }}" placeholder="status">
       </label>
       <label class="stack" id="logbook-literal-wrap" hidden>
-        Literal value
+        Fixed text
         <input name="value" type="text" class="input" id="logbook-value"
                value="{% if 'value' in cfg and not cfg.get('value_key') %}{{ cfg.get('value') }}{% endif %}">
       </label>
@@ -87,13 +87,13 @@
       </label>
       <label class="stack" id="counter-delta-wrap">
         <span class="field-label">
-          Delta
+          Amount
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="number or event key, default 1">?</button>
+                  data-tip="Number or event field; default 1">?</button>
         </span>
         <input name="delta" type="text" class="input"
                value="{% if cfg.get('delta') is not none %}{{ cfg.get('delta') }}{% endif %}"
-               placeholder="1 or _poll.response_time_ms">
+               placeholder="1">
       </label>
     </div>
 
@@ -101,8 +101,8 @@
       <label class="stack">
         Value source
         <select name="value_mode" class="input" id="value-mode">
-          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Literal string</option>
-          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Event key</option>
+          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Fixed text</option>
+          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Value from event</option>
         </select>
       </label>
       <label class="stack" id="value-literal-wrap">
@@ -111,9 +111,9 @@
                value="{% if not cfg.get('value_key') and 'value' in cfg %}{{ cfg.get('value') }}{% endif %}">
       </label>
       <label class="stack" id="value-key-wrap" hidden>
-        Event key
+        Value from event
         <input name="value_key" type="text" class="input" id="value-value-key"
-               value="{{ cfg.get('value_key') or '' }}" placeholder="_poll.response_time_ms">
+               value="{{ cfg.get('value_key') or '' }}" placeholder="status">
       </label>
     </div>
 
@@ -121,21 +121,21 @@
       <label class="stack">
         Value source
         <select name="toggle_mode" class="input" id="toggle-mode">
-          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Literal</option>
-          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Event key</option>
+          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Fixed</option>
+          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Value from event</option>
         </select>
       </label>
       <label class="stack" id="toggle-literal-wrap">
-        Bool
+        State
         <select name="toggle_value" class="input">
-          <option value="true" {% if cfg.get('value') is true %}selected{% endif %}>true</option>
-          <option value="false" {% if cfg.get('value') is not true %}selected{% endif %}>false</option>
+          <option value="true" {% if cfg.get('value') is true %}selected{% endif %}>On</option>
+          <option value="false" {% if cfg.get('value') is not true %}selected{% endif %}>Off</option>
         </select>
       </label>
       <label class="stack" id="toggle-key-wrap" hidden>
-        Event key
+        Value from event
         <input name="value_key" type="text" class="input" id="toggle-value-key"
-               value="{{ cfg.get('value_key') or '' }}" placeholder="ok or _poll.outcome">
+               value="{{ cfg.get('value_key') or '' }}" placeholder="ok">
       </label>
     </div>
   </div>
@@ -185,40 +185,51 @@
       <input name="timeout_seconds" type="number" class="input" min="1"
              value="{{ cfg.get('timeout_seconds') or '' }}" placeholder="30">
     </label>
+
+    <fieldset class="stack" id="http-body-section">
+      <legend>Body</legend>
+      <label class="stack">
+        Mode
+        <select name="body_mode" class="input" id="http-body-mode">
+          <option value="auto" {% if not cfg.get('body_mode') or cfg.get('body_mode') == 'auto' %}selected{% endif %}>Event envelope (default)</option>
+          <option value="custom" {% if cfg.get('body_mode') == 'custom' %}selected{% endif %}>Custom JSON</option>
+        </select>
+      </label>
+      <label class="stack" id="http-body-custom-wrap" hidden>
+        <span class="field-label">
+          Custom JSON body
+          <button type="button" class="field-tip" tabindex="0"
+                  aria-label="About body placeholders"
+                  data-tip="Use {{ '{{source}}' }} and dotted paths like {{ '{{_poll.attempts}}' }} to insert event values.">?</button>
+        </span>
+        <textarea name="custom_body" class="input" id="http-custom-body" rows="6" placeholder='&#123;&#10;  "source": "&#123;&#123; source &#125;&#125;",&#10;  "data": "&#123;&#123; _poll.attempts &#125;&#125;"&#10;&#125;'>{{ cfg.get('custom_body') or '' }}</textarea>
+      </label>
+    </fieldset>
+
     <label class="stack">
-      Auth
+      Authentication
       <select name="auth_mode" class="input" id="auth-mode">
-        <option value="none" {% if cfg.get('auth_mode') == 'none' %}selected{% endif %}>None</option>
-        <option value="bearer" {% if (cfg.get('auth_mode') or 'bearer') == 'bearer' and cfg.get('auth_mode') != 'none' and cfg.get('auth_mode') != 'key_secret' %}selected{% endif %}>Bearer token</option>
-        <option value="key_secret" {% if cfg.get('auth_mode') == 'key_secret' %}selected{% endif %}>Key + Secret</option>
+        <option value="none" {% if cfg.get('auth_mode') == 'none' %}selected{% elif not cfg.get('auth_mode') %}selected{% else %}selected{% endif %}>None</option>
+        <option value="bearer" {% if cfg.get('auth_mode') == 'bearer' %}selected{% endif %}>Bearer token (Authorization header)</option>
+        <option value="key_secret" {% if cfg.get('auth_mode') == 'key_secret' %}selected{% endif %}>API key + secret (custom headers)</option>
       </select>
     </label>
 
     <fieldset class="stack" id="http-secrets">
       <legend>Credentials</legend>
       {% if is_edit and action.secret %}
-      <p class="text-muted">Current: {{ action.secret.name }}. Leave value blank to keep.</p>
+      <p class="text-muted">Leave value blank to keep.</p>
       {% endif %}
-      <label class="stack" id="secret-primary-wrap">
-        <span id="secret-primary-label">Secret name</span>
-        <input name="secret_name" type="text" class="input" placeholder="API token"
-               value="{{ action.secret.name if is_edit and action.secret else '' }}">
-      </label>
       <label class="stack">
-        Secret value
-        <input name="secret_value" type="password" class="input" autocomplete="new-password">
+        Value
+        <input name="secret_value" type="password" class="input" autocomplete="new-password" placeholder="{{ 'Bearer token' if not is_edit or cfg.get('auth_mode') == 'bearer' else 'API key value' }}">
       </label>
       <div id="secret-secondary-wrap" class="stack" hidden>
         {% if is_edit and action.secret_2 %}
-        <p class="text-muted">Current secret 2: {{ action.secret_2.name }}.</p>
+        <p class="text-muted">Leave values blank to keep.</p>
         {% endif %}
         <label class="stack">
-          API secret name
-          <input name="secret2_name" type="text" class="input"
-                 value="{{ action.secret_2.name if is_edit and action.secret_2 else '' }}">
-        </label>
-        <label class="stack">
-          API secret value
+          Secret
           <input name="secret2_value" type="password" class="input" autocomplete="new-password">
         </label>
         <label class="stack">
@@ -322,8 +333,15 @@
     var m = authMode.value;
     httpSecrets.hidden = m === "none";
     secretSecondary.hidden = m !== "key_secret";
-    var label = document.getElementById("secret-primary-label");
-    if (label) label.textContent = m === "key_secret" ? "API key name" : "Secret name";
+    // Update placeholder on the value input to hint what goes in
+    var valInput = httpSecrets.querySelector("input[name='secret_value']");
+    if (valInput) valInput.placeholder = m === "key_secret" ? "API key value" : "Bearer token";
+  }
+  function syncBodyMode() {
+    var mode = document.getElementById("http-body-mode");
+    var wrap = document.getElementById("http-body-custom-wrap");
+    if (!mode || !wrap) return;
+    wrap.hidden = mode.value !== "custom";
   }
   function sync() {
     var t = typeSel.value;
@@ -344,7 +362,7 @@
       });
     });
     if (t === "field_push") syncFieldParams();
-    if (t === "http_forward") syncAuth();
+    if (t === "http_forward") { syncAuth(); syncBodyMode(); }
   }
 
   if (typeSel) typeSel.addEventListener("change", sync);
@@ -358,6 +376,8 @@
   var co = document.getElementById("counter-op");
   if (co) co.addEventListener("change", syncCounterOp);
   if (authMode) authMode.addEventListener("change", syncAuth);
+  var bm = document.getElementById("http-body-mode");
+  if (bm) bm.addEventListener("change", syncBodyMode);
   sync();
 })();
 </script>

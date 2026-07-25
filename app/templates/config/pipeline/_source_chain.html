@@ -70,10 +70,13 @@
       {% if event_types %}
         <ul class="pipeline-chain__list">
           {% for et in event_types %}
-          <li class="pipeline-event">
+          <li class="pipeline-event{% if not et.enabled %} pipeline-event--paused{% endif %}">
             <div class="pipeline-event__main">
               <span class="pipeline-chip">
                 {{ et.name }}
+                {% if not et.enabled %}
+                  <span class="pipeline-chain__status">Paused</span>
+                {% endif %}
                 {% if et.description %}
                   <span class="text-muted">— {{ et.description[:48] }}{% if et.description|length > 48 %}…{% endif %}</span>
                 {% endif %}
@@ -100,6 +103,13 @@
                         hx-swap="innerHTML">
                   Add rule
                 </button>
+                <form method="post" action="/config/event-type/{{ et.id }}/toggle"
+                      hx-post="/config/event-type/{{ et.id }}/toggle"
+                      hx-target="#source-chain-{{ source.id }}"
+                      hx-swap="outerHTML">
+                  {% include 'components/csrf.html' %}
+                  <button type="submit" class="btn btn--sm">{{ "Pause" if et.enabled else "Activate" }}</button>
+                </form>
                 <form method="post" action="/config/event-type/{{ et.id }}/delete"
                       hx-post="/config/event-type/{{ et.id }}/delete"
                       hx-target="#source-chain-{{ source.id }}"
@@ -134,10 +144,13 @@
       {% if rules %}
         <ul class="pipeline-chain__list">
           {% for rule in rules %}
-          <li class="pipeline-rule">
+          <li class="pipeline-rule{% if not rule.enabled %} pipeline-rule--paused{% endif %}">
             <div class="pipeline-rule__main flex items-center gap">
               <strong>{{ rule | rule_label(event_types_by_id) }}</strong>
-              <span class="text-muted">order {{ rule.order_index }}</span>
+              <span class="text-muted">priority {{ rule.order_index }}</span>
+              {% if not rule.enabled %}
+                <span class="pipeline-chain__status">Paused</span>
+              {% endif %}
               <button type="button"
                       class="btn btn--sm"
                       hx-get="/config/pipeline/source/{{ source.id }}/partials/rule-form?rule_id={{ rule.id }}"
@@ -152,6 +165,13 @@
                       hx-swap="innerHTML">
                 Add Action
               </button>
+              <form method="post" action="/config/rule/{{ rule.id }}/toggle"
+                    hx-post="/config/rule/{{ rule.id }}/toggle"
+                    hx-target="#source-chain-{{ source.id }}"
+                    hx-swap="outerHTML">
+                {% include 'components/csrf.html' %}
+                <button type="submit" class="btn btn--sm">{{ "Pause" if rule.enabled else "Activate" }}</button>
+              </form>
               <form method="post" action="/config/rule/{{ rule.id }}/delete"
                     hx-post="/config/rule/{{ rule.id }}/delete"
                     hx-target="#source-chain-{{ source.id }}"
@@ -165,10 +185,13 @@
               {% if rule.action_ids %}
                 {% for aid in rule.action_ids %}
                   {% set action = actions_by_id.get(aid) %}
-                  <li class="pipeline-action flex items-center gap">
+                  <li class="pipeline-action flex items-center gap{% if action and not action.enabled %} pipeline-action--paused{% endif %}">
                     {% if action %}
                       <span class="pipeline-chip">
                         {{ action | action_label(fields_by_id) }}
+                        {% if not action.enabled %}
+                          <span class="pipeline-chain__status">Paused</span>
+                        {% endif %}
                       </span>
                       <button type="button"
                               class="btn btn--sm"
@@ -177,6 +200,13 @@
                               hx-swap="innerHTML">
                         Edit
                       </button>
+                      <form method="post" action="/config/action/{{ action.id }}/toggle"
+                            hx-post="/config/action/{{ action.id }}/toggle"
+                            hx-target="#source-chain-{{ source.id }}"
+                            hx-swap="outerHTML">
+                        {% include 'components/csrf.html' %}
+                        <button type="submit" class="btn btn--sm">{{ "Pause" if action.enabled else "Activate" }}</button>
+                      </form>
                       <form method="post" action="/config/action/{{ action.id }}/delete"
                             hx-post="/config/action/{{ action.id }}/delete"
                             hx-target="#source-chain-{{ source.id }}"
@@ -205,9 +235,12 @@
         <p class="text-muted pipeline-chain__hint">Unused actions:</p>
         <ul class="pipeline-chain__list">
           {% for action in unbound_actions %}
-          <li class="pipeline-action flex items-center gap">
+          <li class="pipeline-action flex items-center gap{% if not action.enabled %} pipeline-action--paused{% endif %}">
             <span class="pipeline-chip pipeline-chip--unbound">
               {{ action | action_label(fields_by_id) }}
+              {% if not action.enabled %}
+                <span class="pipeline-chain__status">Paused</span>
+              {% endif %}
             </span>
             <button type="button"
                     class="btn btn--sm"
@@ -216,6 +249,13 @@
                     hx-swap="innerHTML">
               Edit
             </button>
+            <form method="post" action="/config/action/{{ action.id }}/toggle"
+                  hx-post="/config/action/{{ action.id }}/toggle"
+                  hx-target="#source-chain-{{ source.id }}"
+                  hx-swap="outerHTML">
+              {% include 'components/csrf.html' %}
+              <button type="submit" class="btn btn--sm">{{ "Pause" if action.enabled else "Activate" }}</button>
+            </form>
             <form method="post" action="/config/action/{{ action.id }}/delete"
                   hx-post="/config/action/{{ action.id }}/delete"
                   hx-target="#source-chain-{{ source.id }}"

@@ -16,7 +16,7 @@ import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, SourceStatus, EventTypeRecord, PollingSchedule, ScheduleType,
+    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
     ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
     PushSubscription, Field, FieldLogEntry,
 )
@@ -26,11 +26,6 @@ from app.security import (
     SESSION_MAX_AGE_SECONDS,
 )
 from app.pipeline import evaluate_and_dispatch
-from app.widgets import fetch_widget_data, get_widget_types
-from app.dashboard_layout import (
-    find_widget, layout_json, merge_geometry, migrate_widgets,
-    normalize_for_save, parse_layout_config,
-)
 from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
 
@@ -135,7 +130,8 @@ async def handle_webhook(
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
-    # Resolve event type: header preferred, then payload fields
+    # Resolve event type: header preferred, then payload fields.
+    # `always` is an optional side-emission (like pollers), not a producer type.
     et_name = (request.headers.get("x-event-type") or "").strip()
     if not et_name and isinstance(payload, dict):
         et_name = str(payload.get("event_type") or payload.get("type") or "").strip()
@@ -143,12 +139,14 @@ async def handle_webhook(
     registered_types = db.query(EventTypeRecord).filter(
         EventTypeRecord.source_id == source.id
     ).all()
+    always_et = next((et for et in registered_types if et.name == "always"), None)
+    match_types = [et for et in registered_types if et.name != "always"]
     event_type = None
 
-    if registered_types:
-        # Source has registered types — require a matching event type
+    if match_types:
+        # Source has producer-facing types — require a matching event type
         if not et_name:
-            names = sorted({et.name for et in registered_types})
+            names = sorted({et.name for et in match_types})
             return JSONResponse(
                 {
                     "error": "Event type required",
@@ -157,18 +155,15 @@ async def handle_webhook(
                 },
                 status_code=400,
             )
-        event_type = next((et for et in registered_types if et.name == et_name), None)
+        event_type = next((et for et in match_types if et.name == et_name), None)
         if not event_type:
             return JSONResponse(
                 {"error": f"Event type '{et_name}' not found for source"},
                 status_code=400,
             )
     elif et_name:
-        # No registry yet — still attach if a matching type exists (none will)
-        event_type = db.query(EventTypeRecord).filter(
-            EventTypeRecord.source_id == source.id,
-            EventTypeRecord.name == et_name,
-        ).first()
+        # Only `always` (or empty) registered — attach if the named type exists
+        event_type = next((et for et in registered_types if et.name == et_name), None)
         if not event_type:
             return JSONResponse(
                 {"error": f"Event type '{et_name}' not found for source"},
@@ -204,7 +199,6 @@ async def handle_webhook(
     else:
         normalized = {"value": payload, "source": source.name, "_webhook": webhook_meta}
 
-    from app.ingest import ingest_event
     event = ingest_event(
         db,
         source=source,
@@ -214,14 +208,39 @@ async def handle_webhook(
         normalized_data=normalized,
     )
 
+    always_event = None
+    if always_et and (event_type is None or event_type.id != always_et.id):
+        always_meta = {**webhook_meta, "trigger": "always"}
+        if isinstance(payload, dict):
+            always_normalized = {**payload, "source": source.name, "_webhook": always_meta}
+        else:
+            always_normalized = {"value": payload, "source": source.name, "_webhook": always_meta}
+        always_event = ingest_event(
+            db,
+            source=source,
+            event_type_id=always_et.id,
+            correlation_id=correlation_id,
+            raw_payload=raw_truncated,
+            normalized_data=always_normalized,
+            touch_last_seen=False,
+        )
+
+    details = {"slug": source.slug, "event_id": event.id, "correlation_id": correlation_id}
+    if always_event:
+        details["always_event_id"] = always_event.id
     ctx._audit_log(
         db, request, "webhook.accepted",
         resource_type="source", resource_id=source.id,
-        details={"slug": source.slug, "event_id": event.id, "correlation_id": correlation_id},
+        details=details,
     )
 
     background_tasks.add_task(ctx._process_webhook_event, event.id)
-    return JSONResponse({"status": "accepted", "event_id": event.id}, status_code=202)
+    if always_event:
+        background_tasks.add_task(ctx._process_webhook_event, always_event.id)
+    body = {"status": "accepted", "event_id": event.id}
+    if always_event:
+        body["always_event_id"] = always_event.id
+    return JSONResponse(body, status_code=202)
 
 
 # ── Health ──────────────────────────────────────────────────────────────────

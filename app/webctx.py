@@ -28,7 +28,7 @@ from pathlib import Path
 
 from app.database import engine, Base, get_db, ensure_schema
 from app.models import (
-    User, Source, SourceStatus, EventTypeRecord, PollingSchedule, ScheduleType,
+    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
     ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
     PushSubscription, Field, FieldLogEntry,
 )
@@ -39,15 +39,7 @@ from app.security import (
     SESSION_MAX_AGE_SECONDS,
 )
 from app.pipeline import evaluate_and_dispatch
-from app.widgets import fetch_widget_data, get_widget_types
-from app.dashboard_layout import (
-    find_widget,
-    layout_json,
-    merge_geometry,
-    migrate_widgets,
-    normalize_for_save,
-    parse_layout_config,
-)
+from app.dashboard_layout import parse_layout_config
 from app.scheduler import start_scheduler, stop_scheduler, add_or_update_job, remove_job, job_count
 
 # ponytail: simple in-memory rate limiter for login (IP-based, 10 req/minute)
@@ -143,12 +135,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 wants_json = "application/json" in (request.headers.get("accept") or "")
                 if is_htmx:
                     return JSONResponse(
-                        {"error": "Unauthorized"},
+                        {"error": "Please sign in"},
                         status_code=401,
                         headers={"HX-Redirect": "/login"},
                     )
                 if wants_json or path.startswith("/api/") or path.startswith("/metrics/api"):
-                    return JSONResponse({"error": "Unauthorized"}, status_code=401)
+                    return JSONResponse({"error": "Please sign in"}, status_code=401)
                 return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         finally:
             db.close()
@@ -178,16 +170,16 @@ _SOURCE_TYPES = frozenset({"webhook", "poll"})
 
 
 def _slugify_name(name: str) -> str:
-    """Derive a URL slug from a source name."""
-    slug = name.lower().strip().replace(" ", "-").replace("_", "-")
-    slug = "".join(c for c in slug if c.isalnum() or c == "-")
-    while "--" in slug:
-        slug = slug.replace("--", "-")
-    return slug.strip("-") or "source"
+    """Derive an identifier-safe slug (underscores, no hyphens)."""
+    slug = name.lower().strip().replace(" ", "_").replace("-", "_")
+    slug = "".join(c for c in slug if c.isalnum() or c == "_")
+    while "__" in slug:
+        slug = slug.replace("__", "_")
+    return slug.strip("_") or "source"
 
 
 def _unique_slug_from_name(db: Session, name: str, exclude_id: int | None = None) -> str:
-    """Slugify name and append -2, -3, ... if the slug is already taken."""
+    """Slugify name and append _2, _3, ... if the slug is already taken."""
     base = _slugify_name(name)
     slug = base
     n = 2
@@ -197,7 +189,7 @@ def _unique_slug_from_name(db: Session, name: str, exclude_id: int | None = None
             q = q.filter(Source.id != exclude_id)
         if not q.first():
             return slug
-        slug = f"{base}-{n}"
+        slug = f"{base}_{n}"
         n += 1
 
 
@@ -211,7 +203,7 @@ def _unique_field_slug(db: Session, name: str, exclude_id: int | None = None) ->
             q = q.filter(Field.id != exclude_id)
         if not q.first():
             return slug
-        slug = f"{base}-{n}"
+        slug = f"{base}_{n}"
         n += 1
 
 
@@ -229,10 +221,10 @@ def _field_in_use(db: Session, field_id: int) -> str | None:
     for action in db.query(ActionInstance).all():
         cfg = action.config or {}
         if cfg.get("field_id") == field_id:
-            return f"used by an action (#{action.id})"
+            return "used by an action"
     for layout in db.query(DashboardLayout).all():
         for w in parse_layout_config(layout.layout_config)["widgets"]:
-            if field_id in widget_referenced_field_ids(w.get("config") or {}):
+            if field_id in widget_referenced_field_ids(db, w.get("config") or {}):
                 return "used by a dashboard widget"
     return None
 
@@ -246,7 +238,7 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
         try:
             field_id = int(field_id_raw)
         except ValueError:
-            return None, "field_id must be a number"
+            return None, "Choose a valid field"
         field_type = (form.get("field_type") or "").strip()
         out: dict = {"field_id": field_id}
         if field_type == "logbook":
@@ -254,7 +246,7 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             if mode == "key":
                 key = (form.get("value_key") or "").strip()
                 if not key:
-                    return None, "Event key is required"
+                    return None, "Value from event is required"
                 out["value_key"] = key
             elif mode == "literal":
                 out["value"] = form.get("value") or ""
@@ -262,7 +254,7 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
         elif field_type == "counter":
             op = (form.get("counter_op") or "increment").strip()
             if op not in ("increment", "decrement", "reset"):
-                return None, "counter op must be increment, decrement, or reset"
+                return None, "Choose Increment, Decrement, or Reset"
             out["op"] = op
             if op in ("increment", "decrement"):
                 delta = (form.get("delta") or "").strip()
@@ -279,7 +271,7 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             if mode == "key":
                 key = (form.get("value_key") or "").strip()
                 if not key:
-                    return None, "Event key is required"
+                    return None, "Value from event is required"
                 out["value_key"] = key
             else:
                 out["value"] = form.get("value") if form.get("value") is not None else ""
@@ -288,7 +280,7 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             if mode == "key":
                 key = (form.get("value_key") or "").strip()
                 if not key:
-                    return None, "Event key is required"
+                    return None, "Value from event is required"
                 out["value_key"] = key
             else:
                 raw = (form.get("toggle_value") or "false").strip().lower()
@@ -312,9 +304,9 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
         method = (form.get("method") or "POST").strip().upper()
         if method not in ("GET", "POST", "PUT", "PATCH"):
             return None, "Invalid HTTP method"
-        auth_mode = (form.get("auth_mode") or "bearer").strip()
+        auth_mode = (form.get("auth_mode") or "none").strip()
         if auth_mode not in ("bearer", "key_secret", "none"):
-            auth_mode = "bearer"
+            auth_mode = "none"
         out = {
             "url": url,
             "method": method,
@@ -325,7 +317,7 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             try:
                 out["timeout_seconds"] = float(timeout_raw)
             except ValueError:
-                return None, "timeout_seconds must be a number"
+                return None, "Timeout must be a number"
         if auth_mode == "key_secret":
             key_h = (form.get("api_key_header") or "").strip()
             sec_h = (form.get("api_secret_header") or "").strip()
@@ -333,12 +325,22 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
                 out["api_key_header"] = key_h
             if sec_h:
                 out["api_secret_header"] = sec_h
+        body_mode = (form.get("body_mode") or "auto").strip()
+        if body_mode == "custom":
+            raw = (form.get("custom_body") or "").strip()
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    out["body_mode"] = "custom"
+                    out["custom_body"] = parsed
+                except (json.JSONDecodeError, TypeError):
+                    return None, "Custom body is not valid JSON"
         return out, None
 
-    return None, f"Unknown action type: {action_type}"
+    return None, "That action type isn’t supported"
 
 
-def _upsert_action_secret(db, action, *, name: str, value: str, which: str = "primary"):
+def _upsert_action_secret(db, action, *, value: str, which: str = "primary"):
     """Create or update action secret. which is 'primary' or 'secondary'."""
     encrypted_value = encrypt_secret(value)
     attr = "secret_id" if which == "primary" else "secret_id_2"
@@ -346,11 +348,10 @@ def _upsert_action_secret(db, action, *, name: str, value: str, which: str = "pr
     if sid:
         secret = db.query(Secret).filter(Secret.id == sid).first()
         if secret:
-            secret.name = name
             secret.encrypted_value = encrypted_value
             return
     secret = Secret(
-        name=name, scoped_to_type="action",
+        scoped_to_type="action",
         scoped_to_id=action.id, encrypted_value=encrypted_value,
     )
     db.add(secret)
@@ -369,14 +370,14 @@ def _parse_field_form(form, *, existing: Field | None = None):
     if existing:
         field_type = existing.field_type
     if field_type not in FIELD_TYPES:
-        return None, f"Type must be one of: {', '.join(FIELD_TYPES)}"
+        return None, "Choose a field type"
 
     config = dict(existing.config or {}) if existing else default_field_config(field_type)
     if field_type == "logbook":
         try:
             max_entries = int(form.get("max_entries") or config.get("max_entries") or 100)
         except (TypeError, ValueError):
-            return None, "max_entries must be a number"
+            return None, "Max entries must be a number"
         max_entries = max(1, min(max_entries, 100_000))
         config = {"max_entries": max_entries}
     else:
@@ -420,14 +421,14 @@ def _parse_schedule_form(form, *, required: bool = True):
         return None, "Invalid schedule type"
 
     if schedule_type == ScheduleType.INTERVAL and not interval_seconds:
-        return None, "Interval seconds required"
+        return None, "Enter an interval in seconds"
     if schedule_type == ScheduleType.CRON and not cron_expression:
-        return None, "Cron expression required"
+        return None, "Enter a cron schedule"
 
     try:
         handler_params = json.loads(handler_params_str) if handler_params_str != "{}" else {}
     except json.JSONDecodeError:
-        return None, "Invalid JSON in handler params"
+        return None, "Extra settings must be valid JSON"
 
     return {
         "schedule_type": schedule_type,
@@ -582,7 +583,7 @@ class CsrfProtectMiddleware(BaseHTTPMiddleware):
                     "CSRF token mismatch method=%s path=%s",
                     request.method, path,
                 )
-                return JSONResponse({"error": "CSRF token mismatch"}, status_code=403)
+                return JSONResponse({"error": "Session expired — refresh and try again"}, status_code=403)
 
             async def receive():
                 return {"type": "http.request", "body": body, "more_body": False}
@@ -609,8 +610,20 @@ def _verify_csrf(cookie_token: str, form_token: str) -> bool:
 
 # Last added = outermost: CSRF runs before Auth.
 templates = Jinja2Templates(directory="app/templates")
-from app.labels import action_label, rule_label  # noqa: E402
+from app.labels import (  # noqa: E402
+    action_label,
+    action_type_label,
+    field_type_label,
+    http_method_label,
+    operator_label,
+    rule_label,
+)
+
 templates.env.filters["action_label"] = action_label
+templates.env.filters["action_type_label"] = action_type_label
+templates.env.filters["field_type_label"] = field_type_label
+templates.env.filters["http_method_label"] = http_method_label
+templates.env.filters["operator_label"] = operator_label
 templates.env.filters["rule_label"] = rule_label
 
 
@@ -692,7 +705,7 @@ def _parse_rule_form(form, *, for_update: bool = False):
     try:
         conditions = json.loads(conditions_str) if conditions_str else {}
     except json.JSONDecodeError:
-        return None, "Invalid JSON in conditions"
+        return None, "Conditions must be valid JSON"
 
     data = {
         "conditions": conditions,

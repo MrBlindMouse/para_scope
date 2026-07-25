@@ -10,7 +10,7 @@
     </button>
   </header>
   <p class="text-muted pipeline-fields__hint">
-    Global storage sinks for <code>field_push</code> actions and dashboard widgets.
+    Shared values updated by actions and shown on the dashboard.
   </p>
   {% if fields %}
   <ul class="pipeline-fields__list">
@@ -19,7 +19,7 @@
       <div class="pipeline-fields__main">
         <strong>{{ f.name }}</strong>
         <span class="text-muted">
-          · {{ f.field_type }}
+          · {{ f.field_type | field_type_label }}
           {% if f.field_type == 'logbook' %}
             · max {{ (f.config or {}).get('max_entries', 100) }}
           {% elif f.field_type == 'counter' %}
@@ -50,6 +50,6 @@
     {% endfor %}
   </ul>
   {% else %}
-  <p class="text-muted" id="fields-empty">No fields yet. Add a logbook, counter, value, or toggle.</p>
+  <p class="text-muted" id="fields-empty">No fields yet. Add one to store values for the dashboard.</p>
   {% endif %}
 </section>

@@ -17,11 +17,11 @@ def vapid_config() -> dict | None:
     return {"public_key": public, "private_key": private, "subject": subject}
 
 
-_FIELD_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
+_FIELD_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_.*]+)\s*\}\}")
 
 
 def render_template(text: str, data: dict | None) -> str:
-    """Replace {{field}} / {{nested.path}} from event normalized_data."""
+    """Replace {{field}} / {{nested.path}} / {{list.*.key}} from event data."""
     if not text:
         return ""
     data = data or {}

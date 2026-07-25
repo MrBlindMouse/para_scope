@@ -15,7 +15,7 @@ import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, SourceStatus, EventTypeRecord, PollingSchedule, ScheduleType,
+    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
     ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
     PushSubscription, Field, FieldLogEntry,
 )
@@ -25,11 +25,6 @@ from app.security import (
     SESSION_MAX_AGE_SECONDS,
 )
 from app.pipeline import evaluate_and_dispatch
-from app.widgets import fetch_widget_data, get_widget_types
-from app.dashboard_layout import (
-    find_widget, layout_json, merge_geometry, migrate_widgets,
-    normalize_for_save, parse_layout_config,
-)
 from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
 
@@ -98,7 +93,7 @@ async def pipeline_field_form(request: Request, db: Session = Depends(get_db)):
         try:
             fid = int(field_id)
         except ValueError:
-            return HTMLResponse("Invalid field_id", status_code=400)
+            return HTMLResponse("Invalid field", status_code=400)
         field = db.query(Field).filter(Field.id == fid).first()
         if not field:
             return HTMLResponse("Field not found", status_code=404)
@@ -201,7 +196,7 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
 
     reason = ctx._field_in_use(db, field_id)
     if reason:
-        msg = f"Cannot delete field '{field.name}': {reason}"
+        msg = f"Can’t delete “{field.name}” — it’s still in use"
         if ctx._is_htmx(request):
             return HTMLResponse(msg, status_code=400)
         return ctx._pipeline_redirect(error=msg)
@@ -240,7 +235,6 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     name = (form.get("name") or "").strip()
     source_type = (form.get("source_type") or "webhook").strip()
     description = (form.get("description") or "").strip()
-    secret_name = (form.get("webhook_secret_name") or "").strip()
     secret_value = (form.get("webhook_secret_value") or "").strip()
 
     def _err(msg: str):
@@ -251,7 +245,7 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     if not name:
         return _err("Name is required")
     if source_type not in ctx._SOURCE_TYPES:
-        return _err("Type must be webhook or poll")
+        return _err("Choose Webhook or Poll")
 
     slug = ctx._unique_slug_from_name(db, name)
 
@@ -272,14 +266,14 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     if schedule_kwargs:
         schedule_kwargs = {**schedule_kwargs, "name": name}
 
-    if source_type == "webhook" and secret_name and secret_value:
+    if source_type == "webhook" and secret_value:
         try:
             encrypted_value = encrypt_secret(secret_value)
         except ValueError as e:
             db.rollback()
             return _err(str(e))
         secret = Secret(
-            name=secret_name, scoped_to_type="source",
+            scoped_to_type="source",
             scoped_to_id=source.id, encrypted_value=encrypted_value,
         )
         db.add(secret)
@@ -336,7 +330,7 @@ async def pipeline_event_form(request: Request, source_id: int, db: Session = De
         try:
             eid = int(event_id)
         except ValueError:
-            return HTMLResponse("Invalid event_id", status_code=400)
+            return HTMLResponse("Invalid event", status_code=400)
         event = (
             db.query(EventTypeRecord)
             .filter(EventTypeRecord.id == eid, EventTypeRecord.source_id == source_id)
@@ -401,11 +395,11 @@ async def pipeline_latest_event(request: Request, source_id: int, db: Session = 
         return HTMLResponse("Source not found", status_code=404)
     et_raw = (request.query_params.get("event_type_id") or "").strip()
     if not et_raw:
-        return HTMLResponse("event_type_id is required", status_code=400)
+        return HTMLResponse("Choose an event type", status_code=400)
     try:
         et_id = int(et_raw)
     except ValueError:
-        return HTMLResponse("Invalid event_type_id", status_code=400)
+        return HTMLResponse("Invalid event type", status_code=400)
     event_type = (
         db.query(EventTypeRecord)
         .filter(EventTypeRecord.id == et_id, EventTypeRecord.source_id == source_id)
@@ -508,7 +502,7 @@ async def pipeline_rule_form(request: Request, source_id: int, db: Session = Dep
         try:
             rid = int(rule_id)
         except ValueError:
-            return HTMLResponse("Invalid rule_id", status_code=400)
+            return HTMLResponse("Invalid rule", status_code=400)
         rule = (
             db.query(Rule)
             .filter(Rule.id == rid, Rule.source_id == source_id)
@@ -520,7 +514,7 @@ async def pipeline_rule_form(request: Request, source_id: int, db: Session = Dep
         try:
             selected_event_type_ids = [int(event_type_id)]
         except ValueError:
-            return HTMLResponse("Invalid event_type_id", status_code=400)
+            return HTMLResponse("Invalid event type", status_code=400)
     return ctx.templates.TemplateResponse(
         request, "config/pipeline/_rule_form.html", {
             "active": "pipeline",
@@ -662,7 +656,7 @@ async def pipeline_action_form(request: Request, source_id: int, db: Session = D
         try:
             aid = int(action_id)
         except ValueError:
-            return HTMLResponse("Invalid action_id", status_code=400)
+            return HTMLResponse("Invalid action", status_code=400)
         action = (
             db.query(ActionInstance)
             .filter(ActionInstance.id == aid, ActionInstance.source_id == source_id)
@@ -674,7 +668,7 @@ async def pipeline_action_form(request: Request, source_id: int, db: Session = D
         try:
             rid = int(rule_id)
         except ValueError:
-            return HTMLResponse("Invalid rule_id", status_code=400)
+            return HTMLResponse("Invalid rule", status_code=400)
         rule = (
             db.query(Rule)
             .filter(Rule.id == rid, Rule.source_id == source_id)
@@ -683,7 +677,7 @@ async def pipeline_action_form(request: Request, source_id: int, db: Session = D
         if not rule:
             return HTMLResponse("Rule not found", status_code=404)
     else:
-        return HTMLResponse("rule_id is required to add an action", status_code=400)
+        return HTMLResponse("Pick a rule first", status_code=400)
 
     return ctx.templates.TemplateResponse(
         request, "config/pipeline/_action_form.html", {
@@ -710,20 +704,18 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
 
     form = await request.form()
     action_type = form.get("action_type", "field_push")
-    secret_name = (form.get("secret_name") or "").strip()
     secret_value = (form.get("secret_value") or "").strip()
-    secret2_name = (form.get("secret2_name") or "").strip()
     secret2_value = (form.get("secret2_value") or "").strip()
     rule_id_raw = (form.get("rule_id") or "").strip()
 
-    # Legacy /config/actions may omit rule_id (creates unused action).
+    # Creates unused action when no rule references it yet.
     require_rule = ctx._is_htmx(request) or bool(rule_id_raw)
     rule = None
     if rule_id_raw:
         try:
             rid = int(rule_id_raw)
         except ValueError:
-            msg = "rule_id must be a number"
+            msg = "Invalid rule"
             if ctx._is_htmx(request):
                 return HTMLResponse(msg, status_code=400)
             return ctx._pipeline_redirect(error=msg)
@@ -738,13 +730,13 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
                 return HTMLResponse(msg, status_code=400)
             return ctx._pipeline_redirect(error=msg)
     elif require_rule:
-        msg = "rule_id is required"
+        msg = "A rule is required"
         if ctx._is_htmx(request):
             return HTMLResponse(msg, status_code=400)
         return ctx._pipeline_redirect(error=msg)
 
     if action_type not in get_action_types():
-        msg = f"Unknown action type: {action_type}"
+        msg = "That action type isn’t supported"
         if ctx._is_htmx(request):
             return HTMLResponse(msg, status_code=400)
         return ctx._pipeline_redirect(error=msg)
@@ -784,10 +776,10 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
 
     if action_type == "http_forward":
         try:
-            if secret_name and secret_value:
-                ctx._upsert_action_secret(db, action, name=secret_name, value=secret_value, which="primary")
-            if (config.get("auth_mode") == "key_secret") and secret2_name and secret2_value:
-                ctx._upsert_action_secret(db, action, name=secret2_name, value=secret2_value, which="secondary")
+            if secret_value:
+                ctx._upsert_action_secret(db, action, value=secret_value, which="primary")
+            if config.get("auth_mode") == "key_secret" and secret2_value:
+                ctx._upsert_action_secret(db, action, value=secret2_value, which="secondary")
         except ValueError as e:
             db.rollback()
             if ctx._is_htmx(request):
@@ -824,13 +816,11 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
 
     form = await request.form()
     action_type = form.get("action_type", action.action_type)
-    secret_name = (form.get("secret_name") or "").strip()
     secret_value = (form.get("secret_value") or "").strip()
-    secret2_name = (form.get("secret2_name") or "").strip()
     secret2_value = (form.get("secret2_value") or "").strip()
 
     if action_type not in get_action_types():
-        msg = f"Unknown action type: {action_type}"
+        msg = "That action type isn’t supported"
         if ctx._is_htmx(request):
             return HTMLResponse(msg, status_code=400)
         return ctx._pipeline_redirect(error=msg)
@@ -865,19 +855,10 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
 
     if action_type == "http_forward":
         try:
-            if secret_name and secret_value:
-                ctx._upsert_action_secret(db, action, name=secret_name, value=secret_value, which="primary")
-            elif secret_name and action.secret_id:
-                secret = db.query(Secret).filter(Secret.id == action.secret_id).first()
-                if secret:
-                    secret.name = secret_name
-            if config.get("auth_mode") == "key_secret":
-                if secret2_name and secret2_value:
-                    ctx._upsert_action_secret(db, action, name=secret2_name, value=secret2_value, which="secondary")
-                elif secret2_name and action.secret_id_2:
-                    secret = db.query(Secret).filter(Secret.id == action.secret_id_2).first()
-                    if secret:
-                        secret.name = secret2_name
+            if secret_value:
+                ctx._upsert_action_secret(db, action, value=secret_value, which="primary")
+            if config.get("auth_mode") == "key_secret" and secret2_value:
+                ctx._upsert_action_secret(db, action, value=secret2_value, which="secondary")
         except ValueError as e:
             if ctx._is_htmx(request):
                 return HTMLResponse(str(e), status_code=400)
@@ -896,66 +877,6 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
         resp.headers["HX-Trigger"] = "pipeline-dialog-close"
         return resp
     return ctx._pipeline_redirect(success="Action updated")
-
-
-# Legacy list URLs → pipeline
-
-# route: /config/sources
-@router.get("/config/sources")
-async def config_sources_redirect():
-    return RedirectResponse(url="/config/pipeline", status_code=303)
-
-
-
-# route: /config/actions
-@router.get("/config/actions")
-async def config_actions_redirect():
-    return RedirectResponse(url="/config/pipeline", status_code=303)
-
-
-
-# route: /config/rules
-@router.get("/config/rules")
-async def config_rules_redirect():
-    return RedirectResponse(url="/config/pipeline", status_code=303)
-
-
-
-# route: /config/sources
-@router.post("/config/sources")
-async def create_source_legacy(request: Request, db: Session = Depends(get_db)):
-    return await pipeline_create_source(request, db)
-
-
-
-# route: /config/actions
-@router.post("/config/actions")
-async def create_action_legacy(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    source_id_str = (form.get("source_id") or "").strip()
-    if not source_id_str:
-        return ctx._pipeline_redirect(error="source_id is required")
-    try:
-        source_id = int(source_id_str)
-    except ValueError:
-        return ctx._pipeline_redirect(error="source_id must be a number")
-    return await pipeline_create_action(request, source_id, db)
-
-
-
-# route: /config/rules
-@router.post("/config/rules")
-async def create_rule_legacy(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    source_id_str = (form.get("source_id") or "").strip()
-    if not source_id_str:
-        return ctx._pipeline_redirect(error="source_id is required")
-    try:
-        source_id = int(source_id_str)
-    except ValueError:
-        return ctx._pipeline_redirect(error="source_id must be a number")
-    return await pipeline_create_rule(request, source_id, db)
-
 
 
 # route: /config/pipeline/source/{source_id}/partials/edit-form
@@ -987,17 +908,6 @@ async def pipeline_source_edit_form(request: Request, source_id: int, db: Sessio
 
 
 # route: /config/source/{source_id}/edit
-@router.get("/config/source/{source_id}/edit")
-async def edit_source_page(request: Request, source_id: int, db: Session = Depends(get_db)):
-    """Legacy full-page edit — redirect to pipeline (edit is a dialog now)."""
-    source = db.query(Source).filter(Source.id == source_id).first()
-    if not source:
-        return ctx._pipeline_redirect(error="Source not found")
-    return RedirectResponse(url="/config/pipeline", status_code=303)
-
-
-
-# route: /config/source/{source_id}/edit
 @router.post("/config/source/{source_id}/edit")
 async def update_source(request: Request, source_id: int, db: Session = Depends(get_db)):
     form = await request.form()
@@ -1016,14 +926,13 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
     name = (form.get("name") or "").strip()
     source_type = (form.get("source_type") or source.source_type or "webhook").strip()
     description = (form.get("description") or "").strip()
-    secret_name = (form.get("webhook_secret_name") or "").strip()
     secret_value = (form.get("webhook_secret_value") or "").strip()
     clear_secret = form.get("clear_webhook_secret") in ("1", "on", "true")
 
     if not name:
         return _err("Name is required")
     if source_type not in ctx._SOURCE_TYPES:
-        return _err("Type must be webhook or poll")
+        return _err("Choose Webhook or Poll")
 
     schedule_required = source_type == "poll"
     schedule_kwargs, schedule_error = ctx._parse_schedule_form(
@@ -1048,13 +957,13 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
                 orphan = db.query(Secret).filter(Secret.id == old_id).first()
                 if orphan:
                     db.delete(orphan)
-        elif secret_name and secret_value:
+        elif secret_value:
             try:
                 encrypted_value = encrypt_secret(secret_value)
             except ValueError as e:
                 return _err(str(e))
             secret = Secret(
-                name=secret_name, scoped_to_type="source",
+                scoped_to_type="source",
                 scoped_to_id=source.id, encrypted_value=encrypted_value,
             )
             db.add(secret)
@@ -1165,7 +1074,6 @@ async def toggle_source(request: Request, source_id: int, db: Session = Depends(
     if not source:
         return ctx._pipeline_redirect(error="Source not found")
     source.enabled = not source.enabled
-    source.status = SourceStatus.ENABLED if source.enabled else SourceStatus.DISABLED
     db.commit()
     status_text = "enabled" if source.enabled else "disabled"
     ctx._audit_log(db, request, "source.toggle", resource_type="source", resource_id=source.id, details={"status": status_text})
@@ -1176,34 +1084,64 @@ async def toggle_source(request: Request, source_id: int, db: Session = Depends(
     return ctx._pipeline_redirect(success=f"Source '{source.name}' {status_text}")
 
 
-# ── Config: Sources — Event Types (legacy URLs → pipeline) ───────────────────
-
-
-# route: /config/source/{source_id}/event-types
-@router.get("/config/source/{source_id}/event-types")
-async def config_event_types(source_id: int):
-    return RedirectResponse(url="/config/pipeline", status_code=303)
-
-
-
-# route: /config/source/{source_id}/event-types
-@router.post("/config/source/{source_id}/event-types")
-async def create_event_type(request: Request, source_id: int, db: Session = Depends(get_db)):
-    """Legacy create path; prefers /config/pipeline/source/{id}/events."""
-    source = db.query(Source).filter(Source.id == source_id).first()
-    if not source:
-        return ctx._pipeline_redirect(error="Source not found")
-    form = await request.form()
-    name = (form.get("name") or "").strip()
-    description = (form.get("description") or "").strip()
-    if not name:
-        return ctx._pipeline_redirect(error="Name is required")
-    et = EventTypeRecord(source_id=source_id, name=name, description=description)
-    db.add(et)
+# route: /config/event-type/{et_id}/toggle
+@router.post("/config/event-type/{et_id}/toggle")
+async def toggle_event_type(request: Request, et_id: int, db: Session = Depends(get_db)):
+    et = db.query(EventTypeRecord).filter(EventTypeRecord.id == et_id).first()
+    if not et:
+        return ctx._pipeline_redirect(error="Event type not found")
+    et.enabled = not et.enabled
     db.commit()
-    ctx._audit_log(db, request, "event_type.create", resource_type="event_type", resource_id=et.id, details={"name": name})
-    return ctx._pipeline_redirect(success=f"Event type '{name}' created")
+    status_text = "active" if et.enabled else "paused"
+    ctx._audit_log(
+        db, request, "event_type.toggle",
+        resource_type="event_type", resource_id=et.id,
+        details={"status": status_text, "name": et.name},
+    )
+    source = db.query(Source).filter(Source.id == et.source_id).first()
+    if ctx._is_htmx(request) and source:
+        return ctx._source_chain_template(request, db, source)
+    return ctx._pipeline_redirect(success=f"Event '{et.name}' {status_text}")
 
+
+# route: /config/rule/{rule_id}/toggle
+@router.post("/config/rule/{rule_id}/toggle")
+async def toggle_rule(request: Request, rule_id: int, db: Session = Depends(get_db)):
+    rule = db.query(Rule).filter(Rule.id == rule_id).first()
+    if not rule:
+        return ctx._pipeline_redirect(error="Rule not found")
+    rule.enabled = not rule.enabled
+    db.commit()
+    status_text = "active" if rule.enabled else "paused"
+    ctx._audit_log(
+        db, request, "rule.toggle",
+        resource_type="rule", resource_id=rule.id,
+        details={"status": status_text},
+    )
+    source = db.query(Source).filter(Source.id == rule.source_id).first() if rule.source_id else None
+    if ctx._is_htmx(request) and source:
+        return ctx._source_chain_template(request, db, source)
+    return ctx._pipeline_redirect(success=f"Rule {status_text}")
+
+
+# route: /config/action/{action_id}/toggle
+@router.post("/config/action/{action_id}/toggle")
+async def toggle_action(request: Request, action_id: int, db: Session = Depends(get_db)):
+    action = db.query(ActionInstance).filter(ActionInstance.id == action_id).first()
+    if not action:
+        return ctx._pipeline_redirect(error="Action not found")
+    action.enabled = not action.enabled
+    db.commit()
+    status_text = "active" if action.enabled else "paused"
+    ctx._audit_log(
+        db, request, "action.toggle",
+        resource_type="action", resource_id=action.id,
+        details={"status": status_text},
+    )
+    source = db.query(Source).filter(Source.id == action.source_id).first()
+    if ctx._is_htmx(request) and source:
+        return ctx._source_chain_template(request, db, source)
+    return ctx._pipeline_redirect(success=f"Action {status_text}")
 
 
 # route: /config/event-type/{et_id}/delete

@@ -19,7 +19,6 @@ from app.models import (
     Event,
     Field,
     FieldLogEntry,
-    MetricPoint,
     Secret,
     PushSubscription,
 )
@@ -51,19 +50,16 @@ def run_registered_action(db, event: Event, action: ActionInstance) -> None:
 
 def _require_field(db, field_id, expected_types: tuple[str, ...] | None = None) -> Field:
     if field_id is None:
-        raise ValueError("action requires config.field_id")
+        raise ValueError("Action is missing a field")
     try:
         fid = int(field_id)
     except (TypeError, ValueError) as e:
-        raise ValueError(f"Invalid field_id: {field_id!r}") from e
+        raise ValueError("Invalid field") from e
     field = db.query(Field).filter(Field.id == fid).first()
     if not field:
-        raise ValueError(f"Field id={fid} not found")
+        raise ValueError("Field not found")
     if expected_types is not None and field.field_type not in expected_types:
-        raise ValueError(
-            f"Field '{field.name}' is type {field.field_type}, "
-            f"expected {' or '.join(expected_types)}"
-        )
+        raise ValueError(f"Field “{field.name}” is the wrong type")
     return field
 
 
@@ -115,7 +111,7 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
     if field.field_type == "counter":
         op = (config.get("op") or "increment").strip()
         if op not in ("increment", "decrement", "reset"):
-            raise ValueError(f"Unknown counter op: {op}")
+            raise ValueError("Unknown counter operation")
         # Re-lock row so concurrent webhook/poll increments do not lose updates
         field = db.query(Field).filter(Field.id == field.id).with_for_update().one()
         state = dict(field.state or {})
@@ -128,16 +124,6 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
             new_value = current - resolved if op == "decrement" else current + resolved
         state["value"] = new_value
         field.state = state
-        db.add(
-            MetricPoint(
-                source_id=event.source_id,
-                field_id=field.id,
-                name=field.name,
-                value=new_value,
-                tags=nd.get("tags", {}),
-                metric_type="counter",
-            )
-        )
         db.commit()
         return
 
@@ -155,25 +141,25 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
         db.commit()
         return
 
-    raise ValueError(f"Unsupported field type for field_push: {field.field_type}")
+    raise ValueError("This field type can’t be updated by that action")
 
 
 def _secret_value(db, secret_id) -> str:
     """Resolve and decrypt a configured secret. Raises if missing/unreadable."""
     if not secret_id:
-        raise ValueError("Secret id is required")
+        raise ValueError("Secret is missing")
     secret = db.query(Secret).filter(Secret.id == secret_id).first()
     if not secret:
-        raise ValueError(f"Secret {secret_id} not found")
+        raise ValueError("Secret not found")
     return decrypt_secret(secret.encrypted_value)
 
 
 def _forward_headers(db, action: ActionInstance, config: dict) -> dict:
     headers = dict(config.get("headers") or {})
-    auth_mode = (config.get("auth_mode") or "bearer").strip()
+    auth_mode = (config.get("auth_mode") or "none").strip()
     if auth_mode == "key_secret":
         if not action.secret_id or not action.secret_id_2:
-            raise ValueError("key_secret auth requires secret_id and secret_id_2")
+            raise ValueError("This forward needs both API key and secret")
         key = _secret_value(db, action.secret_id)
         secret = _secret_value(db, action.secret_id_2)
         headers[config.get("api_key_header") or "X-Api-Key"] = key
@@ -190,19 +176,35 @@ def _action_http_forward(db, event: Event, action: ActionInstance) -> None:
     config = action.config or {}
     url = (config.get("url") or "").strip()
     if not url:
-        raise ValueError("http_forward requires config.url")
+        raise ValueError("Forward URL is missing")
     method = (config.get("method") or "POST").upper()
     timeout = float(config.get("timeout_seconds") or 30)
     headers = _forward_headers(db, action, config)
 
-    body = {
-        "event_id": event.id,
-        "source_id": event.source_id,
-        "correlation_id": event.correlation_id,
-        "data": event.normalized_data or {},
-    }
-    if isinstance(config.get("body"), dict):
-        body = {**body, **config["body"]}
+    body_mode = config.get("body_mode", "auto")
+    nd = event.normalized_data or {}
+    if body_mode == "custom":
+        raw_body = config.get("custom_body")
+        if isinstance(raw_body, dict):
+            # Resolve {{field}} placeholders in string values
+            resolved = _resolve_body_templates(raw_body, nd)
+            default = {
+                "event_id": event.id,
+                "source_id": event.source_id,
+                "correlation_id": event.correlation_id,
+                "data": nd,
+            }
+            body = {**default, **resolved}
+        else:
+            body = raw_body if raw_body is not None else {}
+    else:
+        # Default: send the full event envelope
+        body = {
+            "event_id": event.id,
+            "source_id": event.source_id,
+            "correlation_id": event.correlation_id,
+            "data": nd,
+        }
 
     with httpx.Client(timeout=timeout) as client:
         kwargs = {"method": method, "url": url, "headers": headers}
@@ -214,13 +216,22 @@ def _action_http_forward(db, event: Event, action: ActionInstance) -> None:
         response.raise_for_status()
 
 
+def _resolve_body_templates(obj, data: dict):
+    """Recursively resolve {{field}} placeholders in string values of a parsed JSON body."""
+    if isinstance(obj, str):
+        return render_template(obj, data)
+    if isinstance(obj, dict):
+        return {k: _resolve_body_templates(v, data) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_body_templates(item, data) for item in obj]
+    return obj
+
+
 def _action_web_push(db, event: Event, action: ActionInstance) -> None:
     """Send a Web Push notification to all subscribed users."""
     vapid = vapid_config()
     if not vapid:
-        raise ValueError(
-            "web_push requires PARA_SCOPE_VAPID_PUBLIC_KEY and PARA_SCOPE_VAPID_PRIVATE_KEY"
-        )
+        raise ValueError("Browser notifications aren’t configured")
 
     config = action.config or {}
     data = event.normalized_data or {}
@@ -237,7 +248,7 @@ def _action_web_push(db, event: Event, action: ActionInstance) -> None:
     try:
         from pywebpush import webpush, WebPushException
     except ImportError as e:
-        raise ValueError("web_push requires the pywebpush package") from e
+        raise ValueError("Push notifications aren’t available on this server") from e
 
     claims = {"sub": vapid["subject"]}
     errors = []
@@ -264,7 +275,7 @@ def _action_web_push(db, event: Event, action: ActionInstance) -> None:
                 logger.warning("web_push failed endpoint=%s: %s", sub.endpoint[:80], e)
     db.commit()
     if live_attempts > 0 and errors and len(errors) == live_attempts:
-        raise ValueError(f"web_push failed for all subscriptions: {errors[0]}")
+        raise ValueError("Couldn’t send any push notifications")
 
 
 register_action("field_push", _action_field_push)

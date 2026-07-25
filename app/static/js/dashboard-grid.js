@@ -70,8 +70,8 @@
       el.classList.toggle("dashboard-grid--editing", editing);
       if (toggle) {
         toggle.setAttribute("aria-pressed", editing ? "true" : "false");
-        toggle.title = editing ? "Lock layout" : "Edit layout";
-        toggle.setAttribute("aria-label", editing ? "Lock layout" : "Edit layout");
+        toggle.title = editing ? "Layout Editable" : "Layout Locked";
+        toggle.setAttribute("aria-label", editing ? "Layout Editable" : "Layout Locked");
       }
       if (!editing) {
         clearTimeout(saveTimer);

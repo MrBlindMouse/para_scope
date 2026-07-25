@@ -7,14 +7,20 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import func as sql_func
 
 from app.fields import get_by_path
-from app.widget_transforms import apply_ops, extract_number, series_from_points
+from app.widget_transforms import (
+    apply_ops,
+    eval_expr,
+    format_expr_number,
+    resolve_tone_rules,
+    series_from_points,
+)
 
 # ── Kind registry ────────────────────────────────────────────────────────────
 
 KIND_DISPLAYS = {
     "series": ("line", "area", "sparkline"),
     "chart": ("pie", "doughnut", "bar", "stacked_bar"),
-    "display": ("logbook_list", "kv_text", "stat", "toggle", "table"),
+    "display": ("logbook_list", "kv_text", "toggle", "board", "table"),
     "links": ("list", "button_row", "icon_grid"),
     "system": ("source_health", "recent_events", "poller_status", "metric_summary"),
 }
@@ -37,8 +43,8 @@ DISPLAY_TITLES = {
     "stacked_bar": "Stacked bar",
     "logbook_list": "Logbook list",
     "kv_text": "Key / text",
-    "stat": "Stat",
     "toggle": "Toggle",
+    "board": "Board",
     "table": "Table",
     "list": "List",
     "button_row": "Button row",
@@ -52,7 +58,6 @@ DISPLAY_TITLES = {
 # Visual style variants per display mode (config.style)
 DISPLAY_STYLES = {
     "toggle": ("text_color", "led", "badge", "switch"),
-    "stat": ("plain", "signed", "compact", "hero"),
     "logbook_list": ("code", "timeline", "cards"),
     "kv_text": ("plain", "mono", "callout"),
     "table": ("plain", "compact", "striped"),
@@ -78,9 +83,7 @@ STYLE_TITLES = {
     "badge": "Badge",
     "switch": "Switch",
     "plain": "Plain",
-    "signed": "Signed color",
     "compact": "Compact",
-    "hero": "Hero",
     "code": "Code list",
     "timeline": "Timeline",
     "cards": "Cards",
@@ -102,13 +105,13 @@ STYLE_TITLES = {
 # Field binding rules: kind-level, with optional per-display overrides
 _BINDING_SERIES = {
     "cardinality": "multi",
-    "field_types": ("counter", "logbook"),
+    "field_types": ("logbook",),
     "config_key": "sources",
     "required": True,
 }
 _BINDING_CHART = {
     "cardinality": "multi",
-    "field_types": ("logbook", "counter", "value"),
+    "field_types": ("counter", "value"),
     "config_key": "sources",
     "required": True,
 }
@@ -122,31 +125,31 @@ WIDGET_BINDINGS = {
             "logbook_list": {
                 "cardinality": "single",
                 "field_types": ("logbook",),
-                "config_key": "field_id",
+                "config_key": "field_slug",  # or template with {{ slug… }}
                 "required": True,
             },
             "kv_text": {
-                "cardinality": "single",
-                "field_types": None,  # any
-                "config_key": "field_id",
+                "cardinality": "none",
+                "field_types": (),
+                "config_key": None,
                 "required": False,
-            },
-            "stat": {
-                "cardinality": "single",
-                "field_types": ("counter", "value"),
-                "config_key": "field_id",
-                "required": True,
             },
             "toggle": {
                 "cardinality": "single",
                 "field_types": ("toggle",),
-                "config_key": "field_id",
+                "config_key": "field_slug",
+                "required": True,
+            },
+            "board": {
+                "cardinality": "multi",
+                "field_types": None,  # resolved from cell_kind at validate time
+                "config_key": "cells",
                 "required": True,
             },
             "table": {
                 "cardinality": "multi",
                 "field_types": None,
-                "config_key": "field_ids",
+                "config_key": "field_slugs",
                 "required": True,
             },
         },
@@ -215,55 +218,133 @@ def default_display(kind: str) -> str:
 
 
 def resolve_style(config: dict | None, display: str) -> str:
-    raw = ((config or {}).get("style") or "").strip()
-    allowed = DISPLAY_STYLES.get(display) or ()
+    cfg = config or {}
+    raw = (cfg.get("style") or "").strip()
+    if display == "board":
+        allowed = DISPLAY_STYLES.get(_board_cell_kind(cfg)) or ()
+    else:
+        allowed = DISPLAY_STYLES.get(display) or ()
     if raw and raw in allowed:
         return raw
-    return default_style(display)
+    return allowed[0] if allowed else "default"
 
 
-def widget_referenced_field_ids(config: dict | None) -> set[int]:
-    """All Field ids referenced by a widget config (field_id, field_ids, sources)."""
+WIDGET_TONES = ("none", "conditional")
+
+
+BOARD_CELL_KINDS = ("toggle", "kv_text")
+BOARD_CELL_FIELD_TYPES = {
+    "toggle": ("toggle",),
+    "kv_text": None,  # any
+}
+
+
+def default_tone(widget_type: str, display: str) -> str:
+    """conditional for toggle/board/kv_text/logbook_list; none elsewhere."""
+    if widget_type == "display" and display in ("toggle", "board", "kv_text", "logbook_list"):
+        return "conditional"
+    return "none"
+
+
+def _config_tone_rules(config: dict | None) -> list:
+    raw = (config or {}).get("tone_rules")
+    return raw if isinstance(raw, list) else []
+
+
+def _cell_tone(item: dict) -> str:
+    kind = item.get("kind")
+    if kind == "toggle":
+        return "positive" if item.get("value") else "negative"
+    if kind == "kv_text":
+        return item.get("tone") or "neutral"
+    return "neutral"
+
+
+def resolve_widget_tone(
+    config: dict | None,
+    *,
+    widget_type: str,
+    display: str,
+    data: dict | None = None,
+) -> str | None:
+    """Return positive|negative|neutral from input, or None when no background.
+
+    Board with kv_text cells uses per-row tones only (no widget wrapper tone).
+    """
     cfg = config or {}
-    out: set[int] = set()
-    fid = _config_field_id(cfg)
-    if fid is not None:
-        out.add(fid)
-    ids = cfg.get("field_ids")
-    if isinstance(ids, list):
-        for raw in ids:
-            try:
-                out.add(int(raw))
-            except (TypeError, ValueError):
-                pass
-    elif isinstance(ids, str) and ids.strip():
-        for part in ids.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            try:
-                out.add(int(part))
-            except ValueError:
-                pass
+    raw = (cfg.get("tone") or "").strip().lower()
+    if raw not in WIDGET_TONES:
+        raw = default_tone(widget_type, display)
+    if raw == "none":
+        return None
+    data = data or {}
+    if display == "toggle":
+        return "positive" if data.get("value") else "negative"
+    if display == "kv_text" or display == "logbook_list":
+        return resolve_tone_rules(
+            _config_tone_rules(cfg), data.get("_tone_data") or {},
+        )
+    if display == "board":
+        cell_kind = _board_cell_kind(cfg)
+        if cell_kind == "kv_text":
+            # Per-row tones on items; no whole-widget background.
+            return None
+        items = data.get("items") or []
+        if not items:
+            return "neutral"
+        tones = [_cell_tone(it) for it in items]
+        if all(t == "positive" for t in tones):
+            return "positive"
+        if all(t == "negative" for t in tones):
+            return "negative"
+        return "neutral"
+    return None
+
+
+def widget_referenced_field_ids(db, config: dict | None) -> set[int]:
+    """Field PKs referenced by a widget config (slugs on config / sources / cells)."""
+    from app.models import Field
+
+    cfg = config or {}
+    slugs: set[str] = set()
+
+    def _add(raw: str):
+        slug, _ = split_slug_path(raw)
+        if slug:
+            slugs.add(slug)
+
+    _add(_config_field_slug(cfg))
+    for part in _config_field_slugs(cfg):
+        _add(part)
+    tmpl = (cfg.get("template") or "").strip()
+    if "{{" in tmpl:
+        for head in _slug_heads_from_template(tmpl):
+            _add(head)
     sources = cfg.get("sources")
     if isinstance(sources, list):
         for src in sources:
-            if not isinstance(src, dict):
-                continue
-            try:
-                sid = int(src["field_id"]) if src.get("field_id") not in (None, "") else None
-            except (TypeError, ValueError):
-                sid = None
-            if sid is not None:
-                out.add(sid)
-    return out
+            if isinstance(src, dict):
+                _add((src.get("field_slug") or "").strip())
+    cells = cfg.get("cells")
+    if isinstance(cells, list):
+        for cell in cells:
+            if isinstance(cell, dict):
+                _add((cell.get("field_slug") or "").strip())
+                ct = (cell.get("template") or "").strip()
+                if "{{" in ct:
+                    for head in _slug_heads_from_template(ct):
+                        _add(head)
+    if not slugs:
+        return set()
+    rows = db.query(Field.id).filter(Field.slug.in_(slugs)).all()
+    return {r[0] for r in rows}
 
 
 def validate_widget_bindings(db, widgets: list) -> str | None:
     """Return error message if any widget violates Field binding rules."""
     from app.models import Field
 
-    fields_by_id = {f.id: f for f in db.query(Field).all()}
+    fields_by_slug = {f.slug: f for f in db.query(Field).all() if f.slug}
     for i, w in enumerate(widgets):
         if not isinstance(w, dict):
             continue
@@ -274,85 +355,102 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
         rule = binding_for(kind, disp)
         card = rule.get("cardinality") or "none"
         style = (cfg.get("style") or "").strip()
-        if style and style not in (DISPLAY_STYLES.get(disp) or ()):
-            return f"{label}: unknown style '{style}'"
+        board_kind = _board_cell_kind(cfg) if disp == "board" else ""
+        style_allowed = (
+            DISPLAY_STYLES.get(board_kind) if disp == "board" else DISPLAY_STYLES.get(disp)
+        ) or ()
+        if style and style not in style_allowed:
+            return f"{label}: that style isn’t available"
         if card == "none":
             continue
         allowed = rule.get("field_types")  # None = any
+        if disp == "board":
+            allowed = BOARD_CELL_FIELD_TYPES.get(board_kind)
         required = bool(rule.get("required"))
         key = rule.get("config_key")
 
+        if disp == "logbook_list":
+            field, err = _resolve_logbook_list_field(db, cfg, fields_by_slug)
+            if err:
+                return f"{label}: {err}"
+            if field is None:
+                if required:
+                    return f"{label}: choose a field"
+                continue
+            if allowed is not None and field.field_type not in allowed:
+                return f"{label}: “{field.name}” isn’t a compatible field type"
+            continue
+
         if key == "sources":
             sources = cfg.get("sources") if isinstance(cfg.get("sources"), list) else []
-            # legacy series single field_id
-            if not sources and kind == "series" and _config_field_id(cfg) is not None:
-                sources = [{"field_id": _config_field_id(cfg)}]
-            if not sources and cfg.get("metric_name"):
-                continue  # legacy metric_name path
             if required and not sources:
-                return f"{label}: at least one Field source is required"
+                return f"{label}: pick at least one field"
             for src in sources:
                 if not isinstance(src, dict):
                     continue
-                try:
-                    fid = int(src["field_id"]) if src.get("field_id") not in (None, "") else None
-                except (TypeError, ValueError):
-                    fid = None
-                if fid is None:
+                raw = (src.get("field_slug") or "").strip()
+                if not raw:
                     continue
-                field = fields_by_id.get(fid)
-                if not field:
-                    return f"{label}: Field id={fid} not found"
-                skind = (src.get("kind") or src.get("field_kind") or "").strip() or field.field_type
+                slug, path = split_slug_path(raw)
+                field = fields_by_slug.get(slug)
+                if field is None:
+                    return f"{label}: that field wasn’t found"
                 if allowed is not None and field.field_type not in allowed:
-                    return f"{label}: Field '{field.name}' type {field.field_type} not allowed"
-                if kind == "chart" and skind and allowed is not None and skind not in allowed:
-                    return f"{label}: source kind '{skind}' not allowed"
-                if kind == "chart" and skind and field.field_type != skind:
-                    return f"{label}: Field '{field.name}' is {field.field_type}, not {skind}"
+                    return f"{label}: “{field.name}” isn’t the right field type"
+                if kind == "series":
+                    if not path:
+                        return f"{label}: append a path (e.g. {slug}.response_time_ms)"
             continue
 
-        if key == "field_ids":
-            ids = cfg.get("field_ids")
-            if not isinstance(ids, list):
-                raw = cfg.get("field_ids") or ""
-                if isinstance(raw, str) and raw.strip():
-                    ids = [p.strip() for p in raw.split(",") if p.strip()]
-                else:
-                    ids = []
-            parsed = []
-            for raw_id in ids:
-                try:
-                    parsed.append(int(raw_id))
-                except (TypeError, ValueError):
-                    return f"{label}: invalid field id"
-            if required and not parsed:
-                return f"{label}: select at least one Field"
-            for fid in parsed:
-                field = fields_by_id.get(fid)
-                if not field:
-                    return f"{label}: Field id={fid} not found"
+        if key == "cells":
+            cells = _board_cells(cfg)
+            if required and not cells:
+                return f"{label}: pick at least one field"
+            for cell in cells:
+                slug_raw = (cell.get("field_slug") or "").strip()
+                if not slug_raw:
+                    if board_kind == "kv_text":
+                        continue  # template-only entry
+                    return f"{label}: pick at least one field"
+                slug, _ = split_slug_path(slug_raw)
+                field = fields_by_slug.get(slug)
+                if field is None:
+                    return f"{label}: that field wasn’t found"
                 if allowed is not None and field.field_type not in allowed:
-                    return f"{label}: Field '{field.name}' type not allowed"
+                    return f"{label}: “{field.name}” isn’t the right field type"
             continue
 
-        # single field_id
-        fid = _config_field_id(cfg)
-        if fid is None:
+        if key == "field_slugs":
+            slugs = _config_field_slugs(cfg)
+            if required and not slugs:
+                return f"{label}: pick at least one field"
+            for s in slugs:
+                slug, _ = split_slug_path(s)
+                field = fields_by_slug.get(slug)
+                if not field:
+                    return f"{label}: that field wasn’t found"
+                if allowed is not None and field.field_type not in allowed:
+                    return f"{label}: “{field.name}” isn’t the right field type"
+            continue
+
+        # single field_slug
+        slug_raw = _config_field_slug(cfg)
+        if not slug_raw:
             if required:
-                return f"{label}: Field is required"
+                return f"{label}: choose a field"
             continue
-        field = fields_by_id.get(fid)
+        slug, _ = split_slug_path(slug_raw)
+        field = fields_by_slug.get(slug)
         if not field:
-            return f"{label}: Field id={fid} not found"
+            return f"{label}: that field wasn’t found"
         if allowed is not None and field.field_type not in allowed:
-            return f"{label}: Field '{field.name}' must be one of: {', '.join(allowed)}"
+            return f"{label}: “{field.name}” isn’t a compatible field type"
     return None
 
 
 def fetch_widget_data(widget_type, db, widget_config=None, source_id=None, display=None):
     """Fetch data for a widget kind (+ optional display mode)."""
-    config = widget_config or {}
+    config = dict(widget_config or {})
     disp = (display or config.get("display") or default_display(widget_type) or "").strip()
     fn = {
         "series": _series_data,
@@ -362,27 +460,189 @@ def fetch_widget_data(widget_type, db, widget_config=None, source_id=None, displ
         "system": _system_data,
     }.get(widget_type)
     if not fn:
-        return {"error": f"Unknown widget kind: {widget_type}"}
-    data = fn(db, config, display=disp, source_id=source_id)
+        return {"error": "Unknown widget"}
+    snap = fields_snapshot(db)
+    data = fn(db, config, display=disp, source_id=source_id, fields_snap=snap)
     if isinstance(data, dict):
         data.setdefault("display", disp)
         data["style"] = resolve_style(config, disp)
+        tone = resolve_widget_tone(
+            config, widget_type=widget_type, display=disp, data=data,
+        )
+        if tone:
+            data["tone"] = tone
     return data
 
 
-def _config_field_id(config) -> int | None:
-    raw = config.get("field_id")
-    if raw is None or raw == "":
+def _config_field_slug(config) -> str:
+    return (config.get("field_slug") or "").strip() if isinstance(config, dict) else ""
+
+
+def split_slug_path(raw: str) -> tuple[str, str | None]:
+    """Split `fieldslug.path.to.value` → (field slug, path or None)."""
+    s = (raw or "").strip()
+    if not s:
+        return "", None
+    if "." not in s:
+        return s, None
+    slug, path = s.split(".", 1)
+    slug = slug.strip()
+    path = path.strip()
+    return slug, path or None
+
+
+def _slug_heads_from_template(template: str) -> list[str]:
+    """First identifier in each ``{{ … }}`` body (slug head)."""
+    heads: list[str] = []
+    for m in _TEMPLATE_RE.finditer(template or ""):
+        body = m.group(1).strip()
+        im = re.match(r"[a-zA-Z_][a-zA-Z0-9_]*", body)
+        if im:
+            heads.append(im.group(0))
+    return heads
+
+
+def _resolve_logbook_list_field(db, config, fields_by_slug: dict | None = None):
+    """Return (Field|None, error|None) for logbook_list field_slug or template."""
+    from app.models import Field
+
+    cfg = config if isinstance(config, dict) else {}
+    template = (cfg.get("template") or "").strip()
+    slug = _config_field_slug(cfg)
+
+    if template and "{{" in template:
+        if fields_by_slug is None:
+            fields_by_slug = {f.slug: f for f in db.query(Field).all() if f.slug}
+        logbooks = []
+        seen = set()
+        for head in _slug_heads_from_template(template):
+            f = fields_by_slug.get(head)
+            if f is None or f.field_type != "logbook" or f.id in seen:
+                continue
+            seen.add(f.id)
+            logbooks.append(f)
+        if not logbooks:
+            return None, "template must reference a logbook Field"
+        if len(logbooks) > 1:
+            return None, "template must reference exactly one logbook Field"
+        return logbooks[0], None
+
+    if not slug:
+        return None, "choose a field"
+    if fields_by_slug is not None:
+        field = fields_by_slug.get(slug)
+    else:
+        field = db.query(Field).filter(Field.slug == slug).first()
+    if field is None:
+        return None, "that field wasn’t found"
+    if field.field_type != "logbook":
+        return None, "logbook_list requires a logbook Field"
+    return field, None
+
+
+def resolve_field(db, config) -> object | None:
+    """Resolve a Field by field_slug (path after first `.` is ignored)."""
+    from app.models import Field
+
+    slug, _ = split_slug_path(_config_field_slug(config))
+    if not slug:
         return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
+    return db.query(Field).filter(Field.slug == slug).first()
+
+
+def fields_snapshot(db) -> dict:
+    """All Fields keyed by slug → state or latest logbook entry payload.
+
+    ponytail: loads all log entries then keeps first-per-field; fine at small
+    Field counts — upgrade to a window/GROUP BY if this gets hot.
+    """
+    from app.models import Field, FieldLogEntry
+
+    fields = db.query(Field).all()
+    logbook_ids = [f.id for f in fields if f.field_type == "logbook"]
+    latest: dict[int, object] = {}
+    if logbook_ids:
+        entries = (
+            db.query(FieldLogEntry)
+            .filter(FieldLogEntry.field_id.in_(logbook_ids))
+            .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
+            .all()
+        )
+        for e in entries:
+            if e.field_id not in latest:
+                latest[e.field_id] = e.value
+    snap: dict = {}
+    for f in fields:
+        slug = (f.slug or "").strip()
+        if not slug:
+            continue
+        if f.field_type == "logbook":
+            val = latest.get(f.id)
+            if isinstance(val, dict):
+                snap[slug] = val
+            elif val is not None:
+                snap[slug] = {"value": val}
+            else:
+                snap[slug] = {}
+        else:
+            snap[slug] = dict(f.state or {})
+    return snap
+
+
+def _merge_template_data(snap: dict | None, bound: dict | None) -> dict:
+    """Global slug namespace under snap; bound Field data wins on key clash."""
+    return {**(snap or {}), **(bound or {})}
+
+
+def _config_field_slugs(config) -> list[str]:
+    raw = config.get("field_slugs") if isinstance(config, dict) else None
+    if isinstance(raw, str) and raw.strip():
+        return [p.strip() for p in raw.split(",") if p.strip()]
+    if isinstance(raw, list):
+        return [str(s).strip() for s in raw if str(s).strip()]
+    return []
 
 
 def _config_transform(config) -> list:
     raw = config.get("transform")
     return raw if isinstance(raw, list) else []
+
+
+def _board_cell_kind(config: dict) -> str:
+    """Board cell type from config.cell_kind."""
+    kind = (config.get("cell_kind") or "").strip()
+    if kind in BOARD_CELL_KINDS:
+        return kind
+    return "toggle"
+
+
+def _board_cells(config: dict) -> list[dict]:
+    """Board entry rows: toggle needs field_slug; kv_text needs template (optional slug)."""
+    kind = _board_cell_kind(config)
+    cells_raw = config.get("cells")
+    if not isinstance(cells_raw, list):
+        return []
+    out = []
+    for c in cells_raw:
+        if not isinstance(c, dict):
+            continue
+        slug = (c.get("field_slug") or "").strip()
+        template = c.get("template") or ""
+        if kind == "kv_text":
+            if not (template or "").strip():
+                continue
+        elif not slug:
+            continue
+        t = c.get("transform")
+        rules = c.get("tone_rules")
+        out.append({
+            "field_slug": slug,
+            "transform": t if isinstance(t, list) else [],
+            "unit": (c.get("unit") or "").strip() if isinstance(c.get("unit"), str) else "",
+            "template": template,
+            "tone_rules": rules if isinstance(rules, list) else [],
+        })
+    return out
 
 
 def _range_hours(config, default=24) -> int:
@@ -413,27 +673,19 @@ def _int_limit(config, key, default, lo=1, hi=100) -> int:
 # ── series ───────────────────────────────────────────────────────────────────
 
 def _series_source_rows(config) -> list[dict]:
-    """Normalize series sources: prefer sources[], else legacy field_id / metric_name."""
+    """Series sources from config.sources[] (field_slug required per row)."""
     sources = config.get("sources")
-    if isinstance(sources, list) and sources:
-        return [s for s in sources if isinstance(s, dict) and s.get("field_id") not in (None, "")]
-    field_id = _config_field_id(config)
-    if field_id is not None:
-        return [{
-            "field_id": field_id,
-            "label": "",
-            "value_path": (config.get("value_path") or "").strip(),
-            "transform": _config_transform(config),
-        }]
-    metric_name = (config.get("metric_name") or "").strip()
-    if metric_name:
-        return [{"metric_name": metric_name, "label": metric_name, "transform": _config_transform(config)}]
-    return []
+    if not isinstance(sources, list):
+        return []
+    return [
+        s for s in sources
+        if isinstance(s, dict) and (s.get("field_slug") or "").strip()
+    ]
 
 
 def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries, cutoff, source_id=None):
     """Return (name, points[{ts,v}]) for one series source row."""
-    from app.models import Field, FieldLogEntry, MetricPoint
+    from app.models import FieldLogEntry
 
     transform = src.get("transform") if isinstance(src.get("transform"), list) else []
     label = (src.get("label") or "").strip()
@@ -449,36 +701,17 @@ def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries
             return rows
         return query.filter(ts_col >= cutoff).order_by(ts_col).all()
 
-    metric_name = (src.get("metric_name") or "").strip()
-    if metric_name and src.get("field_id") in (None, ""):
-        query = db.query(MetricPoint).filter(MetricPoint.name == metric_name)
-        if source_id:
-            query = query.filter(MetricPoint.source_id == source_id)
-        points = _apply_range(query, MetricPoint.timestamp, MetricPoint.id)
-        series = []
-        for mp in points:
-            v = apply_ops(mp.value, transform) if transform else float(mp.value)
-            if v is None:
-                continue
-            series.append({"ts": mp.timestamp.isoformat(), "v": v})
-        return label or metric_name, series, None
+    field = resolve_field(db, src)
+    if field is None:
+        return None, [], "Choose a field"
 
-    try:
-        field_id = int(src["field_id"]) if src.get("field_id") not in (None, "") else None
-    except (TypeError, ValueError):
-        field_id = None
-    if field_id is None:
-        return None, [], "field_id required"
-
-    field = db.query(Field).filter(Field.id == field_id).first()
-    if not field:
-        return None, [], f"Field id={field_id} not found"
     name = label or field.name
-    value_path = (src.get("value_path") or "").strip() or None
+    field_id = field.id
+    _, value_path = split_slug_path(_config_field_slug(src))
 
     if field.field_type == "logbook":
         if not value_path:
-            return name, [], "value_path required for logbook series"
+            return name, [], "Append a path (e.g. field._poll.response_time_ms)"
         q = db.query(FieldLogEntry).filter(FieldLogEntry.field_id == field_id)
         if source_id:
             q = q.filter(FieldLogEntry.source_id == source_id)
@@ -487,23 +720,10 @@ def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries
         series = series_from_points(pairs, value_path=value_path, transform=transform)
         return name, series, None
 
-    if field.field_type != "counter":
-        return name, [], "series requires a counter or logbook Field"
-
-    query = db.query(MetricPoint).filter(MetricPoint.field_id == field_id)
-    if source_id:
-        query = query.filter(MetricPoint.source_id == source_id)
-    points = _apply_range(query, MetricPoint.timestamp, MetricPoint.id)
-    series = []
-    for mp in points:
-        v = apply_ops(mp.value, transform) if transform else float(mp.value)
-        if v is None:
-            continue
-        series.append({"ts": mp.timestamp.isoformat(), "v": v})
-    return name, series, None
+    return name, [], "series requires a logbook Field"
 
 
-def _series_data(db, config, display="line", source_id=None):
+def _series_data(db, config, display="line", source_id=None, fields_snap=None):
     range_mode = _range_mode(config)
     range_hours = _range_hours(config)
     range_entries = _range_entries(config)
@@ -519,7 +739,7 @@ def _series_data(db, config, display="line", source_id=None):
     }
     rows = _series_source_rows(config)
     if not rows:
-        return {**base, "error": "field_id or sources required"}
+        return {**base, "error": "Choose at least one field"}
 
     series_out = []
     errors = []
@@ -538,96 +758,41 @@ def _series_data(db, config, display="line", source_id=None):
         series_out.append({"name": name or "", "points": points})
 
     if not series_out:
-        return {**base, "error": errors[0] if errors else "no series data"}
+        return {**base, "error": errors[0] if errors else "No data yet"}
 
     # Convenience: single-series name at top level (legacy tests / UI)
     name = series_out[0]["name"] if len(series_out) == 1 else ""
     return {**base, "series": series_out, "name": name}
 
 
-# ── chart (aggregates) ───────────────────────────────────────────────────────
+# ── chart (counter / value slices) ───────────────────────────────────────────
 
-def _chart_source_value(db, src, cutoff, source_id=None):
-    """Return (label, numeric_value) for one chart source row."""
-    from app.models import Field, FieldLogEntry, MetricPoint
-
-    skind = (src.get("kind") or src.get("field_kind") or "").strip()
+def _chart_source_value(db, src, source_id=None):
+    """Return (label, numeric_value) for one chart source (counter / value)."""
     label = (src.get("label") or "").strip()
-    try:
-        field_id = int(src["field_id"]) if src.get("field_id") not in (None, "") else None
-    except (TypeError, ValueError):
-        field_id = None
-    if field_id is None:
-        return None
-    field = db.query(Field).filter(Field.id == field_id).first()
-    if not field:
+    field = resolve_field(db, src)
+    if field is None:
         return None
     if not label:
         label = field.name
-    if not skind:
-        skind = field.field_type
-    value_path = (src.get("value_path") or "").strip() or None
+    if field.field_type not in ("counter", "value"):
+        return None
     transform = src.get("transform") if isinstance(src.get("transform"), list) else []
-    agg = (src.get("agg") or "sum").strip().lower()
-
-    if skind == "logbook" or field.field_type == "logbook":
-        q = (
-            db.query(FieldLogEntry)
-            .filter(FieldLogEntry.field_id == field_id, FieldLogEntry.timestamp >= cutoff)
-        )
-        if source_id:
-            q = q.filter(FieldLogEntry.source_id == source_id)
-        entries = q.all()
-        if agg == "count":
-            if value_path:
-                n = sum(1 for e in entries if get_by_path(e.value, value_path) is not None)
-            else:
-                n = len(entries)
-            return label, float(n)
-        # sum numeric path values
-        if not value_path:
-            return label, 0.0
-        total = 0.0
-        for e in entries:
-            v = extract_number(e.value, value_path, transform)
-            if v is not None:
-                total += v
-        return label, total
-
-    if skind in ("counter", "value") or field.field_type in ("counter", "value"):
-        if field.field_type == "counter" and agg == "sum_range":
-            q = (
-                db.query(MetricPoint)
-                .filter(MetricPoint.field_id == field_id, MetricPoint.timestamp >= cutoff)
-            )
-            if source_id:
-                q = q.filter(MetricPoint.source_id == source_id)
-            total = 0.0
-            for mp in q.all():
-                v = apply_ops(mp.value, transform) if transform else float(mp.value)
-                if v is not None:
-                    total += v
-            return label, total
-        state = field.state or {}
-        raw = state.get("value", 0 if field.field_type == "counter" else "")
-        if field.field_type == "counter":
-            v = apply_ops(raw, transform) if transform else float(raw or 0)
-            return label, 0.0 if v is None else v
-        # value field: try numeric
-        v = apply_ops(raw, transform) if transform else None
-        if v is None:
-            try:
-                v = float(raw)
-            except (TypeError, ValueError):
-                v = 0.0
-        return label, v
-
-    return None
+    state = field.state or {}
+    raw = state.get("value", 0 if field.field_type == "counter" else "")
+    if field.field_type == "counter":
+        v = apply_ops(raw, transform) if transform else float(raw or 0)
+        return label, 0.0 if v is None else v
+    v = apply_ops(raw, transform) if transform else None
+    if v is None:
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            v = 0.0
+    return label, v
 
 
-def _chart_data(db, config, display="pie", source_id=None):
-    range_hours = _range_hours(config)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=range_hours)
+def _chart_data(db, config, display="pie", source_id=None, fields_snap=None):
     sources = config.get("sources")
     if not isinstance(sources, list):
         sources = []
@@ -635,7 +800,7 @@ def _chart_data(db, config, display="pie", source_id=None):
     for src in sources:
         if not isinstance(src, dict):
             continue
-        pair = _chart_source_value(db, src, cutoff, source_id=source_id)
+        pair = _chart_source_value(db, src, source_id=source_id)
         if pair is None:
             continue
         labels.append(pair[0])
@@ -644,7 +809,6 @@ def _chart_data(db, config, display="pie", source_id=None):
         "display": display,
         "labels": labels,
         "values": values,
-        "range_hours": range_hours,
         "unit": (config.get("unit") or "").strip(),
     }
 
@@ -652,116 +816,90 @@ def _chart_data(db, config, display="pie", source_id=None):
 # ── display ──────────────────────────────────────────────────────────────────
 
 def _render_kv_template(template: str, data) -> str:
+    """Substitute ``{{ path }}`` or ``{{ expr }}`` from field data."""
+    data = data if isinstance(data, dict) else {}
+
     def repl(m):
-        path = m.group(1).strip()
-        raw = get_by_path(data, path) if path else data
-        return "" if raw is None else str(raw)
+        body = m.group(1).strip()
+        if not body:
+            return ""
+        # Prefer plain path when it resolves (keeps non-numeric values).
+        # Allow list ``*`` (first item / bindings).
+        if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)*", body):
+            raw = get_by_path(data, body)
+            if raw is not None:
+                return str(raw)
+        num = eval_expr(body, data)
+        if num is not None:
+            return format_expr_number(num)
+        return ""
+
     return _TEMPLATE_RE.sub(repl, template or "")
 
 
-def _display_data(db, config, display="logbook_list", source_id=None):
+def _kv_field_data(field, entry_value=None, transform=None) -> dict:
+    """Build template/tone data dict from a Field (+ optional legacy transform)."""
+    if field.field_type == "logbook":
+        data = entry_value if isinstance(entry_value, dict) else (
+            {"value": entry_value} if entry_value is not None else {}
+        )
+    else:
+        data = dict(field.state or {})
+    transform = transform if isinstance(transform, list) else []
+    if transform and "value" in data:
+        computed = apply_ops(data.get("value"), transform)
+        if computed is not None:
+            data = {**data, "value": computed}
+    return data
+
+
+def _display_data(db, config, display="logbook_list", source_id=None, fields_snap=None):
     from app.models import Field, FieldLogEntry
+
+    snap = fields_snap if isinstance(fields_snap, dict) else {}
 
     if display == "logbook_list":
         return _display_logbook_list(db, config, source_id=source_id)
     if display == "kv_text":
-        field_id = _config_field_id(config)
-        template = config.get("template") or ""
-        data = {}
-        name = ""
-        if field_id is not None:
-            field = db.query(Field).filter(Field.id == field_id).first()
-            if not field:
-                return {"display": display, "error": f"Field id={field_id} not found"}
-            name = field.name
-            if field.field_type == "logbook":
-                entry = (
-                    db.query(FieldLogEntry)
-                    .filter(FieldLogEntry.field_id == field_id)
-                    .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
-                    .first()
-                )
-                data = entry.value if entry and isinstance(entry.value, dict) else (
-                    {"value": entry.value} if entry else {}
-                )
-            else:
-                data = dict(field.state or {})
+        template = (config.get("template") or "").strip() or "{{value}}"
+        data = dict(snap)
         text = _render_kv_template(template, data)
-        return {"display": display, "text": text, "name": name, "template": template}
-
-    if display == "stat":
-        field_id = _config_field_id(config)
-        if field_id is None:
-            return {"display": display, "error": "field_id required"}
-        field = db.query(Field).filter(Field.id == field_id).first()
-        if not field:
-            return {"display": display, "error": f"Field id={field_id} not found"}
-        if field.field_type not in ("counter", "value"):
-            return {"display": display, "error": "stat requires counter or value Field", "name": field.name}
-        transform = _config_transform(config)
-        unit = (config.get("unit") or "").strip()
-        raw = (field.state or {}).get("value", 0 if field.field_type == "counter" else "")
-        if field.field_type == "counter":
-            value = apply_ops(raw, transform) if transform else raw
-        else:
-            value = apply_ops(raw, transform) if transform else raw
-            if value is None and transform:
-                value = raw
-        sign = ""
-        try:
-            num = float(value)
-            if num > 0:
-                sign = "positive"
-            elif num < 0:
-                sign = "negative"
-        except (TypeError, ValueError):
-            pass
         return {
-            "display": display, "name": field.name, "value": value,
-            "field_type": field.field_type, "unit": unit, "field_id": field.id,
-            "sign": sign,
+            "display": "kv_text",
+            "text": text,
+            "name": "",
+            "template": template,
+            "_tone_data": data,
         }
 
     if display == "toggle":
-        field_id = _config_field_id(config)
-        if field_id is None:
-            return {"display": display, "error": "field_id required"}
-        field = db.query(Field).filter(Field.id == field_id).first()
-        if not field:
-            return {"display": display, "error": f"Field id={field_id} not found"}
+        field = resolve_field(db, config)
+        if field is None:
+            return {"display": display, "error": "Choose a field"}
         if field.field_type != "toggle":
-            return {"display": display, "error": "toggle display requires a toggle Field", "name": field.name}
+            return {"display": display, "error": "This display needs a toggle field", "name": field.name}
         return {
             "display": display, "name": field.name,
             "value": bool((field.state or {}).get("value", False)),
             "field_id": field.id,
         }
 
+    if display == "board":
+        return _display_board(db, config, fields_snap=snap)
+
     if display == "table":
-        ids = config.get("field_ids")
-        if not isinstance(ids, list):
-            # allow comma-separated string from forms
-            raw = config.get("field_ids") or config.get("field_id")
-            if isinstance(raw, str) and raw.strip():
-                ids = [p.strip() for p in raw.split(",") if p.strip()]
-            elif raw not in (None, ""):
-                ids = [raw]
-            else:
-                ids = []
         rows = []
-        for raw_id in ids:
-            try:
-                fid = int(raw_id)
-            except (TypeError, ValueError):
+        seen = set()
+        for slug in _config_field_slugs(config):
+            field = db.query(Field).filter(Field.slug == slug).first()
+            if not field or field.id in seen:
                 continue
-            field = db.query(Field).filter(Field.id == fid).first()
-            if not field:
-                continue
+            seen.add(field.id)
             state = field.state or {}
             if field.field_type == "logbook":
                 entry = (
                     db.query(FieldLogEntry)
-                    .filter(FieldLogEntry.field_id == fid)
+                    .filter(FieldLogEntry.field_id == field.id)
                     .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
                     .first()
                 )
@@ -774,58 +912,160 @@ def _display_data(db, config, display="logbook_list", source_id=None):
             })
         return {"display": display, "rows": rows}
 
-    return {"display": display, "error": f"Unknown display mode: {display}"}
+    return {"display": display, "error": "Unknown display mode"}
+
+
+def _display_board(db, config, fields_snap=None):
+    from app.models import FieldLogEntry
+
+    snap = fields_snap if isinstance(fields_snap, dict) else {}
+
+    cell_kind = _board_cell_kind(config)
+    style = resolve_style(config, "board")
+    cells = _board_cells(config)
+    tone_mode = (config.get("tone") or "").strip().lower()
+    if tone_mode not in WIDGET_TONES:
+        tone_mode = default_tone("display", "board")
+
+    if not cells:
+        return {"display": "board", "error": "Choose at least one field", "items": [], "cell_kind": cell_kind}
+    items = []
+
+    for cell in cells:
+        transform = cell.get("transform") or []
+        unit = (cell.get("unit") or "").strip()
+        template = (cell.get("template") or "").strip()
+
+        field = resolve_field(db, cell)
+
+        if cell_kind == "toggle":
+            if field is None or field.field_type != "toggle":
+                continue
+            items.append({
+                "kind": "toggle",
+                "field_id": field.id,
+                "name": field.name,
+                "style": style,
+                "value": bool((field.state or {}).get("value", False)),
+            })
+            continue
+
+        name = field.name if field else ""
+        bound = {}
+        if field is not None:
+            entry_val = None
+            if field.field_type == "logbook":
+                entry = (
+                    db.query(FieldLogEntry)
+                    .filter(FieldLogEntry.field_id == field.id)
+                    .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
+                    .first()
+                )
+                entry_val = entry.value if entry else None
+            bound = _kv_field_data(field, entry_val, transform)
+        data = _merge_template_data(snap, bound)
+        if not template:
+            template = f"{{{{value}}}} {unit}".rstrip() if unit else "{{value}}"
+        text = _render_kv_template(template, data)
+        if not text and data.get("value") is not None:
+            text = str(data.get("value"))
+        elif not text:
+            text = name
+        cell_rules = cell.get("tone_rules") if isinstance(cell.get("tone_rules"), list) else []
+        row_tone = None
+        if tone_mode == "conditional":
+            row_tone = resolve_tone_rules(cell_rules, data)
+        items.append({
+            "kind": "kv_text",
+            "field_id": field.id if field else None,
+            "name": name,
+            "style": style,
+            "text": text,
+            "tone": row_tone,
+        })
+
+    if not items:
+        return {"display": "board", "error": "No valid board fields", "items": [], "cell_kind": cell_kind}
+    return {"display": "board", "items": items, "cell_kind": cell_kind}
 
 
 def _display_logbook_list(db, config, source_id=None):
-    from app.models import Field, FieldLogEntry
+    from app.models import FieldLogEntry
 
-    field_id = _config_field_id(config)
-    if field_id is None:
-        return {"display": "logbook_list", "error": "field_id required", "entries": [], "series": []}
-    field = db.query(Field).filter(Field.id == field_id).first()
-    if not field:
-        return {"display": "logbook_list", "error": f"Field id={field_id} not found", "entries": [], "series": []}
-    if field.field_type != "logbook":
-        return {
-            "display": "logbook_list", "error": "logbook_list requires a logbook Field",
-            "name": field.name, "entries": [], "series": [],
-        }
+    field, err = _resolve_logbook_list_field(db, config)
+    if field is None:
+        msg = {
+            "choose a field": "Choose a field",
+            "that field wasn’t found": "That field wasn’t found",
+            "logbook_list requires a logbook Field": "logbook_list requires a logbook Field",
+            "template must reference a logbook Field": "Template must reference a logbook Field",
+            "template must reference exactly one logbook Field": (
+                "Template must reference exactly one logbook Field"
+            ),
+        }.get(err or "", err or "Choose a field")
+        return {"display": "logbook_list", "error": msg, "entries": []}
+    template = (config.get("template") or "").strip()
+    if "{{" not in template:
+        template = ""
+    slug = (field.slug or "").strip()
     limit = _int_limit(config, "limit", 20)
     q = (
         db.query(FieldLogEntry)
-        .filter(FieldLogEntry.field_id == field_id)
+        .filter(FieldLogEntry.field_id == field.id)
         .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
         .limit(limit)
     )
     if source_id:
         q = q.filter(FieldLogEntry.source_id == source_id)
     rows = q.all()
-    entries = [
-        {"id": e.id, "timestamp": e.timestamp, "value": e.value, "source_id": e.source_id}
-        for e in rows
-    ]
-    value_path = (config.get("value_path") or "").strip() or None
-    transform = _config_transform(config)
-    unit = (config.get("unit") or "").strip()
-    series = []
-    if value_path:
-        pairs = [(e.timestamp, e.value) for e in reversed(rows)]
-        series = series_from_points(pairs, value_path=value_path, transform=transform)
+    entries = []
+    for e in rows:
+        row = {
+            "id": e.id,
+            "timestamp": e.timestamp,
+            "value": e.value,
+            "source_id": e.source_id,
+        }
+        if template and slug:
+            if isinstance(e.value, dict):
+                data = {slug: e.value}
+            else:
+                data = {slug: {"value": e.value}}
+            row["text"] = _render_kv_template(template, data)
+        entries.append(row)
+    tone_data = {}
+    if entries and slug:
+        latest = entries[0].get("value")
+        if isinstance(latest, dict):
+            tone_data = {slug: latest}
+        else:
+            tone_data = {slug: {"value": latest}}
     return {
         "display": "logbook_list",
         "name": field.name,
         "entries": entries,
         "field_id": field.id,
-        "series": series,
-        "unit": unit,
-        "value_path": value_path or "",
+        "template": template,
+        "_tone_data": tone_data,
     }
 
 
 # ── links ────────────────────────────────────────────────────────────────────
 
-def _links_data(db, config, display="list", source_id=None):
+def _favicon_for_url(url: str) -> str:
+    """Derive {scheme}://{host}/favicon.ico for http(s) URLs; else empty."""
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return ""
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}/favicon.ico"
+
+
+def _links_data(db, config, display="list", source_id=None, fields_snap=None):
     items = config.get("items")
     if not isinstance(items, list):
         items = []
@@ -840,14 +1080,14 @@ def _links_data(db, config, display="list", source_id=None):
         cleaned.append({
             "label": label,
             "url": url,
-            "icon": (it.get("icon") or "").strip(),
+            "favicon": _favicon_for_url(url),
         })
     return {"display": display, "items": cleaned}
 
 
 # ── system ───────────────────────────────────────────────────────────────────
 
-def _system_data(db, config, display="source_health", source_id=None):
+def _system_data(db, config, display="source_health", source_id=None, fields_snap=None):
     if display == "source_health":
         return {**_source_health_data(db, config, source_id=source_id), "display": display}
     if display == "recent_events":
@@ -856,7 +1096,7 @@ def _system_data(db, config, display="source_health", source_id=None):
         return {**_poller_status_data(db, config, source_id=source_id), "display": display}
     if display == "metric_summary":
         return {**_metric_summary_data(db, config, source_id=source_id), "display": display}
-    return {"display": display, "error": f"Unknown system display: {display}"}
+    return {"display": display, "error": "Unknown display"}
 
 
 def _source_health_data(db, config, source_id=None):

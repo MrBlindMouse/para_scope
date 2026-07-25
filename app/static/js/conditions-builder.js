@@ -4,6 +4,14 @@
  */
 (function () {
   var OPS = ["equals", "not", "gt", "lt", "contains", "regex"];
+  var OP_LABELS = {
+    equals: "Equals (=)",
+    not: "Not equal (≠)",
+    gt: "Greater than (>)",
+    lt: "Less than (<)",
+    contains: "Contains",
+    regex: "Matches pattern"
+  };
 
   function parseInitial(el) {
     var raw = el.getAttribute("data-initial") || "{}";
@@ -92,7 +100,7 @@
     OPS.forEach(function (name) {
       var opt = document.createElement("option");
       opt.value = name;
-      opt.textContent = name;
+      opt.textContent = OP_LABELS[name] || name;
       if (name === (row.op || "equals")) opt.selected = true;
       op.appendChild(opt);
     });

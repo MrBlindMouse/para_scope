@@ -1,6 +1,8 @@
 {% set canvas_id = "chart-" ~ (widget_id or "series") %}
 {% set disp = display or wdata.display or "line" %}
 {% set style = (widget_config.style if widget_config else None) or wdata.style or "default" %}
+{% set tone = wdata.tone if wdata else none %}
+{% if tone %}<div class="widget-tone widget-tone--{{ tone }}">{% endif %}
 {% if wdata and wdata.error %}
 <p class="text-muted">{{ wdata.error }}</p>
 {% elif wdata and wdata.series %}
@@ -18,3 +20,4 @@
 {% else %}
 <p class="text-muted">No data available.</p>
 {% endif %}
+{% if tone %}</div>{% endif %}
