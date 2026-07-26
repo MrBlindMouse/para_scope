@@ -1658,8 +1658,35 @@ class TestStyleConfig:
 
 
 class TestDashboardGridLayout:
+    def test_series_chart_drop_tone_on_save(self):
+        from app.dashboard_layout import normalize_for_save
+        from app.widgets import resolve_widget_tone
+
+        saved = normalize_for_save([
+            {
+                "type": "series", "display": "line", "title": "S",
+                "config": {"style": "basic", "tone": "conditional", "tone_rules": [{"tone": "positive"}]},
+            },
+            {
+                "type": "chart", "display": "pie", "title": "C",
+                "config": {"style": "basic", "tone": "none"},
+            },
+        ])
+        assert "tone" not in saved[0]["config"]
+        assert "tone_rules" not in saved[0]["config"]
+        assert "tone" not in saved[1]["config"]
+        assert resolve_widget_tone(
+            {"tone": "conditional"}, widget_type="series", display="line",
+        ) is None
+        assert resolve_widget_tone(
+            {"tone": "conditional"}, widget_type="chart", display="pie",
+        ) is None
+
     def test_dashboard_exposes_grid_resolution(self, authenticated_client):
-        from app.dashboard_layout import DEFAULT_W, GRID_COLUMNS
+        from app.dashboard_layout import (
+            DEFAULT_W, GRID_COLUMN_LIVE_MAX, GRID_COLUMN_WIDTH, GRID_COLUMNS,
+            GRID_STACK_BELOW,
+        )
 
         authenticated_client.post(
             "/config/dashboard",
@@ -1671,7 +1698,12 @@ class TestDashboardGridLayout:
         resp = authenticated_client.get("/")
         assert resp.status_code == 200
         assert f'data-gs-column="{GRID_COLUMNS}"'.encode() in resp.content
+        assert f'data-gs-column-width="{GRID_COLUMN_WIDTH}"'.encode() in resp.content
+        assert f'data-gs-column-live-max="{GRID_COLUMN_LIVE_MAX}"'.encode() in resp.content
+        assert f'data-gs-stack-below="{GRID_STACK_BELOW}"'.encode() in resp.content
+        assert b".gs-1>" in resp.content
         assert f".gs-{GRID_COLUMNS}>".encode() in resp.content
+        assert f".gs-{GRID_COLUMN_LIVE_MAX}>".encode() in resp.content
         assert b"gs-id=" in resp.content
 
         from app.database import get_db
@@ -1686,6 +1718,22 @@ class TestDashboardGridLayout:
             assert saved[0]["w"] == DEFAULT_W
         finally:
             db.close()
+
+    def test_dashboard_grid_js_defers_column_opts_and_gates_edit(self):
+        from pathlib import Path
+
+        js = Path(__file__).resolve().parents[1].joinpath("static/js/dashboard-grid.js").read_text()
+        assert "Load widgets at design column count first" in js
+        assert "applyResponsiveColumns" in js
+        assert 'layout = "list"' in js
+        assert 'layout = "none"' in js
+        assert 'layout = "moveScale"' not in js
+        assert "stackBelow" in js
+        assert "liveMax" in js
+        assert "syncEditAvailability" in js
+        assert "toggle.disabled" in js
+        assert "columnOpts" not in js
+        assert "checkDynamicColumn" not in js
 
     def test_api_layout_merges_geometry_by_id(self, authenticated_client):
         from app.database import get_db
@@ -1989,6 +2037,139 @@ class TestWidgetTransforms:
             })
             assert data["labels"] == ["Hits", "Latency"]
             assert data["values"] == [42.0, 3.5]
+            assert "max" not in data
+        finally:
+            db.close()
+
+    def test_chart_max_literal_and_field(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            counter = Field(name="Used", slug="used", field_type="counter",
+                            config={}, state={"value": 40})
+            ceiling = Field(name="Cap", slug="cap", field_type="value",
+                            config={}, state={"value": "80"})
+            db.add_all([counter, ceiling])
+            db.commit()
+            by_literal = fetch_widget_data("chart", db, display="radial", widget_config={
+                "style": "basic",
+                "max": 50,
+                "sources": [{"field_slug": "used", "label": "Used"}],
+            })
+            assert by_literal["values"] == [40.0]
+            assert by_literal["max"] == 50.0
+            by_field = fetch_widget_data("chart", db, display="radial", widget_config={
+                "style": "multi_band",
+                "max_field_slug": "cap",
+                "sources": [
+                    {"field_slug": "used", "label": "Used"},
+                    {"field_slug": "cap", "label": "Cap"},
+                ],
+            })
+            assert by_field["max"] == 80.0
+            angled = fetch_widget_data("chart", db, display="radial", widget_config={
+                "style": "custom_angle",
+                "max": 100,
+                "start_angle": -120,
+                "end_angle": 120,
+                "sources": [
+                    {"field_slug": "used", "label": "Used"},
+                    {"field_slug": "cap", "label": "Cap"},
+                ],
+            })
+            assert angled["start_angle"] == -120.0
+            assert angled["end_angle"] == 120.0
+            prefer_literal = fetch_widget_data("chart", db, display="radial", widget_config={
+                "style": "needle",
+                "max": 25,
+                "max_field_slug": "cap",
+                "sources": [{"field_slug": "used", "label": "Used"}],
+            })
+            assert prefer_literal["max"] == 25.0
+        finally:
+            db.close()
+
+    def test_chart_style_source_cardinality(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import validate_widget_bindings
+
+        db = next(get_db())
+        try:
+            a = Field(name="A", slug="a", field_type="counter", config={}, state={"value": 1})
+            b = Field(name="B", slug="b", field_type="counter", config={}, state={"value": 2})
+            db.add_all([a, b])
+            db.commit()
+            err = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "radial",
+                "config": {
+                    "style": "multi_band",
+                    "sources": [{"field_slug": "a", "label": "A"}],
+                },
+            }])
+            assert err and "at least 2" in err
+            err2 = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "radial",
+                "config": {
+                    "style": "basic",
+                    "sources": [
+                        {"field_slug": "a", "label": "A"},
+                        {"field_slug": "b", "label": "B"},
+                    ],
+                },
+            }])
+            assert err2 and "at most 1" in err2
+            ok = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "radar",
+                "config": {
+                    "style": "basic",
+                    "sources": [
+                        {"field_slug": "a", "label": "A"},
+                        {"field_slug": "b", "label": "B"},
+                    ],
+                },
+            }])
+            assert ok and "at least 3" in ok
+            c = Field(name="C", slug="c", field_type="counter", config={}, state={"value": 3})
+            db.add(c)
+            db.commit()
+            ok3 = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "radar",
+                "config": {
+                    "style": "basic",
+                    "sources": [
+                        {"field_slug": "a", "label": "A"},
+                        {"field_slug": "b", "label": "B"},
+                        {"field_slug": "c", "label": "C"},
+                    ],
+                },
+            }])
+            assert ok3 is None
+            polar_short = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "polar",
+                "config": {
+                    "style": "basic",
+                    "sources": [
+                        {"field_slug": "a", "label": "A"},
+                        {"field_slug": "b", "label": "B"},
+                    ],
+                },
+            }])
+            assert polar_short and "at least 3" in polar_short
+            bad_disp = validate_widget_bindings(db, [{
+                "type": "series",
+                "display": "sparkline",
+                "config": {"style": "basic", "sources": []},
+            }])
+            assert bad_disp and "display" in bad_disp.lower()
         finally:
             db.close()
 
@@ -2006,7 +2187,7 @@ class TestWidgetTransforms:
             })
             assert len(data["items"]) == 2
             assert data["items"][0]["label"] == "Docs"
-            assert data["items"][0]["favicon"] == "https://example.com/favicon.ico"
+            assert data["items"][0]["favicon"] == "https://icons.duckduckgo.com/ip3/example.com.ico"
             assert "icon" not in data["items"][0]
             assert data["items"][1]["label"] == "Local"
             assert data["items"][1]["favicon"] == ""
@@ -3991,7 +4172,7 @@ class TestMetricGraphRange:
             assert data["series"][1]["name"] == "Beta"
             assert data["series"][0]["points"][0]["v"] == 1.0
             assert data["series"][1]["points"][0]["v"] == 2.0
-            assert data.get("style") == "default"
+            assert data.get("style") == "basic"
         finally:
             db.close()
 

@@ -27,7 +27,8 @@ from app.security import (
 from app.pipeline import evaluate_and_dispatch
 from app.widgets import fetch_widget_data, get_widget_types, validate_widget_bindings
 from app.dashboard_layout import (
-    GRID_CELL_HEIGHT, GRID_COLUMNS, GRID_MARGIN,
+    GRID_CELL_HEIGHT, GRID_COLUMN_LIVE_MAX, GRID_COLUMN_WIDTH, GRID_COLUMNS,
+    GRID_MARGIN, GRID_STACK_BELOW,
     find_widget, grid_stack_column_css, layout_json, merge_geometry,
     migrate_widgets, normalize_for_save, parse_layout_config,
 )
@@ -154,9 +155,12 @@ async def root(request: Request, db: Session = Depends(get_db)):
             "widgets": widgets,
             "widget_data": widget_data,
             "grid_columns": GRID_COLUMNS,
+            "grid_column_width": GRID_COLUMN_WIDTH,
+            "grid_column_live_max": GRID_COLUMN_LIVE_MAX,
             "grid_cell_height": GRID_CELL_HEIGHT,
             "grid_margin": GRID_MARGIN,
-            "grid_column_css": grid_stack_column_css(GRID_COLUMNS),
+            "grid_stack_below": GRID_STACK_BELOW,
+            "grid_column_css": grid_stack_column_css(GRID_COLUMN_LIVE_MAX),
         },
     )
 

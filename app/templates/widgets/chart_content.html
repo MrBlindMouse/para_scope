@@ -1,21 +1,24 @@
 {% set canvas_id = "chart-" ~ (widget_id or "chart") %}
 {% set disp = display or wdata.display or "pie" %}
-{% set style = (widget_config.style if widget_config else None) or wdata.style or "default" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "pie" %}
 {% set tone = wdata.tone if wdata else none %}
 {% if tone %}<div class="widget-tone widget-tone--{{ tone }}">{% endif %}
 {% if wdata and wdata.error %}
 <p class="text-muted">{{ wdata.error }}</p>
 {% elif wdata and wdata.labels %}
 <div class="widget-chart">
-  <canvas id="{{ canvas_id }}"
-          data-widget-chart="aggregate"
-          data-chart-display="{{ disp }}"
-          data-chart-style="{{ style }}"
-          data-labels='{{ wdata.labels | tojson }}'
-          data-values='{{ wdata.values | tojson }}'
-          data-unit="{{ wdata.unit or '' }}"></canvas>
+  <div id="{{ canvas_id }}"
+       data-widget-chart="aggregate"
+       data-chart-display="{{ disp }}"
+       data-chart-style="{{ style }}"
+       data-labels='{{ wdata.labels | tojson }}'
+       data-values='{{ wdata.values | tojson }}'
+       data-unit="{{ wdata.unit or '' }}"
+       {% if wdata.max is defined %}data-max="{{ wdata.max }}"{% endif %}
+       {% if wdata.start_angle is defined %}data-start-angle="{{ wdata.start_angle }}"{% endif %}
+       {% if wdata.end_angle is defined %}data-end-angle="{{ wdata.end_angle }}"{% endif %}></div>
 </div>
 {% else %}
-<p class="text-muted">No chart data. Add sources in widget config.</p>
+<p class="text-muted">No chart data. Add fields in widget settings.</p>
 {% endif %}
 {% if tone %}</div>{% endif %}

@@ -29,7 +29,7 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About action types"
-              data-tip="Update field: change a stored Field. Notify: title/body can include {{ '{{source}}' }}. Call URL: send the event to another service.">?</button>
+              data-tip="Update field: change a stored Field. Browser notification: title/body can include {{ '{{source}}' }}. Call URL: send the event to another service.">?</button>
     </span>
     <select name="action_type" class="input" id="action-type-select">
       {% for t in action_types %}
@@ -191,7 +191,7 @@
       <label class="stack">
         Mode
         <select name="body_mode" class="input" id="http-body-mode">
-          <option value="auto" {% if not cfg.get('body_mode') or cfg.get('body_mode') == 'auto' %}selected{% endif %}>Event envelope (default)</option>
+          <option value="auto" {% if not cfg.get('body_mode') or cfg.get('body_mode') == 'auto' %}selected{% endif %}>Full event (default)</option>
           <option value="custom" {% if cfg.get('body_mode') == 'custom' %}selected{% endif %}>Custom JSON</option>
         </select>
       </label>

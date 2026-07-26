@@ -32,13 +32,13 @@
               {% if source.source_type == "poll" %}
               data-tip="Built-in: on_success, on_failure. Optional: always (every run). Custom names need a matching schedule setting."
               {% else %}
-              data-tip="Name the sender uses (e.g. order.paid). Must match what the sender includes once types exist. Optional: always."
+              data-tip="Name the sender uses (e.g. status.changed). Must match what the sender includes once types exist. Optional: always."
               {% endif %}
       >?</button>
     </span>
     <input name="name" type="text" class="input"
            value="{{ event.name if is_edit else '' }}"
-           placeholder="{% if source.source_type == 'poll' %}always{% else %}order.paid{% endif %}"
+           placeholder="{% if source.source_type == 'poll' %}always{% else %}status.changed{% endif %}"
            required autofocus>
   </label>
   <label class="stack">
@@ -49,7 +49,7 @@
               data-tip="Optional note for you. Shown on the pipeline; senders don’t see it.">?</button>
     </span>
     <textarea name="description" rows="2" class="input"
-              placeholder="{% if source.source_type == 'poll' %}Poll completed successfully{% else %}Fired when an order is paid{% endif %}">{% if is_edit %}{{ event.description }}{% endif %}</textarea>
+              placeholder="{% if source.source_type == 'poll' %}Poll completed successfully{% else %}Fired when status changes{% endif %}">{% if is_edit %}{{ event.description }}{% endif %}</textarea>
   </label>
   <div class="flex items-center gap">
     <button type="submit" class="btn btn--primary">{% if is_edit %}Save Event{% else %}Create Event{% endif %}</button>

@@ -11,6 +11,8 @@ Self-hosted event hub and operational dashboard for personal or small-team infra
 
 In-app detail: **Help** at `/help` after login.
 
+[Landing Page](https://para-scope.bmd-studios.com)
+
 ## Requirements
 
 - Python 3.11+

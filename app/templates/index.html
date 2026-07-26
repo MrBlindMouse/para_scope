@@ -36,8 +36,11 @@
 <style>{{ grid_column_css | safe }}</style>
 <div class="grid-stack dashboard-grid" id="dashboard-grid"
      data-gs-column="{{ grid_columns }}"
+     data-gs-column-width="{{ grid_column_width }}"
+     data-gs-column-live-max="{{ grid_column_live_max }}"
      data-gs-cell-height="{{ grid_cell_height }}"
-     data-gs-margin="{{ grid_margin }}">
+     data-gs-margin="{{ grid_margin }}"
+     data-gs-stack-below="{{ grid_stack_below }}">
   {% for widget in widgets %}
     {% set wid = widget.id %}
     {% set wdata = widget_data.get(wid, {}) %}
@@ -70,8 +73,9 @@
     </div>
   {% endfor %}
 </div>
+<link rel="stylesheet" href="/static/vendor/apexcharts/apexcharts.css">
 <script src="/static/vendor/gridstack/gridstack-all.js"></script>
-<script src="/static/vendor/chartjs/chart.umd.min.js"></script>
+<script src="/static/vendor/apexcharts/apexcharts.min.js"></script>
 <script src="/static/js/widget-charts.js"></script>
 <script src="/static/js/dashboard-grid.js"></script>
 {% else %}

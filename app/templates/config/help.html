@@ -32,7 +32,7 @@
       <p><strong>Source → Events → Rules → Actions</strong></p>
       <ol class="stack help__list help__list--ordered">
         <li><strong>Source</strong> — a webhook receiver or a poll that checks a URL on a schedule.</li>
-        <li><strong>Events</strong> — named types for that source (e.g. <code>payment.paid</code>, <code>on_success</code>).</li>
+        <li><strong>Events</strong> — named types for that source (e.g. <code>status.changed</code>, <code>on_success</code>).</li>
         <li><strong>Rules</strong> — which events (and optional conditions) should fire actions.</li>
         <li><strong>Actions</strong> — update a Field, call a URL, or send a browser notification when the rule matches.</li>
       </ol>
@@ -145,8 +145,8 @@
             <td>Substring appears in the text form of the value</td>
           </tr>
           <tr>
-            <td>Matches pattern</td>
-            <td>Pattern match on the text form of the value</td>
+            <td>Matches pattern (regex)</td>
+            <td>Regular expression against the text form of the value</td>
           </tr>
         </tbody>
       </table>
@@ -178,8 +178,8 @@
 {"data.*.status": "fail"}
 # any element in data[] has status "fail"
 
-{"data.*.base": "USD", "data.*.quote": "ZAR"}
-# one element in data[] has base USD and quote ZAR (same row)</pre>
+{"data.*.base": "USD", "data.*.quote": "EUR"}
+# one element in data[] has base USD and quote EUR (same row)</pre>
       </details>
     </div>
   </section>
@@ -233,7 +233,7 @@
         <ul class="stack help__list">
           <li>Send <code>POST /webhook/{slug}</code> with a JSON body.</li>
           <li>Type via the <code>X-Event-Type</code> header, or body field <code>event_type</code> / <code>type</code>.</li>
-          <li>With a secret: also send <code>X-Webhook-Timestamp</code> (unix seconds) and <code>X-Webhook-Signature</code> (HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>).</li>
+          <li>With a secret: also send <code>X-Webhook-Timestamp</code> (unix seconds) and <code>X-Webhook-Signature</code>. Sign the request so Para-Scope can verify it: HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>.</li>
         </ul>
       </details>
     </div>
@@ -263,7 +263,7 @@
     <div class="card__body stack">
       <p>To use browser notification actions:</p>
       <ol class="stack help__list help__list--ordered">
-        <li>Ask your admin to enable push (VAPID keys in server config).</li>
+        <li>Ask your admin to enable browser notifications on the server.</li>
         <li>While logged in, click the bell icon in the page header to allow notifications.</li>
         <li>In the action, use placeholders like <code>{{ '{{source}}' }}</code> in title or body to insert event values.</li>
       </ol>

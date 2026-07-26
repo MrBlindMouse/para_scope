@@ -29,7 +29,7 @@ OPERATOR_LABELS = {
     "gt": "Greater than (>)",
     "lt": "Less than (<)",
     "contains": "Contains",
-    "regex": "Matches pattern",
+    "regex": "Matches pattern (regex)",
 }
 
 
@@ -50,7 +50,7 @@ def operator_label(slug: str) -> str:
 
 
 def action_label(action, fields_by_id: dict[int, Any] | None = None) -> str:
-    """e.g. Update → Uptime, Call URL → https://…, Notify → title."""
+    """e.g. Update → Uptime, Call URL → https://…, Alert → title."""
     at = action.action_type or "?"
     cfg = action.config or {}
     if at == "field_push":
@@ -69,7 +69,7 @@ def action_label(action, fields_by_id: dict[int, Any] | None = None) -> str:
         return "Call URL"
     if at == "web_push":
         title = (cfg.get("title") or "").strip()
-        return f"Notify → {title}" if title else "Browser notification"
+        return f"Alert → {title}" if title else "Browser notification"
     return action_type_label(at)
 
 

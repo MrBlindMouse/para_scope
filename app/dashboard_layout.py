@@ -6,9 +6,15 @@ import secrets
 from typing import Any
 
 # Single source of truth for GridStack resolution (JS + CSS read these via the template).
-GRID_COLUMNS = 36
+# Design standard ≈ GRID_COLUMNS * GRID_COLUMN_WIDTH px; live cols = round(gridWidth / GRID_COLUMN_WIDTH).
+GRID_COLUMNS = 36  # design / saved coordinates (the standard)
+GRID_COLUMN_WIDTH = 40  # px per cell; liveCols = round(gridWidth / this)
 GRID_CELL_HEIGHT = 40  # px
 GRID_MARGIN = 6  # px
+# Safety ceiling for CSS + absurd ultrawides (not a second design grid).
+GRID_COLUMN_LIVE_MAX = 96
+# Layout mode threshold (viewport / window width px); at/below → full-width stacked list.
+GRID_STACK_BELOW = 768
 
 COL_FULL = GRID_COLUMNS
 DEFAULT_W = max(1, GRID_COLUMNS // 2)
@@ -25,9 +31,8 @@ def new_widget_id() -> str:
     return "w_" + secrets.token_hex(4)
 
 
-def grid_stack_column_css(columns: int) -> str:
-    """Emit .gs-N width/left percentage rules for GridStack column count N."""
-    n = max(1, int(columns))
+def _grid_stack_column_css_n(n: int) -> str:
+    """Emit .gs-N width/left percentage rules for a single column count N."""
     pct = 100.0 / n
     parts = [f".gs-{n}>.grid-stack-item{{width:{pct:.4f}%}}"]
     for k in range(1, n + 1):
@@ -35,6 +40,12 @@ def grid_stack_column_css(columns: int) -> str:
         if k < n:
             parts.append(f'.gs-{n}>.grid-stack-item[gs-x="{k}"]{{left:{pct * k:.4f}%}}')
     return "".join(parts)
+
+
+def grid_stack_column_css(columns: int) -> str:
+    """Emit .gs-N rules for every N in 1..columns (live column count may shrink)."""
+    n = max(1, int(columns))
+    return "".join(_grid_stack_column_css_n(i) for i in range(1, n + 1))
 
 
 def parse_layout_config(raw) -> dict:
@@ -151,11 +162,14 @@ def normalize_for_save(widgets: list[Any]) -> list[dict]:
     for w in widgets:
         if not isinstance(w, dict) or not w.get("type"):
             continue
+        cfg = w.get("config") if isinstance(w.get("config"), dict) else {}
+        if w["type"] in ("series", "chart"):
+            cfg = {k: v for k, v in cfg.items() if k not in ("tone", "tone_rules")}
         item = {
             "type": w["type"],
             "title": w.get("title") or w.get("label") or w["type"],
             "show_title": bool(w["show_title"]) if "show_title" in w else True,
-            "config": w.get("config") if isinstance(w.get("config"), dict) else {},
+            "config": cfg,
         }
         if w.get("display"):
             item["display"] = str(w["display"])

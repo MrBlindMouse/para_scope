@@ -16,17 +16,19 @@ from app.widget_transforms import (
 )
 
 # ── Kind registry ────────────────────────────────────────────────────────────
+# ponytail: heatmap / calendar_heatmap / column range — To be implemented (Apex
+# grid + min/max pair data shapes; not in KIND_DISPLAYS until then).
 
 KIND_DISPLAYS = {
-    "series": ("line", "area", "sparkline"),
-    "chart": ("pie", "doughnut", "bar", "stacked_bar"),
+    "series": ("line", "area", "column"),
+    "chart": ("pie", "radial", "radar", "polar"),
     "display": ("logbook_list", "kv_text", "toggle", "board", "table"),
     "links": ("list", "button_row", "icon_grid"),
     "system": ("source_health", "recent_events", "poller_status", "metric_summary"),
 }
 
 KIND_TITLES = {
-    "series": "Series Graph",
+    "series": "Time series",
     "chart": "Chart",
     "display": "Display",
     "links": "Links",
@@ -36,11 +38,11 @@ KIND_TITLES = {
 DISPLAY_TITLES = {
     "line": "Line",
     "area": "Area",
-    "sparkline": "Sparkline",
-    "pie": "Pie",
-    "doughnut": "Doughnut",
-    "bar": "Bar",
-    "stacked_bar": "Stacked bar",
+    "column": "Column",
+    "pie": "Pie / Donut",
+    "radial": "Radial / Gauge",
+    "radar": "Radar",
+    "polar": "Polar Area",
     "logbook_list": "Logbook list",
     "kv_text": "Key / text",
     "toggle": "Toggle",
@@ -51,7 +53,7 @@ DISPLAY_TITLES = {
     "icon_grid": "Icon grid",
     "source_health": "Source Health",
     "recent_events": "Recent Events",
-    "poller_status": "Poller Status",
+    "poller_status": "Poll status",
     "metric_summary": "Metric Summary",
 }
 
@@ -61,13 +63,16 @@ DISPLAY_STYLES = {
     "logbook_list": ("code", "timeline", "cards"),
     "kv_text": ("plain", "mono", "callout"),
     "table": ("plain", "compact", "striped"),
-    "line": ("default", "smooth", "stepped", "markers"),
-    "area": ("default", "smooth", "stepped", "markers"),
-    "sparkline": ("default", "filled"),
-    "pie": ("default", "legend_right", "no_legend"),
-    "doughnut": ("default", "legend_right", "no_legend"),
-    "bar": ("default", "horizontal", "no_legend"),
-    "stacked_bar": ("default", "horizontal", "no_legend"),
+    "line": ("basic", "labels", "multi", "stepline"),
+    "area": ("basic", "negative", "stacked"),
+    "column": ("basic", "labels", "stacked", "stacked_100", "negative"),
+    "pie": ("pie", "donut"),
+    "radial": (
+        "basic", "multi_band", "custom_angle", "gradient",
+        "stroked_gauge", "gauge_ticks", "needle",
+    ),
+    "radar": ("basic",),
+    "polar": ("basic",),
     "list": ("default", "compact", "emphasized"),
     "button_row": ("default", "compact", "emphasized"),
     "icon_grid": ("default", "compact", "emphasized"),
@@ -91,16 +96,68 @@ STYLE_TITLES = {
     "callout": "Callout",
     "striped": "Striped",
     "default": "Default",
-    "smooth": "Smooth",
-    "stepped": "Stepped",
-    "markers": "Markers",
-    "filled": "Filled",
-    "legend_right": "Legend right",
-    "no_legend": "No legend",
-    "horizontal": "Horizontal",
+    "basic": "Basic",
+    "labels": "With labels",
+    "multi": "Multi-series",
+    "stepline": "Stepline",
+    "negative": "Negative values",
+    "stacked": "Stacked",
+    "stacked_100": "Stacked 100%",
+    "pie": "Pie",
+    "donut": "Donut",
+    "multi_band": "Multiple bands",
+    "custom_angle": "Custom angle",
+    "gradient": "Gradient",
+    "stroked_gauge": "Stroked gauge",
+    "gauge_ticks": "Gauge with ticks",
+    "needle": "Needle gauge",
     "emphasized": "Emphasized",
     "table": "Table",
 }
+
+# Extra config keys + source cardinality per (display, style).
+# keys: allowlisted style-specific config fields (plus shared sources/unit/range).
+STYLE_CONFIG: dict[tuple[str, str], dict] = {
+    ("line", "basic"): {"keys": (), "min_sources": 1},
+    ("line", "labels"): {"keys": (), "min_sources": 1},
+    ("line", "multi"): {"keys": (), "min_sources": 2},
+    ("line", "stepline"): {"keys": (), "min_sources": 1},
+    ("area", "basic"): {"keys": (), "min_sources": 1},
+    ("area", "negative"): {"keys": (), "min_sources": 1},
+    ("area", "stacked"): {"keys": (), "min_sources": 2},
+    ("column", "basic"): {"keys": ("horizontal",), "min_sources": 1},
+    ("column", "labels"): {"keys": ("horizontal",), "min_sources": 1},
+    ("column", "stacked"): {"keys": ("horizontal",), "min_sources": 2},
+    ("column", "stacked_100"): {"keys": ("horizontal",), "min_sources": 2},
+    ("column", "negative"): {"keys": ("horizontal",), "min_sources": 1},
+    ("pie", "pie"): {"keys": (), "min_sources": 1},
+    ("pie", "donut"): {"keys": (), "min_sources": 1},
+    ("radial", "basic"): {"keys": ("max", "max_field_slug"), "min_sources": 1, "max_sources": 1},
+    ("radial", "multi_band"): {"keys": ("max", "max_field_slug"), "min_sources": 2},
+    ("radial", "custom_angle"): {
+        "keys": ("max", "max_field_slug", "start_angle", "end_angle"),
+        "min_sources": 2,
+    },
+    ("radial", "gradient"): {"keys": ("max", "max_field_slug"), "min_sources": 1, "max_sources": 1},
+    ("radial", "stroked_gauge"): {
+        "keys": ("max", "max_field_slug"), "min_sources": 1, "max_sources": 1,
+    },
+    ("radial", "gauge_ticks"): {
+        "keys": ("max", "max_field_slug"), "min_sources": 1, "max_sources": 1,
+    },
+    ("radial", "needle"): {"keys": ("max", "max_field_slug"), "min_sources": 1, "max_sources": 1},
+    ("radar", "basic"): {"keys": (), "min_sources": 3},
+    ("polar", "basic"): {"keys": (), "min_sources": 3},
+}
+
+
+def style_config_for(display: str, style: str) -> dict:
+    """Return STYLE_CONFIG entry for display+style (empty dict if none)."""
+    return dict(STYLE_CONFIG.get((display, style)) or {})
+
+
+def style_extra_keys(display: str, style: str) -> tuple:
+    return tuple(style_config_for(display, style).get("keys") or ())
 
 # Field binding rules: kind-level, with optional per-display overrides
 _BINDING_SERIES = {
@@ -189,10 +246,17 @@ def get_widget_kinds():
     for kind, displays in KIND_DISPLAYS.items():
         disp_entries = []
         for d in displays:
+            styles = styles_for(d)
+            for s in styles:
+                sc = style_config_for(d, s["id"])
+                s["keys"] = list(sc.get("keys") or ())
+                s["min_sources"] = int(sc.get("min_sources") or 1)
+                if "max_sources" in sc:
+                    s["max_sources"] = int(sc["max_sources"])
             disp_entries.append({
                 "id": d,
                 "title": DISPLAY_TITLES.get(d, d),
-                "styles": styles_for(d),
+                "styles": styles,
                 "default_style": default_style(d),
                 "binding": binding_for(kind, d),
             })
@@ -270,7 +334,10 @@ def resolve_widget_tone(
     """Return positive|negative|neutral from input, or None when no background.
 
     Board with kv_text cells uses per-row tones only (no widget wrapper tone).
+    Series/chart never use rule-based backgrounds.
     """
+    if widget_type in ("series", "chart"):
+        return None
     cfg = config or {}
     raw = (cfg.get("tone") or "").strip().lower()
     if raw not in WIDGET_TONES:
@@ -314,6 +381,7 @@ def widget_referenced_field_ids(db, config: dict | None) -> set[int]:
             slugs.add(slug)
 
     _add(_config_field_slug(cfg))
+    _add((cfg.get("max_field_slug") or "").strip())
     for part in _config_field_slugs(cfg):
         _add(part)
     tmpl = (cfg.get("template") or "").strip()
@@ -349,18 +417,24 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
         if not isinstance(w, dict):
             continue
         kind = (w.get("type") or "").strip()
+        if kind not in KIND_DISPLAYS:
+            return f"Widget {i + 1}: unknown widget type"
         disp = (w.get("display") or default_display(kind) or "").strip()
         cfg = w.get("config") if isinstance(w.get("config"), dict) else {}
         label = f"Widget {i + 1} ({KIND_TITLES.get(kind, kind)} / {DISPLAY_TITLES.get(disp, disp)})"
+        if disp not in (KIND_DISPLAYS.get(kind) or ()):
+            return f"{label}: that display isn’t available"
         rule = binding_for(kind, disp)
         card = rule.get("cardinality") or "none"
-        style = (cfg.get("style") or "").strip()
+        style = resolve_style(cfg, disp)
         board_kind = _board_cell_kind(cfg) if disp == "board" else ""
         style_allowed = (
             DISPLAY_STYLES.get(board_kind) if disp == "board" else DISPLAY_STYLES.get(disp)
         ) or ()
-        if style and style not in style_allowed:
+        raw_style = (cfg.get("style") or "").strip()
+        if raw_style and raw_style not in style_allowed:
             return f"{label}: that style isn’t available"
+        sc = style_config_for(disp, style)
         if card == "none":
             continue
         allowed = rule.get("field_types")  # None = any
@@ -383,14 +457,20 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
 
         if key == "sources":
             sources = cfg.get("sources") if isinstance(cfg.get("sources"), list) else []
-            if required and not sources:
+            filled = [
+                s for s in sources
+                if isinstance(s, dict) and (s.get("field_slug") or "").strip()
+            ]
+            if required and not filled:
                 return f"{label}: pick at least one field"
-            for src in sources:
-                if not isinstance(src, dict):
-                    continue
+            min_src = int(sc.get("min_sources") or 1)
+            max_src = sc.get("max_sources")
+            if filled and len(filled) < min_src:
+                return f"{label}: needs at least {min_src} field(s) for this style"
+            if max_src is not None and len(filled) > int(max_src):
+                return f"{label}: use at most {max_src} field(s) for this style"
+            for src in filled:
                 raw = (src.get("field_slug") or "").strip()
-                if not raw:
-                    continue
                 slug, path = split_slug_path(raw)
                 field = fields_by_slug.get(slug)
                 if field is None:
@@ -762,7 +842,10 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
 
     # Convenience: single-series name at top level (legacy tests / UI)
     name = series_out[0]["name"] if len(series_out) == 1 else ""
-    return {**base, "series": series_out, "name": name}
+    out = {**base, "series": series_out, "name": name}
+    if display == "column":
+        out["horizontal"] = bool(config.get("horizontal"))
+    return out
 
 
 # ── chart (counter / value slices) ───────────────────────────────────────────
@@ -792,6 +875,41 @@ def _chart_source_value(db, src, source_id=None):
     return label, v
 
 
+def _chart_max(db, config) -> float:
+    """Explicit max/target: config.max number, else max_field_slug Field, else 100."""
+    if not isinstance(config, dict):
+        return 100.0
+    raw = config.get("max")
+    if raw is not None and raw != "":
+        try:
+            m = float(raw)
+            if m > 0:
+                return m
+        except (TypeError, ValueError):
+            pass
+    slug = (config.get("max_field_slug") or "").strip()
+    if slug:
+        pair = _chart_source_value(db, {"field_slug": slug})
+        if pair is not None:
+            try:
+                m = float(pair[1])
+            except (TypeError, ValueError):
+                m = 0.0
+            if m > 0:
+                return m
+    return 100.0
+
+
+def _chart_angle(config, key: str, default: float) -> float:
+    raw = config.get(key) if isinstance(config, dict) else None
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def _chart_data(db, config, display="pie", source_id=None, fields_snap=None):
     sources = config.get("sources")
     if not isinstance(sources, list):
@@ -805,12 +923,22 @@ def _chart_data(db, config, display="pie", source_id=None, fields_snap=None):
             continue
         labels.append(pair[0])
         values.append(pair[1])
-    return {
+    style = resolve_style(config, display)
+    sc = style_config_for(display, style)
+    out = {
         "display": display,
         "labels": labels,
         "values": values,
         "unit": (config.get("unit") or "").strip(),
     }
+    keys = set(sc.get("keys") or ())
+    if "max" in keys or "max_field_slug" in keys:
+        out["max"] = _chart_max(db, config)
+    if "start_angle" in keys:
+        out["start_angle"] = _chart_angle(config, "start_angle", -90)
+    if "end_angle" in keys:
+        out["end_angle"] = _chart_angle(config, "end_angle", 90)
+    return out
 
 
 # ── display ──────────────────────────────────────────────────────────────────
@@ -1053,7 +1181,7 @@ def _display_logbook_list(db, config, source_id=None):
 # ── links ────────────────────────────────────────────────────────────────────
 
 def _favicon_for_url(url: str) -> str:
-    """Derive {scheme}://{host}/favicon.ico for http(s) URLs; else empty."""
+    """DuckDuckGo icon URL for http(s) hosts; else empty."""
     from urllib.parse import urlparse
 
     try:
@@ -1062,7 +1190,10 @@ def _favicon_for_url(url: str) -> str:
         return ""
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return ""
-    return f"{parsed.scheme}://{parsed.netloc}/favicon.ico"
+    host = parsed.hostname
+    if not host:
+        return ""
+    return f"https://icons.duckduckgo.com/ip3/{host}.ico"
 
 
 def _links_data(db, config, display="list", source_id=None, fields_snap=None):

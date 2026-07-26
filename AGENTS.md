@@ -29,7 +29,7 @@ Single-process FastAPI app. No migrations, no Docker. Everything is DB-backed co
 | Auth | `app/security.py` — bcrypt hash/verify; signed timed session via `session_username` cookie (itsdangerous URLSafeTimedSerializer) |
 | Pipeline | `app/pipeline.py` — rule matching + action dispatch (`evaluate_and_dispatch`) |
 | Polling | `app/scheduler.py` + `app/pollers.py` — APScheduler jobs + HTTP poller |
-| Widgets | `app/widgets.py` — dashboard widget registry; transforms in `widget_transforms.py` |
+| Widgets | `app/widgets.py` — dashboard widget registry; ApexCharts in `static/vendor/apexcharts/` + `widget-charts.js`; transforms in `widget_transforms.py` |
 | Fields | `app/fields.py` — shared logbook / counter / value / toggle state |
 | Actions | `app/actions.py` — action type dispatch (field_push, http_forward, web_push) |
 

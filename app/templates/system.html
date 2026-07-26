@@ -18,14 +18,14 @@
   </div>
   <div class="card">
     <div class="stat stat--lg">
-      <div class="stat__label">Webhook accepts</div>
+      <div class="stat__label">Webhooks received</div>
       <div class="stat__value">{{ webhook_accepted }}</div>
       <div class="stat__hint text-muted">All time · {{ webhook_accepted_last_hour }} in the last hour</div>
     </div>
   </div>
   <div class="card">
     <div class="stat stat--lg">
-      <div class="stat__label">Retained events</div>
+      <div class="stat__label">Stored events</div>
       <div class="stat__value">{{ retained_events }}</div>
       <div class="stat__hint text-muted">max {{ max_events_per_source }} per source</div>
     </div>
@@ -42,12 +42,12 @@
   <div class="card__header"><h2>Source Health</h2></div>
   {% if source_health %}
   <table class="table">
-    <thead><tr><th>Name</th><th>URL name</th><th>Status</th><th>Last Seen</th></tr></thead>
+    <thead><tr><th>Name</th><th>Webhook path</th><th>Status</th><th>Last Seen</th></tr></thead>
     <tbody>
     {% for s in source_health %}
       <tr>
         <td>{{ s.name }}</td>
-        <td><code>{{ s.slug }}</code></td>
+        <td><code>/webhook/{{ s.slug }}</code></td>
         <td>
           {% if s.enabled %}
             {% if s.status == 'healthy' %}<span class="text-success">healthy</span>

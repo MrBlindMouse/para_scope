@@ -18,7 +18,7 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 - Action/poller registries in-process (not a plugin directory)
 - Shared Fields as first-class sinks used by both actions and widgets
 - Vanilla CSS (37signals/Fizzy-inspired, OKLCH tokens, cascade layers)
-- GridStack layout + Chart.js widgets
+- GridStack layout + ApexCharts widgets
 - Web Push via VAPID (optional env keys)
 - systemd + nginx production path documented; pure git + venv primary distribution
 
@@ -129,6 +129,10 @@ Global named sink used by both actions and widgets:
 
 Modular visualization or control surface (status, charts, series, links, system info, display). Layout is stored in `DashboardLayout` and edited via GridStack. Widgets refresh via HTMX.
 
+Series displays (logbook): `line` / `area` / `column` with per-style options (e.g. stepline, stacked, horizontal). Chart displays (counter/value): `pie` / `radial` / `radar` / `polar`. Radial styles use an explicit max/target.  
+
+ponytail: heatmap, calendar heatmap, and range columns — To be implemented (need grid / min-max data shapes).
+
 ### 5. High-Level Architecture
 
 Single primary process (FastAPI application) that hosts:
@@ -138,7 +142,7 @@ Single primary process (FastAPI application) that hosts:
 - Event processing pipeline (receive → normalize → filter → execute actions → persist)
 - In-process background work (no durable queue yet)
 - Auth middleware and session management
-- Static file serving for CSS, HTMX, Chart.js, GridStack
+- Static file serving for CSS, HTMX, ApexCharts, GridStack
 
 Storage defaults to SQLite for zero-config simplicity. PostgreSQL is planned, not a supported path in v0.1.
 

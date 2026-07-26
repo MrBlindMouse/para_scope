@@ -34,7 +34,7 @@
       <option value="poll" {% if st == 'poll' %}selected{% endif %}>Poll</option>
     </select>
   </label>
-  <p class="text-muted">URL name: <code>{{ source.slug }}</code></p>
+  <p class="text-muted">Webhook path: <code>/webhook/{{ source.slug }}</code></p>
 
   <fieldset class="stack" id="webhook-secret-fields">
     <legend>
