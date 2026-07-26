@@ -2201,7 +2201,7 @@ class TestWidgetTransforms:
 
         db = next(get_db())
         try:
-            counter = Field(name="C", slug="c-bad-tog", field_type="counter", config={}, state={"value": 0})
+            counter = Field(name="Bad Toggle Counter", slug="c-bad-tog", field_type="counter", config={}, state={"value": 0})
             db.add(counter)
             db.commit()
         finally:
