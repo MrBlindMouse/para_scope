@@ -245,7 +245,7 @@
             return '<option value="' + o + '"' + (o === op ? " selected" : "") + ">" + (XFORM_LABELS[o] || o) + "</option>";
           }).join("") +
         "</select>" +
-        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="Amount or decimals" value="' +
+        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="Amount or decimal places" value="' +
           escapeAttr(by) + '">' +
         '<button type="button" class="btn" data-action="xform-remove">−</button>' +
       "</div>";
@@ -1124,10 +1124,10 @@
       row.innerHTML =
         '<select class="input form-field--sm" data-xform-op>' +
           ["mul","div","add","sub","abs","round"].map(function (o) {
-            return '<option value="' + o + '"' + (o === "div" ? " selected" : "") + ">" + o + "</option>";
+            return '<option value="' + o + '"' + (o === "div" ? " selected" : "") + ">" + (XFORM_LABELS[o] || o) + "</option>";
           }).join("") +
         "</select>" +
-        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="by / digits" value="">' +
+        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="Amount or decimal places" value="">' +
         '<button type="button" class="btn" data-action="xform-remove">−</button>';
       list.insertBefore(row, btn);
       syncJson();

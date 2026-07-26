@@ -128,4 +128,4 @@ def resolve_bool(config: dict, normalized_data: dict | None) -> bool:
             return True
         if low in ("0", "false", "no", "off", ""):
             return False
-    raise ValueError("Couldn’t turn that into on/off")
+    raise ValueError("Value must be on or off")

@@ -261,12 +261,12 @@ class TestAuth:
     def test_login_page_get(self, client, test_user):
         resp = client.get("/login")
         assert resp.status_code == 200
-        assert "Invalid credentials" not in resp.text
+        assert "Wrong username or password" not in resp.text
 
     def test_login_bad_credentials(self, client, test_user):
         resp = client.post("/login", data={"username": "nobody", "password": "wrong"})
         assert resp.status_code == 200
-        assert "Invalid credentials" in resp.text
+        assert "Wrong username or password" in resp.text
 
     def test_login_success_redirects(self, test_user):
         username, password = test_user
@@ -762,7 +762,7 @@ class TestActions:
         )
         resp = authenticated_client.get("/config/pipeline")
         assert resp.status_code == 200
-        assert "Notify → Hello" in resp.text or "Browser notification" in resp.text
+        assert "Alert → Hello" in resp.text or "Browser notification" in resp.text
         assert "Unused actions" in resp.text
 
     def test_delete_action(self, authenticated_client):
@@ -986,7 +986,7 @@ class TestRuleFirstPipeline:
         finally:
             db.close()
         pipeline = authenticated_client.get("/config/pipeline")
-        assert "Notify →" in pipeline.text or "Browser notification" in pipeline.text
+        assert "Alert →" in pipeline.text or "Browser notification" in pipeline.text
         assert "Unused actions" not in pipeline.text
 
     def test_edit_event_rule_action(self, authenticated_client):
@@ -2630,16 +2630,16 @@ class TestSystemPage:
 
         resp = authenticated_client.get("/system")
         assert resp.status_code == 200
-        assert "Retained events" in resp.text
+        assert "Stored events" in resp.text
         assert "max 500 per source" in resp.text
-        assert "Webhook accepts" in resp.text
+        assert "Webhooks received" in resp.text
         assert "All time" in resp.text
         assert "in the last hour" in resp.text
         assert "Active jobs" in resp.text
         assert "OK / Fail (lifetime)" in resp.text
         assert "Event Status" not in resp.text
         assert "Total Events" not in resp.text
-        idx = resp.text.index("Webhook accepts")
+        idx = resp.text.index("Webhooks received")
         snippet = resp.text[idx:idx + 280]
         assert 'stat__value">1</div>' in snippet
 

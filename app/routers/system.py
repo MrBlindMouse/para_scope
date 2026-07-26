@@ -198,7 +198,7 @@ async def create_secret(request: Request, db: Session = Depends(get_db)):
     try:
         encrypted_value = encrypt_secret(value)
     except ValueError:
-        return ctx._pipeline_redirect(error="Server secret key isn't set — can't store secrets")
+        return ctx._pipeline_redirect(error="Secrets aren’t available until the server is configured")
     secret = Secret(
         scoped_to_type=scoped_to_type,
         scoped_to_id=scoped_to_id, encrypted_value=encrypted_value,

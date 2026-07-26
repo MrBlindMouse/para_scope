@@ -20,7 +20,7 @@
   }
 
   function setLabel(subscribed) {
-    var label = subscribed ? "Notifications Enabled" : "Notifications Disabled";
+    var label = subscribed ? "Turn notifications off" : "Turn notifications on";
     btn.dataset.subscribed = subscribed ? "1" : "0";
     btn.setAttribute("aria-label", label);
     btn.setAttribute("title", label);
@@ -70,7 +70,7 @@
     });
     if (!resp.ok) {
       var body = await resp.json().catch(function () { return {}; });
-      alert(body.error || "Failed to save subscription");
+      alert(body.error || "Couldn’t save notification settings");
       return;
     }
     setLabel(true);

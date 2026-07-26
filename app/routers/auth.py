@@ -82,7 +82,7 @@ async def setup_post(
     except ValueError:
         return ctx.templates.TemplateResponse(
             request, "setup.html",
-            {"error": "Account created. Set the server secret key, then log in."},
+            {"error": "Account created. Finish server setup, then sign in."},
         )
 
 
@@ -117,14 +117,14 @@ async def login_post(
     user = db.query(User).filter(User.username == username).first()
     if not user or not verify_password(password, user.hashed_password):
         ctx._audit_log(db, request, "login_failure", details={"username": username})
-        return ctx.templates.TemplateResponse(request, "login.html", {"error": "Invalid credentials"})
+        return ctx.templates.TemplateResponse(request, "login.html", {"error": "Wrong username or password"})
     try:
         response = RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
         ctx._set_session_cookies(response, request, user.username)
     except ValueError:
         return ctx.templates.TemplateResponse(
             request, "login.html",
-            {"error": "Can’t sign in — server secret key isn’t set"},
+            {"error": "Can’t sign in — this server isn’t fully configured"},
         )
     ctx._audit_log(db, request, "login_success", user_id=user.id)
     return response

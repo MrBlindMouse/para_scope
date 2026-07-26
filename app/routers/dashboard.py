@@ -206,18 +206,18 @@ async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
     """Merge widget geometry (x/y/w/h) by id into the shared layout."""
     user = ctx._get_user(request, db)
     if not user:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"error": "invalid json"}, status_code=400)
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     updates = body.get("widgets") if isinstance(body, dict) else None
     if not isinstance(updates, list):
-        return JSONResponse({"error": "widgets array required"}, status_code=400)
+        return JSONResponse({"error": "Widgets array required"}, status_code=400)
 
     layout = _get_layout(db)
     if not layout:
-        return JSONResponse({"error": "no layout"}, status_code=404)
+        return JSONResponse({"error": "No layout"}, status_code=404)
     widgets = parse_layout_config(layout.layout_config)["widgets"]
     widgets, _ = migrate_widgets(widgets)
     widgets = merge_geometry(widgets, updates)

@@ -10,7 +10,7 @@
     gt: "Greater than (>)",
     lt: "Less than (<)",
     contains: "Contains",
-    regex: "Matches pattern"
+    regex: "Matches pattern (regex)"
   };
 
   function parseInitial(el) {

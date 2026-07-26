@@ -86,8 +86,8 @@
       el.classList.toggle("dashboard-grid--editing", editing);
       if (toggle) {
         toggle.setAttribute("aria-pressed", editing ? "true" : "false");
-        toggle.title = editing ? "Layout Editable" : "Layout Locked";
-        toggle.setAttribute("aria-label", editing ? "Layout Editable" : "Layout Locked");
+        toggle.title = editing ? "Lock layout" : "Unlock layout";
+        toggle.setAttribute("aria-label", editing ? "Lock layout" : "Unlock layout");
       }
       if (!editing) {
         clearTimeout(saveTimer);
@@ -104,8 +104,8 @@
           toggle.title = "Layout editing needs full design width";
           toggle.setAttribute("aria-label", "Layout editing unavailable at this width");
         } else if (!editing) {
-          toggle.title = "Layout Locked";
-          toggle.setAttribute("aria-label", "Layout Locked");
+          toggle.title = "Unlock layout";
+          toggle.setAttribute("aria-label", "Unlock layout");
         }
       }
       if (!canEdit && editing) {

@@ -80,6 +80,10 @@ THEME_OPTIONS: list[dict] = [
      "swatches": ["#fafafa", "#f3f4f5", "#5c6166", "#f2ae49", "#f07171"]},
 ]
 
+KIND_LABELS = {"auto": "Follows system", "light": "Light", "dark": "Dark"}
+for _theme_opt in THEME_OPTIONS:
+    _theme_opt["kind_label"] = KIND_LABELS[_theme_opt["kind"]]
+
 FONTS: frozenset[str] = frozenset({"system", "sans", "serif", "mono"})
 
 FONT_OPTIONS: list[dict] = [

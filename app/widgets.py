@@ -616,7 +616,7 @@ def _resolve_logbook_list_field(db, config, fields_by_slug: dict | None = None):
     if field is None:
         return None, "that field wasn’t found"
     if field.field_type != "logbook":
-        return None, "logbook_list requires a logbook Field"
+        return None, "This widget needs a Logbook field"
     return field, None
 
 
@@ -1125,10 +1125,10 @@ def _display_logbook_list(db, config, source_id=None):
         msg = {
             "choose a field": "Choose a field",
             "that field wasn’t found": "That field wasn’t found",
-            "logbook_list requires a logbook Field": "logbook_list requires a logbook Field",
-            "template must reference a logbook Field": "Template must reference a logbook Field",
+            "This widget needs a Logbook field": "This widget needs a Logbook field",
+            "template must reference a logbook Field": "Template must use a Logbook field",
             "template must reference exactly one logbook Field": (
-                "Template must reference exactly one logbook Field"
+                "Template must use exactly one Logbook field"
             ),
         }.get(err or "", err or "Choose a field")
         return {"display": "logbook_list", "error": msg, "entries": []}
