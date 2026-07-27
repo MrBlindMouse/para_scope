@@ -72,6 +72,8 @@ def _field(
     store: str = "params",
     rows: int | None = None,
     secret: bool = False,
+    advanced: bool = False,
+    show_for_auth: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "name": name,
@@ -87,6 +89,8 @@ def _field(
         "store": store,
         "rows": rows,
         "secret": secret,
+        "advanced": advanced,
+        "show_for_auth": show_for_auth,
     }
 
 
@@ -102,10 +106,20 @@ def get_poller_types() -> list[str]:
 
 
 def get_poller_specs() -> list[dict[str, Any]]:
-    return sorted(
-        _POLLER_SPECS.values(),
-        key=lambda spec: (spec.get("category") or "", spec.get("label") or spec["handler_type"]),
-    )
+    """Specs in category order, then registration order (not A–Z by label)."""
+    category_rank = {slug: index for index, slug in enumerate(POLLER_CATEGORY_LABELS)}
+    registration_rank = {
+        handler: index for index, handler in enumerate(_POLLER_SPECS)
+    }
+
+    def _sort_key(spec: dict[str, Any]) -> tuple:
+        handler = spec.get("handler_type") or ""
+        return (
+            category_rank.get(spec.get("category") or "", len(category_rank)),
+            registration_rank.get(handler, len(registration_rank)),
+        )
+
+    return sorted(_POLLER_SPECS.values(), key=_sort_key)
 
 
 def get_poller_spec(handler_type: str) -> dict[str, Any] | None:
@@ -141,7 +155,11 @@ def parse_poller_form(
     if spec is None:
         return None, {}, "Choose a supported poll subtype"
 
-    values = {"handler_type": handler_type, "handler_url": "", "handler_params": {}}
+    values: dict[str, Any] = {
+        "handler_type": handler_type,
+        "handler_url": "",
+        "handler_params": {},
+    }
     secret_updates: dict[str, str] = {}
 
     for field in spec.get("fields", []):
@@ -166,10 +184,19 @@ def parse_poller_form(
         parsed, err = _parse_field_value(field, raw)
         if err:
             return None, {}, err
-        if parsed is None and field["store"] == "params":
+        store = field["store"]
+        if parsed is None and store == "params":
             continue
-        if field["store"] == "url":
+        if store == "url":
             values["handler_url"] = parsed or ""
+        elif store == "timeout":
+            if parsed is None:
+                parsed = field.get("default") if field.get("default") != "" else 30
+            values["timeout_seconds"] = int(parsed)
+        elif store == "retry":
+            if parsed is None:
+                parsed = field.get("default") if field.get("default") != "" else 0
+            values["retry_count"] = int(parsed)
         else:
             values["handler_params"][field["param_key"]] = parsed
 
@@ -253,7 +280,7 @@ def _build_headers(db, params: dict) -> dict:
         elif auth_mode == "oauth_client_credentials":
             token_url = (params.get("token_url") or "").strip()
             if not token_url:
-                raise ValueError("token_url is required for oauth_client_credentials")
+                raise ValueError("OAuth token URL is required")
             scope = (params.get("scope") or "").strip()
             client_id, client_secret = _parse_id_secret_pair(
                 secret_value,
@@ -435,7 +462,7 @@ def http_poll(schedule: PollingSchedule, db) -> dict:
     method = _HTTP_METHODS.get(schedule.handler_type, "GET")
 
     if not schedule.handler_url:
-        raise ValueError("Poll URL is required")
+        raise ValueError("URL is required")
 
     headers = _build_headers(db, params)
     timeout = schedule.timeout_seconds or 30
@@ -833,7 +860,7 @@ def log_pattern_watch_poll(schedule: PollingSchedule, db) -> dict:
     patterns = list(params.get("patterns") or [])
     read_bytes = int(params.get("read_bytes") or 65536)
     if not file_path:
-        raise ValueError("Log file path is required")
+        raise ValueError("Log file is required")
     if not file_path.exists():
         raise ValueError("Log file not found")
     raw = file_path.read_bytes()[-read_bytes:].decode("utf-8", errors="replace")
@@ -1025,26 +1052,47 @@ def local_llm_http_status_poll(schedule: PollingSchedule, db) -> dict:
     }
 
 
-_COMMON_HTTP_FIELDS = [
-    _field(
-        "handler_url",
-        "URL",
-        input_type="url",
-        required=True,
-        placeholder="https://api.example.com/data",
-        store="url",
-        help_text="Full URL Para-Scope checks on each run.",
-    ),
+_HTTP_TIMEOUT_FIELD = _field(
+    "timeout_seconds",
+    "Timeout (s)",
+    parse_as="int",
+    input_type="number",
+    store="timeout",
+    default=20,
+    help_text="Seconds to wait before giving up.",
+)
+_HTTP_RETRY_FIELD = _field(
+    "retry_count",
+    "Retries",
+    parse_as="int",
+    input_type="number",
+    store="retry",
+    default=2,
+    help_text="Extra tries after a failure.",
+)
+_HTTP_BODY_FIELD = _field(
+    "body",
+    "Body (JSON)",
+    input_type="textarea",
+    parse_as="json_any",
+    default={},
+    rows=4,
+    advanced=True,
+    help_text="JSON body for POST, PUT, and PATCH requests.",
+)
+_HTTP_ADVANCED_FIELDS = [
     _field(
         "event_type",
         "Success event name",
         placeholder="on_success",
+        advanced=True,
         help_text="Optional custom event type for successful runs.",
     ),
     _field(
         "json_path",
         "JSON path",
         placeholder="payload.items.0",
+        advanced=True,
         help_text="Optional dotted path inside the JSON response.",
     ),
     _field(
@@ -1054,6 +1102,7 @@ _COMMON_HTTP_FIELDS = [
         parse_as="json_dict",
         default={},
         rows=3,
+        advanced=True,
         help_text="Optional request headers as a JSON object.",
     ),
     _field(
@@ -1063,16 +1112,8 @@ _COMMON_HTTP_FIELDS = [
         parse_as="json_dict",
         default={},
         rows=3,
+        advanced=True,
         help_text="Optional query string parameters as a JSON object.",
-    ),
-    _field(
-        "body",
-        "Body (JSON)",
-        input_type="textarea",
-        parse_as="json_any",
-        default={},
-        rows=4,
-        help_text="JSON body for POST and PUT requests.",
     ),
     _field(
         "auth_mode",
@@ -1080,6 +1121,7 @@ _COMMON_HTTP_FIELDS = [
         input_type="select",
         parse_as="str",
         default="bearer",
+        advanced=True,
         options=[
             ("bearer", "Bearer token header"),
             ("basic", "HTTP Basic auth"),
@@ -1088,32 +1130,40 @@ _COMMON_HTTP_FIELDS = [
         help_text="How to convert the stored secret into an Authorization header.",
     ),
     _field(
+        "auth_secret_value",
+        "Poll secret",
+        param_key="auth_secret_id",
+        input_type="password",
+        secret=True,
+        advanced=True,
+        show_for_auth=["bearer", "basic", "oauth_client_credentials"],
+        help_text=(
+            "Optional encrypted secret. For bearer: token. For basic/oauth: store 'id:secret' or 'username:password'."
+        ),
+    ),
+    _field(
         "auth_header",
         "Auth header",
         default="Authorization",
+        advanced=True,
+        show_for_auth=["bearer", "basic", "oauth_client_credentials"],
         help_text="Header name used for Authorization-style auth.",
     ),
     _field(
         "auth_prefix",
         "Auth prefix",
         default="Bearer ",
-        help_text="Prefix placed before the token for bearer/oauth. (Basic ignores this.)",
-    ),
-    _field(
-        "auth_secret_value",
-        "Poll secret",
-        param_key="auth_secret_id",
-        input_type="password",
-        secret=True,
-        help_text=(
-            "Optional encrypted secret. For bearer: token. For basic/oauth: store 'id:secret' or 'username:password'."
-        ),
+        advanced=True,
+        show_for_auth=["bearer", "oauth_client_credentials"],
+        help_text="Prefix placed before the token for bearer/oauth.",
     ),
     _field(
         "token_url",
         "OAuth token URL",
         input_type="url",
         placeholder="https://auth.example.com/oauth2/token",
+        advanced=True,
+        show_for_auth=["oauth_client_credentials"],
         help_text="Required when Auth mode is OAuth2 client credentials.",
         default="",
     ),
@@ -1121,12 +1171,37 @@ _COMMON_HTTP_FIELDS = [
         "scope",
         "OAuth scope (optional)",
         placeholder="read write",
+        advanced=True,
+        show_for_auth=["oauth_client_credentials"],
         help_text="Optional OAuth2 scope for oauth_client_credentials.",
         default="",
     ),
 ]
+_HTTP_PRIMARY_FIELDS = [
+    _field(
+        "handler_url",
+        "URL",
+        input_type="url",
+        required=True,
+        placeholder="https://api.example.com/data",
+        store="url",
+        help_text="Full URL Para-Scope checks on each run.",
+    ),
+    _HTTP_TIMEOUT_FIELD,
+    _HTTP_RETRY_FIELD,
+]
+_HTTP_BODY_METHODS = {"http_post", "http_put", "http_patch"}
 
 for _ht, _method in _HTTP_METHODS.items():
+    _fields = list(_HTTP_PRIMARY_FIELDS) + list(_HTTP_ADVANCED_FIELDS)
+    if _ht in _HTTP_BODY_METHODS:
+        # Body after query params, before auth_mode.
+        _fields = (
+            list(_HTTP_PRIMARY_FIELDS)
+            + _HTTP_ADVANCED_FIELDS[:4]
+            + [_HTTP_BODY_FIELD]
+            + _HTTP_ADVANCED_FIELDS[4:]
+        )
     register_poller(
         _ht,
         _http_poll_registered,
@@ -1135,7 +1210,7 @@ for _ht, _method in _HTTP_METHODS.items():
             "category": "url",
             "summary": f"{_method} request on a schedule",
             "uses_url": True,
-            "fields": _COMMON_HTTP_FIELDS,
+            "fields": _fields,
         },
     )
 
@@ -1208,6 +1283,14 @@ register_poller(
         "fields": [
             _field("host", "Host", required=True, placeholder="example.com"),
             _field("port", "Port", required=True, parse_as="int", input_type="number", placeholder="443"),
+            _field(
+                "timeout_seconds",
+                "Timeout (s)",
+                parse_as="int",
+                input_type="number",
+                store="timeout",
+                default=10,
+            ),
         ],
     },
 )
@@ -1222,6 +1305,14 @@ register_poller(
         "fields": [
             _field("host", "Host", required=True, placeholder="192.168.1.1"),
             _field("count", "Ping count", parse_as="int", input_type="number", default=1),
+            _field(
+                "timeout_seconds",
+                "Timeout (s)",
+                parse_as="int",
+                input_type="number",
+                store="timeout",
+                default=10,
+            ),
         ],
     },
 )
@@ -1256,6 +1347,14 @@ register_poller(
         "fields": [
             _field("host", "Host", required=True, placeholder="example.com"),
             _field("port", "Port", parse_as="int", input_type="number", default=443),
+            _field(
+                "timeout_seconds",
+                "Timeout (s)",
+                parse_as="int",
+                input_type="number",
+                store="timeout",
+                default=10,
+            ),
         ],
     },
 )
@@ -1322,6 +1421,14 @@ register_poller(
                 placeholder="https://example.com/feed.xml",
                 store="url",
             ),
+            _field(
+                "timeout_seconds",
+                "Timeout (s)",
+                parse_as="int",
+                input_type="number",
+                store="timeout",
+                default=30,
+            ),
         ],
     },
 )
@@ -1355,6 +1462,14 @@ register_poller(
                 input_type="number",
                 parse_as="int",
                 placeholder="200",
+            ),
+            _field(
+                "timeout_seconds",
+                "Timeout (s)",
+                parse_as="int",
+                input_type="number",
+                store="timeout",
+                default=30,
             ),
         ],
     },
@@ -1424,6 +1539,14 @@ register_poller(
                 input_type="password",
                 secret=True,
                 help_text="Long-lived access token stored encrypted.",
+            ),
+            _field(
+                "timeout_seconds",
+                "Timeout (s)",
+                parse_as="int",
+                input_type="number",
+                store="timeout",
+                default=30,
             ),
         ],
     },
@@ -1495,6 +1618,14 @@ register_poller(
                 required=True,
                 placeholder="http://127.0.0.1:11434/api/tags",
                 store="url",
+            ),
+            _field(
+                "timeout_seconds",
+                "Timeout (s)",
+                parse_as="int",
+                input_type="number",
+                store="timeout",
+                default=15,
             ),
         ],
     },

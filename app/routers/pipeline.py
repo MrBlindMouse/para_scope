@@ -37,6 +37,8 @@ router = APIRouter()
 
 
 def _poller_template_context(source: Source | None = None, schedule: PollingSchedule | None = None) -> dict:
+    from app.webhook_verifiers import get_webhook_providers
+
     params = dict((schedule.handler_params if schedule else None) or {})
     source_cfg = dict((source.config if source else None) or {})
     selected_category = (
@@ -53,6 +55,7 @@ def _poller_template_context(source: Source | None = None, schedule: PollingSche
             for key, value in params.items()
             if key.endswith("_secret_id")
         },
+        "webhook_providers": get_webhook_providers(),
     }
 
 
@@ -188,14 +191,10 @@ async def pipeline_create_field(request: Request, db: Session = Depends(get_db))
     form = await request.form()
     kwargs, err = ctx._parse_field_form(form)
     if err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(err, status_code=400)
-        return ctx._pipeline_redirect(error=err)
+        return ctx._pipeline_redirect(error=err, request=request)
     if db.query(Field).filter(Field.name == kwargs["name"]).first():
         msg = f"Field '{kwargs['name']}' already exists"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     from app.fields import default_field_state
 
@@ -231,9 +230,7 @@ async def pipeline_update_field(request: Request, field_id: int, db: Session = D
     form = await request.form()
     kwargs, err = ctx._parse_field_form(form, existing=field)
     if err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(err, status_code=400)
-        return ctx._pipeline_redirect(error=err)
+        return ctx._pipeline_redirect(error=err, request=request)
 
     clash = (
         db.query(Field)
@@ -242,9 +239,7 @@ async def pipeline_update_field(request: Request, field_id: int, db: Session = D
     )
     if clash:
         msg = f"Field '{kwargs['name']}' already exists"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     field.name = kwargs["name"]
     field.slug = ctx._unique_field_slug(db, kwargs["name"], exclude_id=field_id)
@@ -273,9 +268,7 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
     reason = ctx._field_in_use(db, field_id)
     if reason:
         msg = f"Can’t delete “{field.name}” — it’s still in use"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     name = field.name
     db.query(FieldLogEntry).filter(FieldLogEntry.field_id == field_id).delete(
@@ -319,14 +312,16 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     poll_category = (form.get("poll_category") or "url").strip()
 
     def _err(msg: str):
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     if not name:
         return _err("Name is required")
     if source_type not in ctx._SOURCE_TYPES:
         return _err("Choose Webhook or Poll")
+
+    from app.webhook_verifiers import get_webhook_provider_slugs
+    if source_type == "webhook" and webhook_provider not in get_webhook_provider_slugs():
+        return _err("Choose a supported webhook verification method")
 
     slug = ctx._unique_slug_from_name(db, name)
 
@@ -344,11 +339,11 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
         source_config["webhook_provider"] = webhook_provider
         if webhook_provider == "paypal":
             if not paypal_webhook_id:
-                return _err("PayPal webhook_id is required")
+                return _err("Webhook ID is required")
             if not paypal_client_id:
-                return _err("PayPal client_id is required")
+                return _err("Client ID is required")
             if not secret_value:
-                return _err("PayPal client secret is required (use Webhook secret field)")
+                return _err("Client secret is required")
             source_config["paypal_webhook_id"] = paypal_webhook_id
             source_config["paypal_client_id"] = paypal_client_id
             source_config["paypal_environment"] = paypal_environment
@@ -542,9 +537,7 @@ async def pipeline_create_event(request: Request, source_id: int, db: Session = 
     name = (form.get("name") or "").strip()
     description = (form.get("description") or "").strip()
     if not name:
-        if ctx._is_htmx(request):
-            return HTMLResponse("Name is required", status_code=400)
-        return ctx._pipeline_redirect(error="Name is required")
+        return ctx._pipeline_redirect(error="Name is required", request=request)
 
     et = EventTypeRecord(source_id=source_id, name=name, description=description)
     db.add(et)
@@ -572,9 +565,7 @@ async def pipeline_update_event(request: Request, et_id: int, db: Session = Depe
     name = (form.get("name") or "").strip()
     description = (form.get("description") or "").strip()
     if not name:
-        if ctx._is_htmx(request):
-            return HTMLResponse("Name is required", status_code=400)
-        return ctx._pipeline_redirect(error="Name is required")
+        return ctx._pipeline_redirect(error="Name is required", request=request)
     et.name = name
     et.description = description
     db.commit()
@@ -672,17 +663,13 @@ async def pipeline_create_rule(request: Request, source_id: int, db: Session = D
     form = await request.form()
     data, err = ctx._parse_rule_form(form)
     if err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(err, status_code=400)
-        return ctx._pipeline_redirect(error=err)
+        return ctx._pipeline_redirect(error=err, request=request)
 
     ref_err = _validate_rule_refs(
         db, source_id, data["event_type_ids"], data.get("action_ids"),
     )
     if ref_err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(ref_err, status_code=400)
-        return ctx._pipeline_redirect(error=ref_err)
+        return ctx._pipeline_redirect(error=ref_err, request=request)
 
     rule = Rule(
         source_id=source_id,
@@ -717,16 +704,12 @@ async def pipeline_update_rule(request: Request, rule_id: int, db: Session = Dep
     form = await request.form()
     data, err = ctx._parse_rule_form(form, for_update=True)
     if err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(err, status_code=400)
-        return ctx._pipeline_redirect(error=err)
+        return ctx._pipeline_redirect(error=err, request=request)
 
     # Edit form does not send action_ids — keep existing bindings
     ref_err = _validate_rule_refs(db, rule.source_id, data["event_type_ids"], None)
     if ref_err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(ref_err, status_code=400)
-        return ctx._pipeline_redirect(error=ref_err)
+        return ctx._pipeline_redirect(error=ref_err, request=request)
 
     rule.conditions = data["conditions"]
     rule.order_index = data["order_index"]
@@ -833,9 +816,7 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
             rid = int(rule_id_raw)
         except ValueError:
             msg = "Invalid rule"
-            if ctx._is_htmx(request):
-                return HTMLResponse(msg, status_code=400)
-            return ctx._pipeline_redirect(error=msg)
+            return ctx._pipeline_redirect(error=msg, request=request)
         rule = (
             db.query(Rule)
             .filter(Rule.id == rid, Rule.source_id == source_id)
@@ -843,20 +824,14 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
         )
         if not rule:
             msg = "Rule not found on this source"
-            if ctx._is_htmx(request):
-                return HTMLResponse(msg, status_code=400)
-            return ctx._pipeline_redirect(error=msg)
+            return ctx._pipeline_redirect(error=msg, request=request)
     elif require_rule:
         msg = "A rule is required"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     if action_type not in get_action_types():
         msg = "That action type isn’t supported"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     # Resolve field_type for field_push when not posted (look up Field)
     if action_type == "field_push" and not (form.get("field_type") or "").strip():
@@ -873,17 +848,13 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
 
     config, err = ctx._parse_action_config(form, action_type)
     if err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(err, status_code=400)
-        return ctx._pipeline_redirect(error=err)
+        return ctx._pipeline_redirect(error=err, request=request)
 
     if action_type == "field_push":
         field = db.query(Field).filter(Field.id == config["field_id"]).first()
         if not field:
             msg = "Field not found"
-            if ctx._is_htmx(request):
-                return HTMLResponse(msg, status_code=400)
-            return ctx._pipeline_redirect(error=msg)
+            return ctx._pipeline_redirect(error=msg, request=request)
 
     action = ActionInstance(
         source_id=source_id, action_type=action_type, config=config,
@@ -899,9 +870,7 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
                 ctx._upsert_action_secret(db, action, value=secret2_value, which="secondary")
         except ValueError as e:
             db.rollback()
-            if ctx._is_htmx(request):
-                return HTMLResponse(str(e), status_code=400)
-            return ctx._pipeline_redirect(error=str(e))
+            return ctx._pipeline_redirect(error=str(e), request=request)
 
     if rule is not None:
         ids = list(rule.action_ids or [])
@@ -938,9 +907,7 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
 
     if action_type not in get_action_types():
         msg = "That action type isn’t supported"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     if action_type == "field_push" and not (form.get("field_type") or "").strip():
         fid_raw = (form.get("field_id") or "").strip()
@@ -955,17 +922,13 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
 
     config, err = ctx._parse_action_config(form, action_type)
     if err:
-        if ctx._is_htmx(request):
-            return HTMLResponse(err, status_code=400)
-        return ctx._pipeline_redirect(error=err)
+        return ctx._pipeline_redirect(error=err, request=request)
 
     if action_type == "field_push":
         field = db.query(Field).filter(Field.id == config["field_id"]).first()
         if not field:
             msg = "Field not found"
-            if ctx._is_htmx(request):
-                return HTMLResponse(msg, status_code=400)
-            return ctx._pipeline_redirect(error=msg)
+            return ctx._pipeline_redirect(error=msg, request=request)
 
     action.action_type = action_type
     action.config = config
@@ -977,9 +940,7 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
             if action_type == "http_forward" and config.get("auth_mode") == "key_secret" and secret2_value:
                 ctx._upsert_action_secret(db, action, value=secret2_value, which="secondary")
         except ValueError as e:
-            if ctx._is_htmx(request):
-                return HTMLResponse(str(e), status_code=400)
-            return ctx._pipeline_redirect(error=str(e))
+            return ctx._pipeline_redirect(error=str(e), request=request)
         if action_type == "notify":
             action.secret_id_2 = None
     else:
@@ -1032,12 +993,7 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
         return ctx._pipeline_redirect(error="Source not found")
 
     def _err(msg: str):
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return RedirectResponse(
-            url=ctx.flash_url("/config/pipeline", error=msg),
-            status_code=303,
-        )
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     name = (form.get("name") or "").strip()
     source_type = (form.get("source_type") or source.source_type or "webhook").strip()
@@ -1069,6 +1025,9 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
         source_cfg.pop("poll_category", None)
 
     if source_type == "webhook":
+        from app.webhook_verifiers import get_webhook_provider_slugs
+        if webhook_provider not in get_webhook_provider_slugs():
+            return _err("Choose a supported webhook verification method")
         source_cfg["webhook_provider"] = webhook_provider
         if webhook_provider == "paypal":
             if paypal_webhook_id:
@@ -1076,6 +1035,15 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
             if paypal_client_id:
                 source_cfg["paypal_client_id"] = paypal_client_id
             source_cfg["paypal_environment"] = paypal_environment
+        else:
+            source_cfg.pop("paypal_webhook_id", None)
+            source_cfg.pop("paypal_client_id", None)
+            source_cfg.pop("paypal_environment", None)
+    else:
+        source_cfg.pop("webhook_provider", None)
+        source_cfg.pop("paypal_webhook_id", None)
+        source_cfg.pop("paypal_client_id", None)
+        source_cfg.pop("paypal_environment", None)
 
     source.name = name
     source.slug = ctx._unique_slug_from_name(db, name, exclude_id=source_id)
@@ -1261,9 +1229,7 @@ async def poll_source_now(request: Request, source_id: int, db: Session = Depend
         return ctx._pipeline_redirect(error="Only poll sources can be run manually")
     if not source.enabled:
         msg = "Enable the source before running a poll"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     schedule = (
         db.query(PollingSchedule)
@@ -1272,14 +1238,10 @@ async def poll_source_now(request: Request, source_id: int, db: Session = Depend
     )
     if not schedule:
         msg = "No schedule configured for this source"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
     if not schedule.enabled:
         msg = "Enable the schedule before running a poll"
-        if ctx._is_htmx(request):
-            return HTMLResponse(msg, status_code=400)
-        return ctx._pipeline_redirect(error=msg)
+        return ctx._pipeline_redirect(error=msg, request=request)
 
     ok = run_schedule(schedule.id)
     ctx._audit_log(

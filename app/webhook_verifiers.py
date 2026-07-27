@@ -22,6 +22,73 @@ from app.security import decrypt_secret
 from app import webctx as ctx
 
 
+# UI metadata for source create/edit — only fields relevant to each verifier.
+WEBHOOK_PROVIDERS: list[dict[str, Any]] = [
+    {
+        "slug": "generic_hmac",
+        "label": "Shared-secret HMAC (X-Webhook-*)",
+        "summary": "Verify with X-Webhook-Timestamp and X-Webhook-Signature.",
+        "secret_label": "Signing secret (optional)",
+        "secret_help": "Shared HMAC secret. Leave blank to accept unsigned webhooks.",
+        "secret_input_label": "Secret value",
+        "uses_paypal_config": False,
+    },
+    {
+        "slug": "stripe",
+        "label": "Stripe (Stripe-Signature)",
+        "summary": "Verify Stripe webhook signatures.",
+        "secret_label": "Stripe webhook signing secret",
+        "secret_help": "From the Stripe Dashboard endpoint (whsec_…). Required for verification.",
+        "secret_input_label": "Signing secret",
+        "uses_paypal_config": False,
+    },
+    {
+        "slug": "github",
+        "label": "GitHub / Gitea (X-Hub-Signature-256)",
+        "summary": "Verify GitHub or Gitea webhook signatures.",
+        "secret_label": "Webhook secret",
+        "secret_help": "The secret configured on the GitHub/Gitea webhook.",
+        "secret_input_label": "Secret value",
+        "uses_paypal_config": False,
+    },
+    {
+        "slug": "slack",
+        "label": "Slack (X-Slack-Signature)",
+        "summary": "Verify Slack request signatures.",
+        "secret_label": "Signing secret",
+        "secret_help": "Slack app Signing Secret from Basic Information.",
+        "secret_input_label": "Signing secret",
+        "uses_paypal_config": False,
+    },
+    {
+        "slug": "discord",
+        "label": "Discord (Ed25519)",
+        "summary": "Verify Discord interactions with Ed25519.",
+        "secret_label": "Application public key",
+        "secret_help": "Discord application Public Key (hex), not a bot token.",
+        "secret_input_label": "Public key",
+        "uses_paypal_config": False,
+    },
+    {
+        "slug": "paypal",
+        "label": "PayPal (verify-webhook-signature)",
+        "summary": "Verify via PayPal’s verify-webhook-signature API.",
+        "secret_label": "Client secret",
+        "secret_help": "PayPal app client secret (stored encrypted).",
+        "secret_input_label": "Client secret",
+        "uses_paypal_config": True,
+    },
+]
+
+
+def get_webhook_providers() -> list[dict[str, Any]]:
+    return list(WEBHOOK_PROVIDERS)
+
+
+def get_webhook_provider_slugs() -> set[str]:
+    return {p["slug"] for p in WEBHOOK_PROVIDERS}
+
+
 class WebhookAuthError(Exception):
     """Raised by verifier functions to return a structured HTTP error."""
 
@@ -300,7 +367,7 @@ def _verify_paypal_postback(*, db, source, request, raw_body: bytes) -> Verified
     paypal_client_id = str(cfg.get("paypal_client_id") or "").strip()
     paypal_env = str(cfg.get("paypal_environment") or "sandbox").strip()
     if not paypal_webhook_id or not paypal_client_id:
-        raise WebhookAuthError(400, {"error": "PayPal webhook_id and client_id are required in Source config"})
+        raise WebhookAuthError(400, {"error": "PayPal Webhook ID and Client ID are required in Source config"})
 
     token_base, token_url = _paypal_env_base(paypal_env)
     secret = _require_source_secret(db, source, label="PayPal client secret")

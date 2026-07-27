@@ -11,7 +11,7 @@ def test_action_types_registered():
     from app.actions import get_action_types
     types = get_action_types()
     assert types == [
-        "field_push", "http_forward", "local_script", "notify", "web_push",
+        "field_push", "http_forward", "notify", "web_push", "local_script",
     ]
 
 

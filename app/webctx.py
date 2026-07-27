@@ -248,6 +248,13 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
                 key = (form.get("value_key") or "").strip()
                 if not key:
                     return None, "Value from event is required"
+                if key[0] in "{[":
+                    try:
+                        parsed = json.loads(key)
+                    except json.JSONDecodeError:
+                        return None, "Value from event JSON is invalid"
+                    if not isinstance(parsed, (dict, list)):
+                        return None, "Value from event JSON is invalid"
                 out["value_key"] = key
             elif mode == "literal":
                 out["value"] = form.get("value") or ""
@@ -410,11 +417,11 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
         if mode == "argv":
             raw = (form.get("argv_text") or "").strip()
             if not raw:
-                return None, "Script path and args are required"
+                return None, "Path and args are required"
             # One argument per line
             argv = [ln.strip() for ln in raw.splitlines() if ln.strip()]
             if not argv:
-                return None, "Script path and args are required"
+                return None, "Path and args are required"
             out["argv"] = argv
             out["shell"] = False
         else:
@@ -505,8 +512,6 @@ def _parse_schedule_form(form, *, required: bool = True):
     schedule_type_raw = form.get("schedule_type", "interval")
     cron_expression = (form.get("cron_expression") or "").strip()
     interval_seconds = form.get("interval_seconds")
-    timeout_seconds = int(form.get("timeout_seconds") or 30)
-    retry_count = int(form.get("retry_count") or 0)
 
     if not required:
         if (form.get("source_type") or "").strip() != "poll":
@@ -525,13 +530,17 @@ def _parse_schedule_form(form, *, required: bool = True):
         return None, "Invalid schedule type"
 
     if schedule_type == ScheduleType.INTERVAL and not interval_seconds:
-        return None, "Enter an interval in seconds"
+        return None, "Interval (seconds) is required"
     if schedule_type == ScheduleType.CRON and not cron_expression:
-        return None, "Enter a cron schedule"
+        return None, "Cron Expression is required"
 
     poller_values, secret_updates, poller_error = parse_poller_form(form)
     if poller_error:
         return None, poller_error
+
+    # Timeout/retry come from subtype fields when present; otherwise keep model defaults.
+    timeout_seconds = poller_values.get("timeout_seconds", 30)
+    retry_count = poller_values.get("retry_count", 0)
 
     return {
         "schedule_type": schedule_type,
@@ -540,8 +549,8 @@ def _parse_schedule_form(form, *, required: bool = True):
         "handler_type": poller_values["handler_type"],
         "handler_url": poller_values["handler_url"],
         "handler_params": poller_values["handler_params"],
-        "timeout_seconds": timeout_seconds,
-        "retry_count": retry_count,
+        "timeout_seconds": int(timeout_seconds),
+        "retry_count": int(retry_count),
         "enabled": True,
         "_secret_updates": secret_updates,
     }, None
@@ -642,11 +651,17 @@ def _source_chain_template(request: Request, db: Session, source: Source, **extr
     )
 
 
-def _pipeline_redirect(success: str | None = None, error: str | None = None):
-    return RedirectResponse(
-        url=flash_url("/config/pipeline", success=success, error=error),
-        status_code=303,
-    )
+def _pipeline_redirect(
+    success: str | None = None,
+    error: str | None = None,
+    *,
+    request: Request | None = None,
+):
+    """Redirect to pipeline with a flash. HTMX gets HX-Redirect so the flash shows."""
+    url = flash_url("/config/pipeline", success=success, error=error)
+    if request is not None and _is_htmx(request):
+        return HTMLResponse("", headers={"HX-Redirect": url})
+    return RedirectResponse(url=url, status_code=303)
 
 
 class CsrfProtectMiddleware(BaseHTTPMiddleware):

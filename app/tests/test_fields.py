@@ -122,3 +122,64 @@ def test_render_data_template():
     assert render_data_template("{{ 1/rate }}", nd) == "0.05"
     assert render_data_template("ok {{ status }} {{ rate * 2 }}", nd) == "ok ok 40"
     assert render_data_template("{{ missing }}", nd) == ""
+
+
+def test_eval_expr_richer_maths():
+    from app.widget_transforms import eval_expr
+
+    nd = {"rate": 20, "x": -3.7, "a": 2, "b": 9}
+    assert eval_expr("abs(x)", nd) == 3.7
+    assert eval_expr("round(x)", nd) == -4.0
+    assert eval_expr("round(rate / 3, 1)", nd) == 6.7
+    assert eval_expr("min(a, b, rate)", nd) == 2.0
+    assert eval_expr("max(a, b)", nd) == 9.0
+    assert eval_expr("rate % 6", nd) == 2.0
+    assert eval_expr("abs()", nd) is None
+    assert eval_expr("__import__('os')", nd) is None
+
+
+def test_resolve_value_from_event_path_and_maths():
+    from app.widget_transforms import resolve_value_from_event
+
+    nd = {"status": "ok", "rate": 20, "payload": {"items": [1, 2]}}
+    assert resolve_value_from_event("status", nd) == "ok"
+    assert resolve_value_from_event("payload.items", nd) == [1, 2]
+    assert resolve_value_from_event("rate * 2", nd) == 40.0
+    assert resolve_value_from_event("abs(rate - 25)", nd) == 5.0
+    assert resolve_value_from_event("missing", nd) is None
+
+
+def test_resolve_value_from_event_shape():
+    from app.widget_transforms import resolve_value_from_event
+
+    nd = {
+        "temp": 20,
+        "payload": {"sensor": {"id": 1}},
+        "field": {"n": 3},
+    }
+    shape = """{
+      "label": "Sensor A",
+      "celsius": "temp",
+      "fahrenheit": "temp * 1.8 + 32",
+      "raw": "payload.sensor",
+      "next": "field.n + 1",
+      "missing": "nope.path",
+      "flag": true,
+      "n": 1
+    }"""
+    out = resolve_value_from_event(shape, nd)
+    assert out == {
+        "label": "Sensor A",
+        "celsius": 20,
+        "fahrenheit": 68.0,
+        "raw": {"id": 1},
+        "next": 4.0,
+        "missing": None,
+        "flag": True,
+        "n": 1,
+    }
+    assert resolve_value_from_event('["temp", "rate * 2", "hi there"]', {"temp": 5, "rate": 3}) == [
+        5, 6.0, "hi there"
+    ]
+    # Invalid JSON that looks like shape → fall through to path/expr (fails → None)
+    assert resolve_value_from_event("{not json", nd) is None

@@ -128,7 +128,7 @@ def test_http_poll_retries_then_fails(db, source):
 def test_http_poll_requires_url(db, source):
     from app.pollers import http_poll
     schedule = _make_schedule(db, source, handler_url="")
-    with pytest.raises(ValueError, match="Poll URL"):
+    with pytest.raises(ValueError, match="URL is required"):
         http_poll(schedule, db)
 
 
@@ -228,7 +228,7 @@ def test_http_poll_oauth_client_credentials_injects_bearer(db, source):
 # ── registry + typed handlers ───────────────────────────────────────────────
 
 def test_poller_registry_exposes_categories_and_specs():
-    from app.pollers import get_poller_categories, get_poller_spec, get_poller_types
+    from app.pollers import get_poller_categories, get_poller_spec, get_poller_specs, get_poller_types
 
     poller_types = get_poller_types()
     assert "http_get" in poller_types
@@ -240,8 +240,21 @@ def test_poller_registry_exposes_categories_and_specs():
     assert spec["category"] == "application"
     assert any(field["name"] == "patterns" for field in spec["fields"])
 
-    categories = {item["slug"] for item in get_poller_categories()}
-    assert {"url", "system", "connectivity", "storage", "application", "external"} <= categories
+    categories = [item["slug"] for item in get_poller_categories()]
+    assert categories == [
+        "url", "system", "connectivity", "storage", "application", "external",
+    ]
+
+    # Registration order within category — not alphabetical by label.
+    by_cat = {}
+    for item in get_poller_specs():
+        by_cat.setdefault(item["category"], []).append(item["handler_type"])
+    assert by_cat["url"][0] == "http_get"
+    assert by_cat["system"][0] == "system_snapshot"
+    assert by_cat["connectivity"] == [
+        "tcp_connect", "icmp_ping", "dns_resolve", "cert_expiry",
+    ]
+    assert by_cat["storage"] == ["disk_free_space", "backup_age"]
 
 
 def test_parse_poller_form_http_schedule():
@@ -254,7 +267,6 @@ def test_parse_poller_form_http_schedule():
         "json_path": "payload.items",
         "headers": '{"X-Test": "1"}',
         "query": '{"page": 1}',
-        "body": '{"enabled": true}',
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
     }
@@ -264,9 +276,44 @@ def test_parse_poller_form_http_schedule():
     assert secret_updates == {}
     assert values["handler_type"] == "http_get"
     assert values["handler_url"] == "https://example.com/data"
+    assert values["timeout_seconds"] == 20
+    assert values["retry_count"] == 2
     assert values["handler_params"]["event_type"] == "status.ok"
     assert values["handler_params"]["headers"] == {"X-Test": "1"}
     assert values["handler_params"]["query"] == {"page": 1}
+    assert "body" not in values["handler_params"]
+
+
+def test_http_field_advanced_and_auth_metadata():
+    from app.pollers import get_poller_spec
+
+    get_spec = get_poller_spec("http_get")
+    post_spec = get_poller_spec("http_post")
+    by_name = {f["name"]: f for f in get_spec["fields"]}
+    assert by_name["timeout_seconds"]["store"] == "timeout"
+    assert by_name["timeout_seconds"]["default"] == 20
+    assert by_name["retry_count"]["store"] == "retry"
+    assert by_name["retry_count"]["default"] == 2
+    assert by_name["timeout_seconds"]["advanced"] is False
+    assert by_name["event_type"]["advanced"] is True
+    assert by_name["auth_mode"]["advanced"] is True
+    assert by_name["auth_prefix"]["show_for_auth"] == ["bearer", "oauth_client_credentials"]
+    assert by_name["token_url"]["show_for_auth"] == ["oauth_client_credentials"]
+    assert "body" not in by_name
+    assert any(f["name"] == "body" for f in post_spec["fields"])
+
+    snap = get_poller_spec("system_snapshot")
+    assert not any(f.get("store") == "retry" for f in snap["fields"])
+    assert not any(f["name"] == "auth_mode" for f in snap["fields"])
+
+    disk = get_poller_spec("disk_free_space")
+    assert not any(f.get("store") in ("timeout", "retry") for f in disk["fields"])
+
+    tcp = get_poller_spec("tcp_connect")
+    tcp_by = {f["name"]: f for f in tcp["fields"]}
+    assert tcp_by["timeout_seconds"]["store"] == "timeout"
+    assert not any(f.get("store") == "retry" for f in tcp["fields"])
+    assert "auth_mode" not in tcp_by
 
 
 def test_system_snapshot_poll(db, source):

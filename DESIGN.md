@@ -108,7 +108,7 @@ A timing/job row attached to a poll source: interval or cron, handler type (for 
 
 A side-effect attached to rules. Built-in types:
 
-- `field_push` — write to a shared Field (logbook append, value ops, text template, toggle Fixed/Switch); skips when the computed value is unchanged
+- `field_push` — write to a shared Field (logbook append, value ops, text template, toggle Fixed/Switch); skips when the computed value is unchanged. Logbook **Value from event** resolves a dotted path, a safe maths expression (`+ - * / %`, `abs`, `round`, `min`, `max`), or a JSON shape (string leaves = path / maths / literal) into a typed value. **Templates** (`{{ }}`) are string interpolation only (actions and text fields).
 - `http_forward` — outbound HTTP request (templated URL/headers/body, auth secrets, presets for ntfy/Gotify/Discord, optional HMAC)
 - `notify` — thin convenience wrapper over HTTP for ntfy / Gotify / Discord (title/body templates)
 - `web_push` — browser push notification via VAPID

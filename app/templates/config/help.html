@@ -198,7 +198,7 @@
         <tbody>
           <tr>
             <td>Update field</td>
-            <td>Writes to a <a href="#fields">Field</a> (append, set, count, or toggle). Skips when the new value matches what is already stored.</td>
+            <td>Writes to a <a href="#fields">Field</a> (append, set, count, or toggle). Skips when the new value matches what is already stored. For logbooks, see <a href="#logbook-value-source">value source</a>.</td>
           </tr>
           <tr>
             <td>Notify</td>
@@ -224,6 +224,50 @@
           </tr>
         </tbody>
       </table>
+
+      <h3 id="logbook-value-source">Logbook value source</h3>
+      <p>
+        When an Update field action targets a <strong>logbook</strong>, choose how the entry value is built.
+        Reserved name <code>field</code> is the current stored value (paths, maths, and shapes).
+      </p>
+      <table class="table">
+        <thead>
+          <tr><th>Mode</th><th>What it stores</th><th>Syntax</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Entire event</td>
+            <td>Whole event data object</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>Value from event</td>
+            <td>Typed path, maths number, or compiled JSON shape</td>
+            <td>path / expr / <code>{…}</code> or <code>[…]</code></td>
+          </tr>
+          <tr>
+            <td>Template</td>
+            <td>Always a <strong>string</strong></td>
+            <td>text with <code>{{ '{{ path }}' }}</code> / <code>{{ '{{ expr }}' }}</code></td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>Value from event</strong> examples:</p>
+      <ul class="stack help__list">
+        <li>Path (keeps objects/lists): <code>payload.sensor</code></li>
+        <li>Maths: <code>temp * 1.8 + 32</code> — ops <code>+ - * / %</code>, functions <code>abs</code>, <code>round</code>, <code>min</code>, <code>max</code></li>
+        <li>JSON shape (string leaves = path, maths, or literal text):</li>
+      </ul>
+      <pre class="help__code">{{ '{' }}
+  "label": "Sensor A",
+  "celsius": "temp",
+  "fahrenheit": "temp * 1.8 + 32",
+  "raw": "payload.sensor"
+}</pre>
+      <p class="text-muted">
+        Call URL, notify, and browser notification templates stay strings.
+        Use Value from event on a logbook when you need typed numbers or a rebuilt object.
+      </p>
 
       <h3 id="call-url-auth">Call URL — auth &amp; signing</h3>
       <p>When the action runs, Para-Scope can authenticate and/or sign the outbound request.</p>

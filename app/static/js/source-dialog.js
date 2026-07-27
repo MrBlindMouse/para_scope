@@ -93,7 +93,8 @@
     var schedType = form.querySelector("#sched-type");
     var pollCategory = form.querySelector("#poll-category");
     var handlerType = form.querySelector("#handler-type");
-    var webhookFields = form.querySelector("#webhook-secret-fields");
+    var webhookFields = form.querySelector("#webhook-provider-fields");
+    var webhookProvider = form.querySelector("#webhook-provider");
     var scheduleFields = form.querySelector("#schedule-fields");
     var intervalFields = form.querySelector("#interval-fields");
     var cronFields = form.querySelector("#cron-fields");
@@ -103,16 +104,41 @@
       if (!pollCategory || !handlerType) return;
       var selected = pollCategory.value;
       var firstVisible = null;
+      var preferred = selected === "url" ? "http_get" : null;
+      var preferredVisible = null;
       Array.prototype.forEach.call(handlerType.options, function (option) {
         var visible = option.getAttribute("data-category") === selected;
         option.hidden = !visible;
         option.disabled = !visible;
-        if (visible && !firstVisible) firstVisible = option.value;
+        if (!visible) return;
+        if (!firstVisible) firstVisible = option.value;
+        if (preferred && option.value === preferred) preferredVisible = option.value;
       });
       if (handlerType.selectedOptions.length && !handlerType.selectedOptions[0].hidden) {
         return;
       }
-      if (firstVisible) handlerType.value = firstVisible;
+      handlerType.value = preferredVisible || firstVisible || handlerType.value;
+    }
+
+    function syncAuthFields() {
+      if (!handlerType) return;
+      var panel = form.querySelector(
+        '[data-handler-fields="' + handlerType.value + '"]'
+      );
+      if (!panel) return;
+      var modeSelect = panel.querySelector("[data-auth-mode-select]");
+      var mode = modeSelect ? modeSelect.value : "";
+      panel.querySelectorAll("[data-show-for-auth]").forEach(function (row) {
+        var allowed = (row.getAttribute("data-show-for-auth") || "").split(/\s+/);
+        var show = allowed.indexOf(mode) !== -1;
+        row.hidden = !show;
+        Array.prototype.forEach.call(
+          row.querySelectorAll("input, select, textarea"),
+          function (inp) {
+            inp.disabled = !show;
+          }
+        );
+      });
     }
 
     function syncHandlerPanels() {
@@ -123,6 +149,22 @@
         Array.prototype.forEach.call(panel.querySelectorAll("input, select, textarea"), function (inp) {
           inp.disabled = !active;
         });
+      });
+      syncAuthFields();
+    }
+
+    function syncWebhookProviderPanels() {
+      if (!webhookProvider) return;
+      var selected = webhookProvider.value;
+      form.querySelectorAll("[data-webhook-provider]").forEach(function (panel) {
+        var active = panel.getAttribute("data-webhook-provider") === selected;
+        panel.hidden = !active;
+        Array.prototype.forEach.call(
+          panel.querySelectorAll("input, select, textarea"),
+          function (inp) {
+            inp.disabled = !active;
+          }
+        );
       });
     }
 
@@ -158,8 +200,17 @@
     if (handlerType) {
       handlerType.addEventListener("change", syncHandlerPanels);
     }
+    form.addEventListener("change", function (ev) {
+      if (ev.target && ev.target.matches && ev.target.matches("[data-auth-mode-select]")) {
+        syncAuthFields();
+      }
+    });
+    if (webhookProvider) {
+      webhookProvider.addEventListener("change", syncWebhookProviderPanels);
+    }
     syncHandlerOptions();
     syncHandlerPanels();
+    syncWebhookProviderPanels();
     toggleSourceType();
     toggleSchedType();
   }

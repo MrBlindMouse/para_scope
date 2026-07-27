@@ -68,19 +68,18 @@
       </label>
       <label class="stack" id="logbook-key-wrap" hidden>
         <span class="field-label">
-          Value from event
+          Value from event *
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Path or maths; field = current stored value. e.g. status, field.n + 1">?</button>
+                  data-tip="Path, maths, or JSON object/array. String leaves = path, maths, or literal. field = current stored value. e.g. status, field.n + 1, or {&quot;c&quot;:&quot;temp&quot;}">?</button>
         </span>
-        <input name="value_key" type="text" class="input" id="logbook-value-key"
-               value="{{ cfg.get('value_key') or '' }}"
-               placeholder="status or field.n + 1">
+        <textarea name="value_key" class="input" id="logbook-value-key" rows="4"
+                  placeholder='status&#10;or field.n + 1&#10;or {"celsius":"temp","label":"Sensor A"}'>{{ cfg.get('value_key') or '' }}</textarea>
       </label>
       <label class="stack" id="logbook-literal-wrap" hidden>
         <span class="field-label">
           Template
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Text with {{ '{{ path }}' }} / maths; field = current stored value">?</button>
+                  data-tip="Always a string. Text with {{ '{{ path }}' }} / maths; field = current stored value. For typed numbers or JSON shapes use Value from event.">?</button>
         </span>
         <input name="value" type="text" class="input" id="logbook-value"
                value="{% if 'value' in cfg and not cfg.get('value_key') %}{{ cfg.get('value') }}{% endif %}"
@@ -92,9 +91,9 @@
       <label class="stack">
         Operation
         <select name="value_op" class="input" id="value-op">
+          <option value="set" {% if cfg.get('op') == 'set' %}selected{% endif %}>Set</option>
           <option value="increment" {% if cfg.get('op', 'increment') == 'increment' %}selected{% endif %}>Increment</option>
           <option value="decrement" {% if cfg.get('op') == 'decrement' %}selected{% endif %}>Decrement</option>
-          <option value="set" {% if cfg.get('op') == 'set' %}selected{% endif %}>Set</option>
           <option value="reset" {% if cfg.get('op') == 'reset' %}selected{% endif %}>Reset</option>
         </select>
       </label>
@@ -205,28 +204,30 @@
       <textarea name="body" class="input" rows="3"
                 placeholder="{{ '{{ message }}' }}">{{ cfg.get('body') or '' }}</textarea>
     </label>
-    <label class="stack">
+    <label class="stack" id="notify-priority-wrap">
       Priority
       <input name="priority" type="number" class="input" min="0" max="10"
              value="{{ cfg.get('priority') if cfg.get('priority') is not none else '' }}" placeholder="optional">
     </label>
-    <label class="stack">
-      Authentication
-      <select name="auth_mode" class="input" id="notify-auth-mode">
-        <option value="none" {% if cfg.get('auth_mode') != 'bearer' %}selected{% endif %}>None</option>
-        <option value="bearer" {% if cfg.get('auth_mode') == 'bearer' %}selected{% endif %}>Bearer token</option>
-      </select>
-    </label>
-    <fieldset class="stack" id="notify-secrets" hidden>
-      <legend>Credentials</legend>
-      {% if is_edit and action.secret %}
-      <p class="text-muted">Leave blank to keep.</p>
-      {% endif %}
+    <div id="notify-auth-wrap" class="stack">
       <label class="stack">
-        Token
-        <input name="secret_value" type="password" class="input" autocomplete="new-password" placeholder="Bearer token">
+        Authentication
+        <select name="auth_mode" class="input" id="notify-auth-mode">
+          <option value="none" {% if cfg.get('auth_mode') != 'bearer' %}selected{% endif %}>None</option>
+          <option value="bearer" {% if cfg.get('auth_mode') == 'bearer' %}selected{% endif %}>Bearer token</option>
+        </select>
       </label>
-    </fieldset>
+      <fieldset class="stack" id="notify-secrets" hidden>
+        <legend>Credentials</legend>
+        {% if is_edit and action.secret %}
+        <p class="text-muted">Leave blank to keep.</p>
+        {% endif %}
+        <label class="stack">
+          Token
+          <input name="secret_value" type="password" class="input" autocomplete="new-password" placeholder="Bearer token">
+        </label>
+      </fieldset>
+    </div>
   </div>
 
   {# ── local_script ── #}
@@ -313,7 +314,7 @@
     <label class="stack">
       Method
       <select name="method" class="input" id="http-method">
-        {% for m in ['POST', 'PUT', 'PATCH', 'GET'] %}
+        {% for m in ['GET', 'POST', 'PUT', 'PATCH'] %}
           <option value="{{ m }}" {% if (cfg.get('method') or 'POST') == m %}selected{% endif %}>{{ m }}</option>
         {% endfor %}
       </select>
@@ -354,85 +355,90 @@
       </label>
     </fieldset>
 
-    <label class="stack">
-      <span class="field-label">
-        Extra headers
-        <button type="button" class="field-tip" tabindex="0"
-                data-tip="One per line: Key: Value. Values support {{ '{{ path }}' }} templates.">?</button>
-      </span>
-      <textarea name="headers_text" class="input" id="http-headers" rows="3"
-                placeholder="Title: {{ '{{ status }}' }}&#10;Priority: 3">{{ headers_text }}</textarea>
-    </label>
+    <details class="stack">
+      <summary>Advanced</summary>
+      <div class="stack">
+        <label class="stack">
+          <span class="field-label">
+            Extra headers
+            <button type="button" class="field-tip" tabindex="0"
+                    data-tip="One per line: Key: Value. Values support {{ '{{ path }}' }} templates.">?</button>
+          </span>
+          <textarea name="headers_text" class="input" id="http-headers" rows="3"
+                    placeholder="Title: {{ '{{ status }}' }}&#10;Priority: 3">{{ headers_text }}</textarea>
+        </label>
 
-    <label class="stack">
-      Authentication
-      <select name="auth_mode" class="input" id="auth-mode">
-        <option value="none" {% if cfg.get('auth_mode') == 'none' or not cfg.get('auth_mode') %}selected{% endif %}>None</option>
-        <option value="bearer" {% if cfg.get('auth_mode') == 'bearer' %}selected{% endif %}>Bearer token (Authorization header)</option>
-        <option value="key_secret" {% if cfg.get('auth_mode') == 'key_secret' %}selected{% endif %}>API key + secret (custom headers)</option>
-      </select>
-    </label>
+        <label class="stack">
+          Authentication
+          <select name="auth_mode" class="input" id="auth-mode">
+            <option value="none" {% if cfg.get('auth_mode') == 'none' or not cfg.get('auth_mode') %}selected{% endif %}>None</option>
+            <option value="bearer" {% if cfg.get('auth_mode') == 'bearer' %}selected{% endif %}>Bearer token (Authorization header)</option>
+            <option value="key_secret" {% if cfg.get('auth_mode') == 'key_secret' %}selected{% endif %}>API key + secret (custom headers)</option>
+          </select>
+        </label>
 
-    <fieldset class="stack" id="http-secrets">
-      <legend>Credentials</legend>
-      {% if is_edit and action.secret %}
-      <p class="text-muted">Leave value blank to keep.</p>
-      {% endif %}
-      <label class="stack">
-        Value
-        <input name="secret_value" type="password" class="input" autocomplete="new-password" placeholder="{{ 'Bearer token' if not is_edit or cfg.get('auth_mode') == 'bearer' else 'API key value' }}">
-      </label>
-      <div id="bearer-auth-custom-wrap" class="stack" hidden>
-        <label class="stack">
-          Auth header
-          <input name="auth_header" type="text" class="input" value="{{ cfg.get('auth_header') or 'Authorization' }}">
-        </label>
-        <label class="stack">
-          Auth prefix
-          <input name="auth_prefix" type="text" class="input" value="{{ cfg.get('auth_prefix') or 'Bearer ' }}">
-        </label>
-      </div>
-      <div id="secret-secondary-wrap" class="stack" hidden>
-        {% if is_edit and action.secret_2 %}
-        <p class="text-muted">Leave values blank to keep.</p>
-        {% endif %}
-        <label class="stack">
-          Secret
-          <input name="secret2_value" type="password" class="input" autocomplete="new-password">
-        </label>
-        <label class="stack">
-          Key header
-          <input name="api_key_header" type="text" class="input"
-                 value="{{ cfg.get('api_key_header') or 'X-Api-Key' }}">
-        </label>
-        <label class="stack">
-          Secret header
-          <input name="api_secret_header" type="text" class="input"
-                 value="{{ cfg.get('api_secret_header') or 'X-Api-Secret' }}">
-        </label>
-      </div>
-    </fieldset>
+        <fieldset class="stack" id="http-secrets">
+          <legend>Credentials</legend>
+          {% if is_edit and action.secret %}
+          <p class="text-muted">Leave value blank to keep.</p>
+          {% endif %}
+          <label class="stack">
+            Value
+            <input name="secret_value" type="password" class="input" autocomplete="new-password" placeholder="{{ 'Bearer token' if not is_edit or cfg.get('auth_mode') == 'bearer' else 'API key value' }}">
+          </label>
+          <div id="bearer-auth-custom-wrap" class="stack" hidden>
+            <label class="stack">
+              Auth header
+              <input name="auth_header" type="text" class="input" value="{{ cfg.get('auth_header') or 'Authorization' }}">
+            </label>
+            <label class="stack">
+              Auth prefix
+              <input name="auth_prefix" type="text" class="input" value="{{ cfg.get('auth_prefix') or 'Bearer ' }}">
+            </label>
+          </div>
+          <div id="secret-secondary-wrap" class="stack" hidden>
+            {% if is_edit and action.secret_2 %}
+            <p class="text-muted">Leave values blank to keep.</p>
+            {% endif %}
+            <label class="stack">
+              Secret
+              <input name="secret2_value" type="password" class="input" autocomplete="new-password">
+            </label>
+            <label class="stack">
+              Key header
+              <input name="api_key_header" type="text" class="input"
+                     value="{{ cfg.get('api_key_header') or 'X-Api-Key' }}">
+            </label>
+            <label class="stack">
+              Secret header
+              <input name="api_secret_header" type="text" class="input"
+                     value="{{ cfg.get('api_secret_header') or 'X-Api-Secret' }}">
+            </label>
+          </div>
+        </fieldset>
 
-    <fieldset class="stack" id="http-signing">
-      <legend>Request signing</legend>
-      <label class="stack">
-        Mode
-        <select name="signing_mode" class="input" id="signing-mode">
-          <option value="none" {% if cfg.get('signing_mode') == 'none' or not cfg.get('signing_mode') %}selected{% endif %}>None</option>
-          <option value="hmac_sha256" {% if cfg.get('signing_mode') == 'hmac_sha256' %}selected{% endif %}>HMAC-SHA256</option>
-        </select>
-      </label>
-      <div id="signing-headers" class="stack" hidden>
-        <label class="stack">
-          Signature header
-          <input name="signing_signature_header" type="text" class="input" value="{{ cfg.get('signing_signature_header') or 'X-Call-Signature' }}">
-        </label>
-        <label class="stack">
-          Timestamp header
-          <input name="signing_timestamp_header" type="text" class="input" value="{{ cfg.get('signing_timestamp_header') or 'X-Call-Timestamp' }}">
-        </label>
+        <fieldset class="stack" id="http-signing">
+          <legend>Request signing</legend>
+          <label class="stack">
+            Mode
+            <select name="signing_mode" class="input" id="signing-mode">
+              <option value="none" {% if cfg.get('signing_mode') == 'none' or not cfg.get('signing_mode') %}selected{% endif %}>None</option>
+              <option value="hmac_sha256" {% if cfg.get('signing_mode') == 'hmac_sha256' %}selected{% endif %}>HMAC-SHA256</option>
+            </select>
+          </label>
+          <div id="signing-headers" class="stack" hidden>
+            <label class="stack">
+              Signature header
+              <input name="signing_signature_header" type="text" class="input" value="{{ cfg.get('signing_signature_header') or 'X-Call-Signature' }}">
+            </label>
+            <label class="stack">
+              Timestamp header
+              <input name="signing_timestamp_header" type="text" class="input" value="{{ cfg.get('signing_timestamp_header') or 'X-Call-Timestamp' }}">
+            </label>
+          </div>
+        </fieldset>
       </div>
-    </fieldset>
+    </details>
   </div>
 
   <div class="flex items-center gap">
@@ -498,46 +504,92 @@
     var m = mode.value;
     keyW.hidden = m !== "key";
     litW.hidden = m !== "literal";
+    setDisabledIn(keyW, m !== "key");
+    setDisabledIn(litW, m !== "literal");
   }
   function syncToggleMode() {
     var mode = document.getElementById("toggle-mode");
     var litW = document.getElementById("toggle-literal-wrap");
     if (!mode || !litW) return;
     litW.hidden = mode.value !== "literal";
+    setDisabledIn(litW, mode.value !== "literal");
   }
   function syncValueOp() {
     var op = document.getElementById("value-op");
     var delta = document.getElementById("value-delta-wrap");
     if (!op || !delta) return;
     delta.hidden = op.value === "reset";
+    setDisabledIn(delta, op.value === "reset");
   }
+  function setDisabledIn(el, disabled) {
+    if (!el) return;
+    Array.prototype.forEach.call(el.querySelectorAll("input, select, textarea"), function (inp) {
+      inp.disabled = disabled;
+    });
+  }
+
   function syncAuth() {
     if (!authMode || !secretSecondary || !httpSecrets) return;
     var m = authMode.value;
     httpSecrets.hidden = m === "none";
     secretSecondary.hidden = m !== "key_secret";
     if (bearerCustomWrap) bearerCustomWrap.hidden = m !== "bearer";
+    setDisabledIn(httpSecrets, m === "none");
+    setDisabledIn(secretSecondary, m !== "key_secret");
+    setDisabledIn(bearerCustomWrap, m !== "bearer");
+    // Keep auth_mode itself enabled when parent panel is active.
+    if (authMode) authMode.disabled = false;
     var valInput = httpSecrets.querySelector("input[name='secret_value']");
-    if (valInput) valInput.placeholder = m === "key_secret" ? "API key value" : "Bearer token";
+    if (valInput && m !== "none") {
+      valInput.disabled = false;
+      valInput.placeholder = m === "key_secret" ? "API key value" : "Bearer token";
+    }
   }
   function syncSigning() {
     if (!signingMode || !signingHeaders) return;
-    signingHeaders.hidden = signingMode.value !== "hmac_sha256";
+    var on = signingMode.value === "hmac_sha256";
+    signingHeaders.hidden = !on;
+    setDisabledIn(signingHeaders, !on);
+    if (signingMode) signingMode.disabled = false;
   }
   function syncBodyMode() {
     var mode = document.getElementById("http-body-mode");
     var custom = document.getElementById("http-body-custom-wrap");
     var text = document.getElementById("http-body-text-wrap");
     if (!mode) return;
-    if (custom) custom.hidden = mode.value !== "custom";
-    if (text) text.hidden = mode.value !== "text";
+    if (custom) {
+      custom.hidden = mode.value !== "custom";
+      setDisabledIn(custom, mode.value !== "custom");
+    }
+    if (text) {
+      text.hidden = mode.value !== "text";
+      setDisabledIn(text, mode.value !== "text");
+    }
   }
   function syncNotify() {
     var svc = document.getElementById("notify-service");
     var topic = document.getElementById("notify-topic-wrap");
-    if (svc && topic) topic.hidden = svc.value !== "ntfy";
-    if (notifyAuth && notifySecrets) {
-      notifySecrets.hidden = notifyAuth.value !== "bearer";
+    var priority = document.getElementById("notify-priority-wrap");
+    var authWrap = document.getElementById("notify-auth-wrap");
+    var service = svc ? svc.value : "ntfy";
+    if (topic) {
+      topic.hidden = service !== "ntfy";
+      setDisabledIn(topic, service !== "ntfy");
+    }
+    if (priority) {
+      // Priority is meaningful for ntfy/Gotify, not Discord webhooks.
+      priority.hidden = service === "discord";
+      setDisabledIn(priority, service === "discord");
+    }
+    if (authWrap) {
+      authWrap.hidden = service === "discord";
+      setDisabledIn(authWrap, service === "discord");
+    }
+    if (notifyAuth && notifySecrets && service !== "discord") {
+      var bearer = notifyAuth.value === "bearer";
+      notifySecrets.hidden = !bearer;
+      setDisabledIn(notifySecrets, !bearer);
+      notifyAuth.disabled = false;
     }
   }
   function syncScriptMode() {
@@ -545,8 +597,14 @@
     var cmd = document.getElementById("script-command-wrap");
     var argv = document.getElementById("script-argv-wrap");
     if (!mode) return;
-    if (cmd) cmd.hidden = mode.value !== "command";
-    if (argv) argv.hidden = mode.value !== "argv";
+    if (cmd) {
+      cmd.hidden = mode.value !== "command";
+      setDisabledIn(cmd, mode.value !== "command");
+    }
+    if (argv) {
+      argv.hidden = mode.value !== "argv";
+      setDisabledIn(argv, mode.value !== "argv");
+    }
   }
   function syncPresetUi() {
     var preset = document.getElementById("http-preset");
@@ -555,7 +613,11 @@
     if (!preset || !helpers) return;
     var p = preset.value;
     helpers.hidden = p === "none";
-    if (topicWrap) topicWrap.hidden = p !== "ntfy";
+    setDisabledIn(helpers, p === "none");
+    if (topicWrap) {
+      topicWrap.hidden = p !== "ntfy";
+      setDisabledIn(topicWrap, p !== "ntfy");
+    }
   }
   function applyPreset() {
     var preset = document.getElementById("http-preset");

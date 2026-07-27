@@ -1,6 +1,82 @@
 {% set selected_handler_type = schedule.handler_type if schedule else 'http_get' %}
 {% set selected_category = selected_poll_category or 'url' %}
 {% set params = handler_params or {} %}
+{% set secrets = schedule_secret_keys or {} %}
+
+{% macro render_poller_field(field, spec, selected_handler_type, schedule, params, secrets) %}
+{% set ns = namespace(field_value=none) %}
+{% if field.store == 'url' %}
+  {% set ns.field_value = schedule.handler_url if schedule else (field.default or '') %}
+{% elif field.store == 'timeout' %}
+  {% set ns.field_value = schedule.timeout_seconds if schedule and schedule.timeout_seconds is not none else field.default %}
+{% elif field.store == 'retry' %}
+  {% set ns.field_value = schedule.retry_count if schedule and schedule.retry_count is not none else field.default %}
+{% else %}
+  {% set ns.field_value = params.get(field.param_key, field.default) %}
+{% endif %}
+{% set field_value = ns.field_value %}
+<div class="stack poller-field"{% if field.show_for_auth %} data-show-for-auth="{{ field.show_for_auth|join(' ') }}"{% endif %}>
+  {% if field.input_type == 'checkbox' %}
+    <label class="flex items-center gap">
+      <input type="checkbox"
+             name="{{ field.name }}"
+             value="1"
+             {% if field_value %}checked{% endif %}
+             {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+      {{ field.label }}
+    </label>
+    {% if field.help_text %}<p class="text-muted">{{ field.help_text }}</p>{% endif %}
+  {% else %}
+    <label class="stack">
+      {{ field.label }}{% if field.required %} *{% endif %}
+      {% if field.help_text %}<span class="text-muted">{{ field.help_text }}</span>{% endif %}
+      {% if field.input_type == 'select' %}
+        <select name="{{ field.name }}" class="input"
+                {% if field.name == 'auth_mode' %}data-auth-mode-select{% endif %}
+                {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+          {% for option_value, option_label in field.options %}
+            <option value="{{ option_value }}" {% if field_value == option_value %}selected{% endif %}>{{ option_label }}</option>
+          {% endfor %}
+        </select>
+      {% elif field.input_type == 'textarea' %}
+        {% if field.parse_as in ['json_dict', 'json_any'] %}
+          {% if field_value is mapping or (field_value is sequence and field_value is not string) %}
+            {% set display_value = field_value | tojson(indent=2) %}
+          {% else %}
+            {% set display_value = field_value or '' %}
+          {% endif %}
+        {% elif field.parse_as in ['lines', 'csv'] and field_value is sequence and field_value is not string %}
+          {% set display_value = field_value | join('\n') %}
+        {% else %}
+          {% set display_value = field_value or '' %}
+        {% endif %}
+        <textarea name="{{ field.name }}"
+                  rows="{{ field.rows or 3 }}"
+                  class="input"
+                  placeholder="{{ field.placeholder }}"
+                  {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>{{ display_value }}</textarea>
+      {% else %}
+        <input name="{{ field.name }}"
+               type="{{ field.input_type }}"
+               class="input"
+               placeholder="{{ field.placeholder }}"
+               value="{{ '' if field.input_type == 'password' else (field_value if field_value is not none else '') }}"
+               {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+      {% endif %}
+    </label>
+    {% if field.secret and secrets.get(field.param_key) %}
+      <p class="text-muted">{{ field.label }} is configured.</p>
+      <label class="flex items-center gap">
+        <input type="checkbox"
+               name="{{ field.name }}_clear"
+               value="1"
+               {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+        Clear stored secret
+      </label>
+    {% endif %}
+  {% endif %}
+</div>
+{% endmacro %}
 
 <label class="stack">
   <span class="field-label">
@@ -39,76 +115,18 @@
            data-handler-fields="{{ spec.handler_type }}"
            {% if spec.handler_type != selected_handler_type %}hidden{% endif %}>
     <p class="text-muted">{{ spec.summary }}</p>
-    {% for field in spec.fields %}
-      {% set param_key = field.param_key %}
-      {% if field.store == 'url' %}
-        {% set field_value = schedule.handler_url if schedule else (field.default or '') %}
-      {% else %}
-        {% set field_value = params.get(param_key, field.default) %}
-      {% endif %}
-
-      {% if field.input_type == 'checkbox' %}
-        <label class="flex items-center gap">
-          <input type="checkbox"
-                 name="{{ field.name }}"
-                 value="1"
-                 {% if field_value %}checked{% endif %}
-                 {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
-          {{ field.label }}
-        </label>
-        {% if field.help_text %}
-          <p class="text-muted">{{ field.help_text }}</p>
-        {% endif %}
-      {% else %}
-        <label class="stack">
-          {{ field.label }}{% if field.required %} *{% endif %}
-          {% if field.help_text %}
-            <span class="text-muted">{{ field.help_text }}</span>
-          {% endif %}
-
-          {% if field.input_type == 'select' %}
-            <select name="{{ field.name }}" class="input" {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
-              {% for option_value, option_label in field.options %}
-                <option value="{{ option_value }}" {% if field_value == option_value %}selected{% endif %}>{{ option_label }}</option>
-              {% endfor %}
-            </select>
-          {% elif field.input_type == 'textarea' %}
-            {% if field.parse_as in ['json_dict', 'json_any'] %}
-              {% if field_value is mapping or (field_value is sequence and field_value is not string) %}
-                {% set display_value = field_value | tojson(indent=2) %}
-              {% else %}
-                {% set display_value = field_value or '' %}
-              {% endif %}
-            {% elif field.parse_as in ['lines', 'csv'] and field_value is sequence and field_value is not string %}
-              {% set display_value = field_value | join('\n') %}
-            {% else %}
-              {% set display_value = field_value or '' %}
-            {% endif %}
-            <textarea name="{{ field.name }}"
-                      rows="{{ field.rows or 3 }}"
-                      class="input"
-                      placeholder="{{ field.placeholder }}"
-                      {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>{{ display_value }}</textarea>
-          {% else %}
-            <input name="{{ field.name }}"
-                   type="{{ field.input_type }}"
-                   class="input"
-                   placeholder="{{ field.placeholder }}"
-                   value="{{ '' if field.input_type == 'password' else (field_value if field_value is not none else '') }}"
-                   {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
-          {% endif %}
-        </label>
-        {% if field.secret and schedule_secret_keys.get(param_key) %}
-          <p class="text-muted">{{ field.label }} is configured.</p>
-          <label class="flex items-center gap">
-            <input type="checkbox"
-                   name="{{ field.name }}_clear"
-                   value="1"
-                   {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
-            Clear stored secret
-          </label>
-        {% endif %}
-      {% endif %}
+    {% for field in spec.fields if not field.advanced %}
+      {{ render_poller_field(field, spec, selected_handler_type, schedule, params, secrets) }}
     {% endfor %}
+    {% if spec.fields|selectattr('advanced')|list %}
+      <details class="stack">
+        <summary>Advanced</summary>
+        <div class="stack">
+          {% for field in spec.fields if field.advanced %}
+            {{ render_poller_field(field, spec, selected_handler_type, schedule, params, secrets) }}
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
   </section>
 {% endfor %}

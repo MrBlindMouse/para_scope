@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import operator
 import re
 
@@ -12,11 +13,13 @@ _BINOPS = {
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
+    ast.Mod: operator.mod,
 }
 _UNARYOPS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
+_CALL_FUNCS = frozenset({"abs", "round", "min", "max"})
 _COMPARE_OPS = {
     "gt": operator.gt,
     "lt": operator.lt,
@@ -105,9 +108,31 @@ def _eval_ast(node, data: dict):
     if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:
         left = _eval_ast(node.left, data)
         right = _eval_ast(node.right, data)
-        if type(node.op) is ast.Div and right == 0:
+        if type(node.op) in (ast.Div, ast.Mod) and right == 0:
             raise ZeroDivisionError
         return _BINOPS[type(node.op)](left, right)
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name) or node.func.id not in _CALL_FUNCS:
+            raise ValueError("disallowed call")
+        if node.keywords:
+            raise ValueError("disallowed kwargs")
+        args = [_eval_ast(a, data) for a in node.args]
+        name = node.func.id
+        if name == "abs":
+            if len(args) != 1:
+                raise ValueError("abs arity")
+            return abs(args[0])
+        if name == "round":
+            if len(args) == 1:
+                return float(round(args[0]))
+            if len(args) == 2:
+                return float(round(args[0], int(args[1])))
+            raise ValueError("round arity")
+        if name in ("min", "max"):
+            if not args:
+                raise ValueError("minmax arity")
+            return float((min if name == "min" else max)(args))
+        raise ValueError("disallowed call")
     if isinstance(node, ast.Name):
         raw = get_by_path(data, node.id)
         if raw is None:
@@ -219,6 +244,41 @@ def resolve_path_or_expr(body: str, data: dict | None):
         if raw is not None:
             return raw
     return eval_expr(text, data)
+
+
+def _resolve_shape(obj, data: dict):
+    """Walk a JSON shape: string leaves → path, maths, or literal; else keep typed."""
+    if isinstance(obj, dict):
+        return {k: _resolve_shape(v, data) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_shape(v, data) for v in obj]
+    if isinstance(obj, str):
+        if _PATH_RE.fullmatch(obj):
+            return get_by_path(data, obj)
+        num = eval_expr(obj, data)
+        return num if num is not None else obj
+    return obj
+
+
+def resolve_value_from_event(spec: str, data: dict | None):
+    """Path, maths, or JSON shape → typed value.
+
+    - Dotted path → value from ``data`` (objects/lists kept; missing → None).
+    - Safe maths → float (``+ - * / %``, ``abs``, ``round``, ``min``, ``max``).
+    - JSON object/array → same structure; string leaves are path, maths, or literal.
+    """
+    text = (spec or "").strip()
+    if not text:
+        return None
+    data = data or {}
+    if text[0] in "{[":
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            return _resolve_shape(parsed, data)
+    return resolve_path_or_expr(text, data)
 
 
 def render_data_template(template: str, data: dict | None) -> str:

@@ -375,6 +375,9 @@ class TestSourcesCRUD:
         assert 'name="slug"' not in resp.text
         assert 'class="field-tip"' in resp.text
         assert "data-tip=" in resp.text
+        assert 'id="webhook-provider-fields"' in resp.text
+        assert 'data-webhook-provider="paypal"' in resp.text
+        assert "Client secret" in resp.text
 
     def test_create_source(self, authenticated_client):
         resp = authenticated_client.post(
@@ -402,6 +405,29 @@ class TestSourcesCRUD:
         assert resp.status_code == 303
         loc = str(resp.headers.get("location", ""))
         assert "error" in loc
+        assert "Name" in loc or "name" in loc.lower()
+
+    def test_htmx_empty_required_flashes_error(self, authenticated_client):
+        """HTMX form validation should HX-Redirect with a flash naming the field."""
+        resp = authenticated_client.post(
+            "/config/pipeline/sources",
+            data={
+                "name": "Needs URL",
+                "source_type": "poll",
+                "schedule_type": "interval",
+                "interval_seconds": "60",
+                "poll_category": "url",
+                "handler_type": "http_get",
+            },
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        loc = resp.headers.get("HX-Redirect") or ""
+        assert "error=" in loc
+        from urllib.parse import unquote, urlparse, parse_qs
+        err = unquote(parse_qs(urlparse(loc).query).get("error", [""])[0])
+        assert err == "URL is required"
 
     def test_slug_auto_from_name_and_uniquified(self, authenticated_client):
         resp1 = authenticated_client.post(
@@ -439,7 +465,10 @@ class TestSourcesCRUD:
         assert "Edit Source" in resp.text
         assert "Edit Partial" in resp.text
         assert 'name="schedule_name"' not in resp.text
-        assert 'id="webhook-secret-fields"' in resp.text
+        assert 'id="webhook-provider-fields"' in resp.text
+        assert 'data-webhook-provider="discord"' in resp.text
+        assert 'data-webhook-provider="paypal"' in resp.text
+        assert "Application public key" in resp.text
 
     def test_edit_source_not_found(self, authenticated_client):
         resp = authenticated_client.get("/config/pipeline/source/9999/partials/edit-form")
@@ -694,6 +723,32 @@ class TestActions:
         assert resp.status_code == 303
         loc = str(resp.headers.get("location", ""))
         assert "error" not in loc
+
+    def test_logbook_value_key_rejects_invalid_json(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="Act JSON", slug="act-json-key")
+        from app.database import get_db
+        from app.models import Field
+        db = next(get_db())
+        try:
+            f = Field(name="LB", slug="lb-bad-json", field_type="logbook", config={}, state={})
+            db.add(f)
+            db.commit()
+            fid = f.id
+        finally:
+            db.close()
+        resp = authenticated_client.post(
+            f"/config/pipeline/source/{sid}/actions",
+            data={
+                "action_type": "field_push",
+                "field_id": str(fid),
+                "field_type": "logbook",
+                "logbook_mode": "key",
+                "value_key": "{not valid",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error" in str(resp.headers.get("location", ""))
 
     def test_create_field_push_requires_field(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Act Src", slug="act-src-name")
@@ -2628,6 +2683,20 @@ class TestSystemPage:
         assert "waiting to be processed" in resp.text
 
 
+# ── Webhook provider UI metadata ─────────────────────────────────────────────
+
+def test_webhook_provider_metadata_covers_verifiers():
+    from app.webhook_verifiers import get_webhook_providers, get_webhook_provider_slugs
+
+    providers = get_webhook_providers()
+    by_slug = {p["slug"]: p for p in providers}
+    assert get_webhook_provider_slugs() == set(by_slug)
+    assert by_slug["discord"]["secret_label"] == "Application public key"
+    assert by_slug["paypal"]["uses_paypal_config"] is True
+    assert by_slug["generic_hmac"]["uses_paypal_config"] is False
+    assert all(p.get("secret_help") for p in providers)
+
+
 # ── Cascade Delete ──────────────────────────────────────────────────────────
 
 class TestCascadeDelete:
@@ -3466,6 +3535,70 @@ class TestPipeline:
                 .all()
             ]
             assert values == ["x=ok", "0.05", 40.0, {"n": 1}]
+        finally:
+            db.close()
+
+    def test_logbook_value_from_event_json_shape(self, authenticated_client):
+        """Value from event JSON shape compiles typed path/maths/literal leaves."""
+        sid, _ = _create_source(authenticated_client, name="LB Shape Src", slug="lb-shape-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field, FieldLogEntry
+        from app.pipeline import evaluate_and_dispatch
+        db = next(get_db())
+        try:
+            field = Field(
+                name="LB Shape", slug="lb-shape", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.commit()
+            db.add(FieldLogEntry(field_id=field.id, value={"n": 3}, source_id=sid))
+            db.commit()
+
+            shape = (
+                '{"label":"Sensor A","celsius":"temp",'
+                '"fahrenheit":"temp * 1.8 + 32","raw":"payload.sensor",'
+                '"next":"field.n + 1"}'
+            )
+            action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id, "value_key": shape},
+            )
+            db.add(action)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[action.id], order_index=0,
+            )
+            db.add(rule)
+            db.commit()
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={
+                    "temp": 20,
+                    "payload": {"sensor": {"id": 1}},
+                },
+                raw_payload="{}", correlation_id="shape",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+
+            entries = (
+                db.query(FieldLogEntry)
+                .filter(FieldLogEntry.field_id == field.id)
+                .order_by(FieldLogEntry.id.asc())
+                .all()
+            )
+            assert len(entries) == 2
+            assert entries[-1].value == {
+                "label": "Sensor A",
+                "celsius": 20,
+                "fahrenheit": 68.0,
+                "raw": {"id": 1},
+                "next": 4.0,
+            }
         finally:
             db.close()
 

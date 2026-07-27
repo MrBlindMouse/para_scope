@@ -1,0 +1,88 @@
+{% set selected_provider = webhook_provider or 'generic_hmac' %}
+{% set providers = webhook_providers or [] %}
+{% set cfg = source_config or {} %}
+
+<div id="webhook-provider-fields" class="stack" {% if hide_webhook_fields %}style="display:none"{% endif %}>
+  <label class="stack" id="webhook-provider-fieldset">
+    <span class="field-label">
+      Webhook verification
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About webhook verification"
+              data-tip="Choose how Para-Scope verifies inbound webhook authenticity.">?</button>
+    </span>
+    <select name="webhook_provider" class="input" id="webhook-provider">
+      {% for provider in providers %}
+        <option value="{{ provider.slug }}" {% if provider.slug == selected_provider %}selected{% endif %}>
+          {{ provider.label }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+
+  {% for provider in providers %}
+    <section class="stack webhook-provider-panel"
+             data-webhook-provider="{{ provider.slug }}"
+             {% if provider.slug != selected_provider %}hidden{% endif %}>
+      <p class="text-muted">{{ provider.summary }}</p>
+
+      <fieldset class="stack">
+        <legend>
+          <span class="field-label">
+            {{ provider.secret_label }}
+            <button type="button" class="field-tip" tabindex="0"
+                    aria-label="About {{ provider.secret_label }}"
+                    data-tip="{{ provider.secret_help }}">?</button>
+          </span>
+        </legend>
+        {% if webhook_secret %}
+          <p class="text-muted">Credential is configured.</p>
+          <label class="flex items-center gap">
+            <input type="checkbox"
+                   name="clear_webhook_secret"
+                   value="1"
+                   {% if provider.slug != selected_provider %}disabled{% endif %}>
+            Remove stored credential
+          </label>
+        {% endif %}
+        <label class="stack">
+          {{ provider.secret_input_label }}{% if provider.uses_paypal_config %} *{% endif %}
+          <input name="webhook_secret_value"
+                 type="password"
+                 class="input"
+                 autocomplete="new-password"
+                 {% if provider.slug != selected_provider %}disabled{% endif %}>
+        </label>
+      </fieldset>
+
+      {% if provider.uses_paypal_config %}
+        <label class="stack">
+          Webhook ID *
+          <input name="paypal_webhook_id"
+                 type="text"
+                 class="input"
+                 placeholder="e.g. 1JE4291016473214C"
+                 value="{{ cfg.get('paypal_webhook_id') or '' }}"
+                 {% if provider.slug != selected_provider %}disabled{% endif %}>
+        </label>
+        <label class="stack">
+          Client ID *
+          <input name="paypal_client_id"
+                 type="text"
+                 class="input"
+                 placeholder="PayPal app client id"
+                 value="{{ cfg.get('paypal_client_id') or '' }}"
+                 {% if provider.slug != selected_provider %}disabled{% endif %}>
+        </label>
+        <label class="stack">
+          Environment
+          <select name="paypal_environment"
+                  class="input"
+                  {% if provider.slug != selected_provider %}disabled{% endif %}>
+            <option value="sandbox" {% if cfg.get('paypal_environment') in [None, '', 'sandbox'] %}selected{% endif %}>Sandbox</option>
+            <option value="live" {% if cfg.get('paypal_environment') == 'live' %}selected{% endif %}>Live</option>
+          </select>
+        </label>
+      {% endif %}
+    </section>
+  {% endfor %}
+</div>

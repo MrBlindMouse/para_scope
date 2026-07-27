@@ -28,7 +28,7 @@ from app.models import (
 )
 from app.security import decrypt_secret
 from app.webpush_util import vapid_config
-from app.widget_transforms import render_data_template, resolve_path_or_expr
+from app.widget_transforms import render_data_template, resolve_value_from_event
 
 logger = logging.getLogger("para_scope.pipeline")
 
@@ -45,8 +45,12 @@ def register_action(action_type: str, handler: Callable):
 
 
 def get_action_types() -> list[str]:
-    """Return registered action type names (sorted)."""
-    return sorted(_ACTIONS.keys())
+    """Return registered action types in canonical UI order (not A–Z)."""
+    from app.labels import ACTION_TYPE_LABELS
+
+    ordered = [slug for slug in ACTION_TYPE_LABELS if slug in _ACTIONS]
+    extras = [slug for slug in _ACTIONS if slug not in ACTION_TYPE_LABELS]
+    return ordered + extras
 
 
 def local_actions_enabled() -> bool:
@@ -114,7 +118,7 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
             if "value" in config:
                 raw = render_data_template(str(config["value"] or ""), ctx)
             else:
-                raw = resolve_path_or_expr(str(config["value_key"]), ctx)
+                raw = resolve_value_from_event(str(config["value_key"]), ctx)
         else:
             raw = nd
 
@@ -355,7 +359,7 @@ def build_notify_request(
     if service == "ntfy":
         topic = (topic or "").strip().strip("/")
         if not topic:
-            raise ValueError("ntfy topic is required")
+            raise ValueError("Topic is required for ntfy")
         url = f"{base}/{topic}"
         headers: dict[str, str] = {}
         if title:
