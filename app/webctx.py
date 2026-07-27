@@ -41,6 +41,7 @@ from app.security import (
 from app.pipeline import evaluate_and_dispatch
 from app.dashboard_layout import parse_layout_config
 from app.scheduler import start_scheduler, stop_scheduler, add_or_update_job, remove_job, job_count
+from app.pollers import parse_poller_form
 
 # ponytail: simple in-memory rate limiter for login (IP-based, 10 req/minute)
 _LOGIN_RATE_LIMIT = {}
@@ -251,37 +252,29 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             elif mode == "literal":
                 out["value"] = form.get("value") or ""
             # mode == event → whole normalized_data (no value/value_key)
-        elif field_type == "counter":
-            op = (form.get("counter_op") or "increment").strip()
-            if op not in ("increment", "decrement", "reset"):
-                return None, "Choose Increment, Decrement, or Reset"
+        elif field_type == "value":
+            op = (form.get("value_op") or "increment").strip()
+            if op not in ("increment", "decrement", "reset", "set"):
+                return None, "Choose Increment, Decrement, Set, or Reset"
             out["op"] = op
-            if op in ("increment", "decrement"):
+            if op in ("increment", "decrement", "set"):
                 delta = (form.get("delta") or "").strip()
                 if delta == "":
+                    if op == "set":
+                        return None, "Amount is required for Set"
                     out["delta"] = 1
                 else:
                     try:
                         num = float(delta)
                         out["delta"] = int(num) if num.is_integer() else num
                     except ValueError:
-                        out["delta"] = delta  # event key
-        elif field_type == "value":
-            mode = (form.get("value_mode") or "literal").strip()
-            if mode == "key":
-                key = (form.get("value_key") or "").strip()
-                if not key:
-                    return None, "Value from event is required"
-                out["value_key"] = key
-            else:
-                out["value"] = form.get("value") if form.get("value") is not None else ""
+                        out["delta"] = delta  # event path or maths
+        elif field_type == "text":
+            out["value"] = form.get("value") if form.get("value") is not None else ""
         elif field_type == "toggle":
             mode = (form.get("toggle_mode") or "literal").strip()
-            if mode == "key":
-                key = (form.get("value_key") or "").strip()
-                if not key:
-                    return None, "Value from event is required"
-                out["value_key"] = key
+            if mode == "switch":
+                out["op"] = "switch"
             else:
                 raw = (form.get("toggle_value") or "false").strip().lower()
                 out["value"] = raw in ("1", "true", "yes", "on")
@@ -312,6 +305,9 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             "method": method,
             "auth_mode": auth_mode,
         }
+        preset = (form.get("preset") or "none").strip().lower()
+        if preset in ("ntfy", "gotify", "discord"):
+            out["preset"] = preset
         timeout_raw = (form.get("timeout_seconds") or "").strip()
         if timeout_raw:
             try:
@@ -325,6 +321,32 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
                 out["api_key_header"] = key_h
             if sec_h:
                 out["api_secret_header"] = sec_h
+        elif auth_mode == "bearer":
+            auth_header = (form.get("auth_header") or "").strip()
+            auth_prefix = (form.get("auth_prefix") or "").strip()
+            if auth_header:
+                out["auth_header"] = auth_header
+            if auth_prefix:
+                out["auth_prefix"] = auth_prefix
+
+        signing_mode = (form.get("signing_mode") or "none").strip()
+        if signing_mode not in ("none", "hmac_sha256"):
+            signing_mode = "none"
+        out["signing_mode"] = signing_mode
+        if signing_mode == "hmac_sha256":
+            sig_h = (form.get("signing_signature_header") or "").strip()
+            ts_h = (form.get("signing_timestamp_header") or "").strip()
+            if sig_h:
+                out["signing_signature_header"] = sig_h
+            if ts_h:
+                out["signing_timestamp_header"] = ts_h
+
+        headers, herr = _parse_headers_text(form.get("headers_text") or "")
+        if herr:
+            return None, herr
+        if headers:
+            out["headers"] = headers
+
         body_mode = (form.get("body_mode") or "auto").strip()
         if body_mode == "custom":
             raw = (form.get("custom_body") or "").strip()
@@ -335,9 +357,92 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
                     out["custom_body"] = parsed
                 except (json.JSONDecodeError, TypeError):
                     return None, "Custom body is not valid JSON"
+        elif body_mode == "text":
+            out["body_mode"] = "text"
+            out["body_text"] = form.get("body_text") if form.get("body_text") is not None else ""
+        return out, None
+
+    if action_type == "notify":
+        service = (form.get("service") or "").strip().lower()
+        if service not in ("ntfy", "gotify", "discord"):
+            return None, "Choose ntfy, Gotify, or Discord"
+        server_url = (form.get("server_url") or "").strip()
+        if not server_url:
+            return None, "Server URL is required"
+        out = {
+            "service": service,
+            "server_url": server_url,
+            "title": form.get("title") if form.get("title") is not None else "",
+            "body": form.get("body") if form.get("body") is not None else "",
+        }
+        if service == "ntfy":
+            topic = (form.get("topic") or "").strip()
+            if not topic:
+                return None, "Topic is required for ntfy"
+            out["topic"] = topic
+        priority_raw = (form.get("priority") or "").strip()
+        if priority_raw:
+            try:
+                out["priority"] = int(priority_raw)
+            except ValueError:
+                return None, "Priority must be a number"
+        auth_mode = (form.get("auth_mode") or "none").strip()
+        if auth_mode not in ("bearer", "none"):
+            auth_mode = "none"
+        out["auth_mode"] = auth_mode
+        timeout_raw = (form.get("timeout_seconds") or "").strip()
+        if timeout_raw:
+            try:
+                out["timeout_seconds"] = float(timeout_raw)
+            except ValueError:
+                return None, "Timeout must be a number"
+        return out, None
+
+    if action_type == "local_script":
+        mode = (form.get("script_mode") or "command").strip()
+        out = {}
+        timeout_raw = (form.get("timeout_seconds") or "").strip()
+        if timeout_raw:
+            try:
+                out["timeout_seconds"] = float(timeout_raw)
+            except ValueError:
+                return None, "Timeout must be a number"
+        if mode == "argv":
+            raw = (form.get("argv_text") or "").strip()
+            if not raw:
+                return None, "Script path and args are required"
+            # One argument per line
+            argv = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+            if not argv:
+                return None, "Script path and args are required"
+            out["argv"] = argv
+            out["shell"] = False
+        else:
+            command = (form.get("command") or "").strip()
+            if not command:
+                return None, "Command is required"
+            out["command"] = command
+            out["shell"] = True
         return out, None
 
     return None, "That action type isn’t supported"
+
+
+def _parse_headers_text(text: str) -> tuple[dict | None, str | None]:
+    """Parse 'Key: Value' lines into a headers dict."""
+    headers: dict[str, str] = {}
+    for i, line in enumerate((text or "").splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        if ":" not in line:
+            return None, f"Header line {i} needs a colon (Key: Value)"
+        key, _, val = line.partition(":")
+        key = key.strip()
+        if not key:
+            return None, f"Header line {i} is missing a name"
+        headers[key] = val.strip()
+    return headers, None
 
 
 def _upsert_action_secret(db, action, *, value: str, which: str = "primary"):
@@ -400,15 +505,14 @@ def _parse_schedule_form(form, *, required: bool = True):
     schedule_type_raw = form.get("schedule_type", "interval")
     cron_expression = (form.get("cron_expression") or "").strip()
     interval_seconds = form.get("interval_seconds")
-    handler_type = form.get("handler_type", "http_get")
-    handler_url = (form.get("handler_url") or "").strip()
-    handler_params_str = (form.get("handler_params") or "{}").strip()
     timeout_seconds = int(form.get("timeout_seconds") or 30)
     retry_count = int(form.get("retry_count") or 0)
 
     if not required:
+        if (form.get("source_type") or "").strip() != "poll":
+            return None, None
         has_any = bool(
-            handler_url
+            (form.get("handler_type") or "").strip()
             or (interval_seconds or "").strip()
             or cron_expression
         )
@@ -425,21 +529,21 @@ def _parse_schedule_form(form, *, required: bool = True):
     if schedule_type == ScheduleType.CRON and not cron_expression:
         return None, "Enter a cron schedule"
 
-    try:
-        handler_params = json.loads(handler_params_str) if handler_params_str != "{}" else {}
-    except json.JSONDecodeError:
-        return None, "Extra settings must be valid JSON"
+    poller_values, secret_updates, poller_error = parse_poller_form(form)
+    if poller_error:
+        return None, poller_error
 
     return {
         "schedule_type": schedule_type,
         "cron_expression": cron_expression,
         "interval_seconds": int(interval_seconds) if interval_seconds else None,
-        "handler_type": handler_type,
-        "handler_url": handler_url,
-        "handler_params": handler_params,
+        "handler_type": poller_values["handler_type"],
+        "handler_url": poller_values["handler_url"],
+        "handler_params": poller_values["handler_params"],
         "timeout_seconds": timeout_seconds,
         "retry_count": retry_count,
         "enabled": True,
+        "_secret_updates": secret_updates,
     }, None
 
 
@@ -616,6 +720,8 @@ from app.labels import (  # noqa: E402
     field_type_label,
     http_method_label,
     operator_label,
+    poll_category_label,
+    poller_label,
     rule_label,
 )
 
@@ -624,6 +730,8 @@ templates.env.filters["action_type_label"] = action_type_label
 templates.env.filters["field_type_label"] = field_type_label
 templates.env.filters["http_method_label"] = http_method_label
 templates.env.filters["operator_label"] = operator_label
+templates.env.filters["poll_category_label"] = poll_category_label
+templates.env.filters["poller_label"] = poller_label
 templates.env.filters["rule_label"] = rule_label
 
 

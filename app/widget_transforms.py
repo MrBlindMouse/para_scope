@@ -26,6 +26,7 @@ _COMPARE_OPS = {
     "neq": operator.ne,
 }
 _PATH_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)*$")
+_TEMPLATE_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
 _NUMERIC_OPS = frozenset({"gt", "lt", "gte", "lte"})
 
 
@@ -205,6 +206,34 @@ def format_expr_number(v: float) -> str:
         return str(int(round(v)))
     s = f"{v:.12g}"
     return s
+
+
+def resolve_path_or_expr(body: str, data: dict | None):
+    """Prefer a resolving dotted path (keeps non-numeric values); else maths; else None."""
+    text = (body or "").strip()
+    if not text:
+        return None
+    data = data or {}
+    if _PATH_RE.fullmatch(text):
+        raw = get_by_path(data, text)
+        if raw is not None:
+            return raw
+    return eval_expr(text, data)
+
+
+def render_data_template(template: str, data: dict | None) -> str:
+    """Substitute ``{{ path }}`` or ``{{ expr }}`` from ``data``."""
+    data = data if isinstance(data, dict) else {}
+
+    def repl(m):
+        raw = resolve_path_or_expr(m.group(1), data)
+        if raw is None:
+            return ""
+        if isinstance(raw, float):
+            return format_expr_number(raw)
+        return str(raw)
+
+    return _TEMPLATE_RE.sub(repl, template or "")
 
 
 def resolve_tone_rules(rules, data: dict | None) -> str:

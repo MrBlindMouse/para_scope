@@ -6,21 +6,50 @@ from typing import Any
 ACTION_TYPE_LABELS = {
     "field_push": "Update field",
     "http_forward": "Call URL",
+    "notify": "Notify",
     "web_push": "Browser notification",
+    "local_script": "Local script",
 }
 
 FIELD_TYPE_LABELS = {
     "logbook": "Logbook",
-    "counter": "Counter",
     "value": "Value",
+    "text": "Text",
     "toggle": "Toggle",
 }
 
-HTTP_METHOD_LABELS = {
+POLL_CATEGORY_LABELS = {
+    "url": "URL / HTTP",
+    "system": "System",
+    "connectivity": "Connectivity / Reachability",
+    "storage": "Storage / Filesystem",
+    "application": "Application / Domain",
+    "external": "External",
+}
+
+POLLER_LABELS = {
     "http_get": "GET",
     "http_post": "POST",
     "http_put": "PUT",
     "http_delete": "DELETE",
+    "system_snapshot": "Host snapshot",
+    "systemd_failed_units": "Failed systemd units",
+    "journal_recent_errors": "Recent journal errors",
+    "tcp_connect": "TCP connect",
+    "icmp_ping": "ICMP ping",
+    "dns_resolve": "DNS resolve",
+    "cert_expiry": "TLS cert expiry",
+    "disk_free_space": "Path free space",
+    "backup_age": "Backup age",
+    "git_status": "Git status",
+    "rss_atom_change": "RSS / Atom change",
+    "public_http_status": "Public endpoint status",
+    "database_health": "Database health",
+    "log_pattern_watch": "Log pattern watch",
+    "home_assistant_snapshot": "Home Assistant snapshot",
+    "imap_unread": "IMAP unread",
+    "domain_expiry": "Domain expiry",
+    "local_llm_http_status": "Local LLM status",
 }
 
 OPERATOR_LABELS = {
@@ -41,8 +70,16 @@ def field_type_label(slug: str) -> str:
     return FIELD_TYPE_LABELS.get(slug, slug)
 
 
+def poller_label(slug: str) -> str:
+    return POLLER_LABELS.get(slug, slug)
+
+
+def poll_category_label(slug: str) -> str:
+    return POLL_CATEGORY_LABELS.get(slug, slug)
+
+
 def http_method_label(slug: str) -> str:
-    return HTTP_METHOD_LABELS.get(slug, slug)
+    return poller_label(slug)
 
 
 def operator_label(slug: str) -> str:
@@ -67,9 +104,24 @@ def action_label(action, fields_by_id: dict[int, Any] | None = None) -> str:
             short = url if len(url) <= 48 else url[:45] + "…"
             return f"Call URL → {short}"
         return "Call URL"
+    if at == "notify":
+        svc = (cfg.get("service") or "").strip() or "notify"
+        return f"Notify → {svc}"
     if at == "web_push":
         title = (cfg.get("title") or "").strip()
         return f"Alert → {title}" if title else "Browser notification"
+    if at == "local_script":
+        argv = cfg.get("argv")
+        if isinstance(argv, list) and argv:
+            short = str(argv[0])
+            if len(short) > 40:
+                short = short[:37] + "…"
+            return f"Script → {short}"
+        cmd = (cfg.get("command") or "").strip()
+        if cmd:
+            short = cmd if len(cmd) <= 40 else cmd[:37] + "…"
+            return f"Script → {short}"
+        return "Local script"
     return action_type_label(at)
 
 

@@ -1,0 +1,11 @@
+{% set tone = wdata.tone if wdata else none %}
+{% set note_text = (wdata.text if wdata and wdata.text is defined else none) %}
+{% if note_text is none %}
+  {% set note_text = (widget_config.text if widget_config else '') or '' %}
+{% endif %}
+<div class="widget-notes-wrap{% if tone %} widget-tone widget-tone--{{ tone }}{% endif %}">
+<textarea class="widget-notes"
+          data-notes-widget
+          data-widget-id="{{ widget_id }}"
+          placeholder="Notes…">{{ note_text }}</textarea>
+</div>

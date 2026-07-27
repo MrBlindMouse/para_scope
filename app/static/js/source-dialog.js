@@ -91,11 +91,40 @@
   function initTypeToggle(form) {
     var typeSel = form.querySelector("#source-type");
     var schedType = form.querySelector("#sched-type");
+    var pollCategory = form.querySelector("#poll-category");
+    var handlerType = form.querySelector("#handler-type");
     var webhookFields = form.querySelector("#webhook-secret-fields");
     var scheduleFields = form.querySelector("#schedule-fields");
     var intervalFields = form.querySelector("#interval-fields");
     var cronFields = form.querySelector("#cron-fields");
     if (!typeSel || !webhookFields || !scheduleFields) return;
+
+    function syncHandlerOptions() {
+      if (!pollCategory || !handlerType) return;
+      var selected = pollCategory.value;
+      var firstVisible = null;
+      Array.prototype.forEach.call(handlerType.options, function (option) {
+        var visible = option.getAttribute("data-category") === selected;
+        option.hidden = !visible;
+        option.disabled = !visible;
+        if (visible && !firstVisible) firstVisible = option.value;
+      });
+      if (handlerType.selectedOptions.length && !handlerType.selectedOptions[0].hidden) {
+        return;
+      }
+      if (firstVisible) handlerType.value = firstVisible;
+    }
+
+    function syncHandlerPanels() {
+      if (!handlerType) return;
+      form.querySelectorAll("[data-handler-fields]").forEach(function (panel) {
+        var active = panel.getAttribute("data-handler-fields") === handlerType.value;
+        panel.hidden = !active;
+        Array.prototype.forEach.call(panel.querySelectorAll("input, select, textarea"), function (inp) {
+          inp.disabled = !active;
+        });
+      });
+    }
 
     function toggleSchedType() {
       if (!schedType || !intervalFields || !cronFields) return;
@@ -120,6 +149,17 @@
 
     typeSel.addEventListener("change", toggleSourceType);
     if (schedType) schedType.addEventListener("change", toggleSchedType);
+    if (pollCategory) {
+      pollCategory.addEventListener("change", function () {
+        syncHandlerOptions();
+        syncHandlerPanels();
+      });
+    }
+    if (handlerType) {
+      handlerType.addEventListener("change", syncHandlerPanels);
+    }
+    syncHandlerOptions();
+    syncHandlerPanels();
     toggleSourceType();
     toggleSchedType();
   }
@@ -161,9 +201,14 @@
   }
 
   window.initPipelineSourceForm = function (root) {
-    var form = root && root.querySelector
-      ? root.querySelector(".dialog__form")
-      : root;
+    var form = null;
+    if (root && root.tagName === "FORM") {
+      form = root;
+    } else if (root && root.querySelector) {
+      form = root.querySelector(".dialog__form") || root.querySelector("form");
+    } else {
+      form = root;
+    }
     if (!form || form.tagName !== "FORM") return;
     initTypeToggle(form);
     initFieldTypeToggle(form);

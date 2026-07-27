@@ -99,7 +99,7 @@
     return defaultTone(type, disp);
   }
 
-  var FIELD_TYPE_LABELS = {logbook: "Logbook", counter: "Counter", value: "Value", toggle: "Toggle"};
+  var FIELD_TYPE_LABELS = {logbook: "Logbook", value: "Value", text: "Text", toggle: "Toggle"};
   var XFORM_LABELS = {mul: "×", div: "÷", add: "+", sub: "−", abs: "Absolute", round: "Round"};
   var TONE_RULE_OPS = [
     ["gt", ">"], ["lt", "<"], ["gte", "≥"], ["lte", "≤"], ["eq", "="], ["neq", "≠"]
@@ -351,7 +351,7 @@
   function previewToneClass(type, disp, style, toneCfg) {
     var tone = normalizeTone(toneCfg, type, disp);
     if (tone === "none") return "";
-    if (disp === "toggle" || disp === "board" || disp === "kv_text") {
+    if (type === "notes" || disp === "toggle" || disp === "board" || disp === "kv_text") {
       return " widget-tone widget-tone--positive";
     }
     return "";
@@ -405,6 +405,8 @@
         (style === "compact" ? " table--compact" : "") +
         (style === "striped" ? " table--striped" : "") +
         '"><tbody><tr><td>hits</td><td>42</td></tr><tr><td>up</td><td>on</td></tr></tbody></table>';
+    } else if (disp === "notes") {
+      inner = '<textarea class="widget-notes widget-preview__mini" rows="3" readonly>Scratch notes…</textarea>';
     } else if (disp === "list" || disp === "button_row" || disp === "icon_grid") {
       if (disp === "button_row") {
         inner = '<span class="btn btn--sm' + (style === "emphasized" ? " btn--primary" : "") + '">Docs</span>';
@@ -692,6 +694,12 @@
       html += linkItemsHtml(cfg.items);
     }
 
+    if (w.type === "notes") {
+      if (tone === "conditional") {
+        html += toneRulesHtml(cfg.tone_rules);
+      }
+    }
+
     if (w.type === "system") {
       if (disp === "source_health") {
         html += '<label class="stack form-field--md">Stale after (hours)' +
@@ -723,6 +731,9 @@
       card.dataset.type = w.type;
       card.dataset.display = w.display || defaultDisplay(w.type);
       if (w.id) card.dataset.id = w.id;
+      if (w.type === "notes" && w.config && w.config.text != null) {
+        card.dataset.notesText = String(w.config.text);
+      }
       ["x", "y", "w", "h"].forEach(function (k) {
         if (w[k] != null) card.dataset[k] = String(w[k]);
       });
@@ -995,7 +1006,20 @@
         var items = readLinkItems(card);
         if (items.length) config.items = items;
       }
-      if (!config.style) {
+      if (type === "notes") {
+        var notesRules = card.querySelector("[data-tone-rules]");
+        if (config.tone === "conditional" && notesRules) {
+          config.tone_rules = readToneRules(notesRules);
+        } else {
+          delete config.tone_rules;
+        }
+        // Front-edited body lives in layout config; restore from card so Save doesn’t wipe it.
+        if (card.dataset.notesText != null) {
+          config.text = card.dataset.notesText;
+        }
+        delete config.style;
+      }
+      if (!config.style && type !== "notes") {
         if (entry.display === "board") {
           var bm = boardCellKindMeta(config.cell_kind || "toggle");
           config.style = (bm.styles[0] && bm.styles[0][0]) || "plain";

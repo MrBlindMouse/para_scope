@@ -27,7 +27,7 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About source type"
-              data-tip="Webhook: others send events to you. Poll: Para-Scope checks a URL on a schedule.">?</button>
+              data-tip="Webhook: others send events to you. Poll: Para-Scope runs one typed poller on a schedule.">?</button>
     </span>
     <select name="source_type" class="input" id="source-type">
       <option value="webhook" {% if st == 'webhook' %}selected{% endif %}>Webhook</option>
@@ -36,13 +36,29 @@
   </label>
   <p class="text-muted">Webhook path: <code>/webhook/{{ source.slug }}</code></p>
 
+  {% set webhook_provider = (source.config or {}).get('webhook_provider') or 'generic_hmac' %}
+  <label class="stack" id="webhook-provider-fieldset">
+    Webhook verification
+    <button type="button" class="field-tip" tabindex="0"
+            aria-label="About webhook verification"
+            data-tip="Choose how Para-Scope verifies inbound webhook authenticity.">?</button>
+    <select name="webhook_provider" class="input" id="webhook-provider">
+      <option value="generic_hmac" {% if webhook_provider == 'generic_hmac' %}selected{% endif %}>Shared-secret HMAC (X-Webhook-*)</option>
+      <option value="stripe" {% if webhook_provider == 'stripe' %}selected{% endif %}>Stripe (Stripe-Signature)</option>
+      <option value="github" {% if webhook_provider == 'github' %}selected{% endif %}>GitHub / Gitea (X-Hub-Signature-256)</option>
+      <option value="slack" {% if webhook_provider == 'slack' %}selected{% endif %}>Slack (X-Slack-Signature)</option>
+      <option value="discord" {% if webhook_provider == 'discord' %}selected{% endif %}>Discord (Ed25519)</option>
+      <option value="paypal" {% if webhook_provider == 'paypal' %}selected{% endif %}>PayPal (verify-webhook-signature)</option>
+    </select>
+  </label>
+
   <fieldset class="stack" id="webhook-secret-fields">
     <legend>
       <span class="field-label">
         Webhook secret (optional)
         <button type="button" class="field-tip" tabindex="0"
                 aria-label="About webhook secret"
-                data-tip="Optional shared password so only trusted senders are accepted. Leave blank if you don’t need verification.">?</button>
+                data-tip="Provider credential. Usually a shared secret; for Discord, use the app public key. Leave blank only if you don’t need verification.">?</button>
       </span>
     </legend>
     {% if webhook_secret %}
@@ -58,11 +74,32 @@
     </label>
   </fieldset>
 
+  <fieldset class="stack" id="paypal-fields" {% if webhook_provider != 'paypal' %}hidden{% endif %}>
+    <legend>PayPal config</legend>
+    <label class="stack">
+      Webhook ID
+      <input name="paypal_webhook_id" type="text" class="input"
+             value="{{ (source.config or {}).get('paypal_webhook_id') or '' }}"
+             placeholder="e.g. 1JE4291016473214C">
+    </label>
+    <label class="stack">
+      Client ID
+      <input name="paypal_client_id" type="text" class="input"
+             value="{{ (source.config or {}).get('paypal_client_id') or '' }}"
+             placeholder="PayPal app client id">
+    </label>
+    <label class="stack">
+      Environment
+      <select name="paypal_environment" class="input">
+        <option value="sandbox" {% if (source.config or {}).get('paypal_environment') in [None, '', 'sandbox'] %}selected{% endif %}>Sandbox</option>
+        <option value="live" {% if (source.config or {}).get('paypal_environment') == 'live' %}selected{% endif %}>Live</option>
+      </select>
+    </label>
+    <p class="text-muted">Note: for PayPal, the “Webhook secret” field is the client secret.</p>
+  </fieldset>
+
   <fieldset class="stack" id="schedule-fields" {% if st != 'poll' %}style="display:none"{% endif %}>
     <legend>Schedule</legend>
-    {% if schedule %}
-      <input type="hidden" name="schedule_id" value="{{ schedule.id }}">
-    {% endif %}
     <label class="stack">
       <span class="field-label">
         Schedule type
@@ -94,39 +131,7 @@
                value="{{ schedule.cron_expression if schedule else '' }}">
       </label>
     </div>
-    <label class="stack">
-      <span class="field-label">
-        Request method
-        <button type="button" class="field-tip" tabindex="0"
-                aria-label="About request method"
-                data-tip="How Para-Scope requests the URL.">?</button>
-      </span>
-      <select name="handler_type" class="input">
-        {% set ht = schedule.handler_type if schedule else 'http_get' %}
-        {% for t in ['http_get', 'http_post', 'http_put', 'http_delete'] %}
-          <option value="{{ t }}" {% if ht == t %}selected{% endif %}>{{ t | http_method_label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label class="stack">
-      <span class="field-label">
-        URL to check
-        <button type="button" class="field-tip" tabindex="0"
-                aria-label="About poll URL"
-                data-tip="Full URL Para-Scope requests on each poll. Required for polling.">?</button>
-      </span>
-      <input name="handler_url" type="text" class="input" placeholder="https://api.example.com/data"
-             value="{{ schedule.handler_url if schedule else '' }}">
-    </label>
-    <label class="stack">
-      <span class="field-label">
-        Extra settings (JSON)
-        <button type="button" class="field-tip" tabindex="0"
-                aria-label="About extra settings"
-                data-tip="Optional. Advanced: headers, query, body, which response field to keep, event name.">?</button>
-      </span>
-      <textarea name="handler_params" rows="2" class="input">{{ handler_params_json }}</textarea>
-    </label>
+    {% include 'config/pipeline/_poll_schedule_fields.html' %}
     <div class="flex items-center gap">
       <label class="stack" style="min-width:6em">
         <span class="field-label">
@@ -155,3 +160,23 @@
     <button type="submit" class="btn btn--primary">Save</button>
   </div>
 </form>
+
+<script>
+(function () {
+  var provider = document.getElementById("webhook-provider");
+  var paypalFields = document.getElementById("paypal-fields");
+  var providerFieldset = document.getElementById("webhook-provider-fieldset");
+
+  function sync() {
+    var st = document.getElementById("source-type");
+    var isWebhook = st && st.value === "webhook";
+    if (providerFieldset) providerFieldset.hidden = !isWebhook;
+    if (paypalFields && provider) paypalFields.hidden = (provider.value !== "paypal") || !isWebhook;
+  }
+
+  if (provider) provider.addEventListener("change", sync);
+  var st = document.getElementById("source-type");
+  if (st) st.addEventListener("change", sync);
+  sync();
+})();
+</script>

@@ -63,18 +63,37 @@ Get a working pipeline after login (more detail in `/help`):
    - **Webhook:** `POST /webhook/{slug}` with a JSON body (see [Webhooks](#webhooks)).
    - **Poll:** schedules feed `on_success` / `on_failure` into the same pipeline (see [Polling](#polling)).
 4. **Add a rule** for the event(s) you care about (use **Add rule** on an event row to pre-select it). Empty conditions match all events for those types.
-5. **Add an action on that rule** (`field_push` is a good smoke test; `http_forward` and `web_push` are also built in). Optional credentials can be attached in the action dialog. For `web_push`, set VAPID env vars and click the bell in the header to enable notifications. Events, rules, and actions are editable from the chain.
+5. **Add an action on that rule** (`field_push` is a good smoke test; `http_forward`, `notify`, and `web_push` are also built in; `local_script` needs `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`). Optional credentials can be attached in the action dialog. For `web_push`, set VAPID env vars and click the bell in the header to enable notifications. Events, rules, and actions are editable from the chain.
 6. **Confirm** on `/events`, enable widgets at `/config/dashboard`, and view them on `/`.
 
 Day-to-day: `/events`, `/metrics`, and `/system`. Manage accounts at `/config/users`.
 
 ## Polling
 
-Set the schedule when you create or edit a **Poll** source (interval or cron, URL, timeout, retries). You can also manage schedules at `/config/source/{id}/schedules`. Jobs run in-process via APScheduler and feed the same pipeline as webhooks.
+Set the schedule when you create or edit a **Poll** source (exactly one schedule per poll source). Polls are organized as:
 
-Successful polls emit `on_success` (or `handler_params.event_type` when set); failures emit `on_failure`. If you add an event type named `always` (not created automatically), it also fires on every poll run.
+- **Category** — URL / HTTP, System, Connectivity / Reachability, Storage / Filesystem, Application / Domain, External
+- **Subtype** — the specific poller that runs, for example `http_get`, `system_snapshot`, `dns_resolve`, `backup_age`, or `rss_atom_change`
 
-**Handler Params** (JSON) supports `json_path`, `event_type`, `headers`, `query`, `body`, and optional `auth_secret_id`.
+Jobs run in-process via APScheduler and feed the same pipeline as webhooks. Use **Run now** on a poll source to fire immediately.
+
+Successful polls emit `on_success` by default; failures emit `on_failure`. Some pollers also let you set a different success event name. If you add an event type named `always` (not created automatically), it also fires on every poll run.
+
+### Poll privileges
+
+Para-Scope does **not** need to run as root by default. The normal production setup is:
+
+- run the app as a dedicated `parascope` service user
+- grant that user only the filesystem and group access needed for the pollers you actually configure
+
+For the shipped pollers:
+
+- **Usually fine as an unprivileged service user:** URL / HTTP, DNS, TCP connect, TLS cert expiry, RSS / Atom, public HTTP status, local LLM HTTP status, database health, system snapshot, disk free space, backup age, git status
+- **May need extra read access:** log pattern watch, backup age on restricted paths, disk free space on restricted mount points
+- **May need host group access:** `journal_recent_errors` often needs membership in `systemd-journal` or `adm` (distro-dependent) so `journalctl` can read the system journal
+- **Usually works unprivileged, but still depends on host policy:** `systemd_failed_units` (it shells out to `systemctl`)
+
+Highest reasonable privilege for the shipped pollers is usually **a dedicated service user with a minimal supplemental group set and/or ACLs on the monitored paths**, not root.
 
 ## Webhooks
 
@@ -84,28 +103,97 @@ If you add an event type named `always` (not created automatically), it also fir
 
 Public health check: `GET /health`.
 
-## Production (systemd + nginx)
+## Production (VM + systemd + nginx)
 
 Run a **single** uvicorn worker. Rate limits and the poll scheduler are in-process; multiple workers would split that state incorrectly. Bind uvicorn to localhost and put nginx in front for TLS and public access.
 
-### 1. Install the app
+This section assumes a small Linux VM (Debian/Ubuntu-style layout), a DNS name such as `para.example.com`, and systemd + nginx on the host.
+
+### 1. VM prep
+
+Create the VM, point DNS at it, then install the base packages you need:
 
 ```bash
-sudo useradd --system --home /opt/para-scope --shell /usr/sbin/nologin parascope
-sudo mkdir -p /opt/para-scope
-sudo chown parascope:parascope /opt/para-scope
-
-# as parascope (or clone then chown)
-cd /opt/para-scope
-git clone <your-repo-url> .
-uv venv .venv && uv pip install -r requirements.txt -p .venv
-cp .env.example .env
-# edit .env — at minimum:
-#   PARA_SCOPE_SECRET_KEY=<openssl rand -hex 32>
-#   PARA_SCOPE_SECURE_COOKIES=1
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y git curl nginx certbot python3-certbot-nginx
 ```
 
-### 2. systemd unit
+Install `uv` if it is not already present:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sudo env UV_INSTALL_DIR=/usr/local/bin sh
+```
+
+Recommended host checklist:
+
+- open inbound `80/tcp` and `443/tcp` (plus `22/tcp` for SSH)
+- create an `A` / `AAAA` record for your VM before running certbot
+- use a real sudo-capable admin account for provisioning; do **not** run the app itself as that account
+
+### 2. Create the service user and app directory
+
+```bash
+sudo useradd --system --create-home --home-dir /opt/para-scope --shell /usr/sbin/nologin parascope
+sudo mkdir -p /opt/para-scope
+sudo chown parascope:parascope /opt/para-scope
+```
+
+### 3. Optional host access for pollers
+
+Start least-privileged and add only what you need:
+
+```bash
+# journal access on many distros (pick the group your distro uses)
+sudo usermod -aG systemd-journal parascope
+# or
+sudo usermod -aG adm parascope
+```
+
+For log files, backup directories, or repositories outside `/opt/para-scope`, prefer group ownership or ACLs over running the service as root:
+
+```bash
+# example: allow parascope to read a specific log tree
+sudo setfacl -R -m u:parascope:rx /var/log/myapp
+sudo setfacl -R -d -m u:parascope:rx /var/log/myapp
+```
+
+Notes:
+
+- `journal_recent_errors` may need journal-reading group access
+- `backup_age`, `disk_free_space`, `log_pattern_watch`, and `git_status` only work where the service user can traverse/read the target paths
+- root is **not** the recommended default, even for system/storage polls
+
+### 4. Install the app
+
+Run the app install steps as the `parascope` user:
+
+```bash
+sudo -u parascope -H bash -lc '
+set -e
+cd /opt/para-scope
+git clone <your-repo-url> .
+uv venv .venv
+uv pip install -r requirements.txt -p .venv
+cp .env.example .env
+'
+```
+
+Then edit `/opt/para-scope/.env` and set at minimum:
+
+```dotenv
+PARA_SCOPE_SECRET_KEY=<openssl rand -hex 32>
+PARA_SCOPE_SECURE_COOKIES=1
+PARA_SCOPE_LOG_LEVEL=INFO
+```
+
+Generate the secret key with:
+
+```bash
+openssl rand -hex 32
+```
+
+### 5. systemd unit
 
 Create `/etc/systemd/system/para-scope.service`:
 
@@ -123,6 +211,8 @@ EnvironmentFile=/opt/para-scope/.env
 ExecStart=/opt/para-scope/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
 Restart=on-failure
 RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
@@ -134,9 +224,10 @@ Enable and start:
 sudo systemctl daemon-reload
 sudo systemctl enable --now para-scope
 sudo systemctl status para-scope
+sudo journalctl -u para-scope -f
 ```
 
-### 3. nginx reverse proxy
+### 6. nginx reverse proxy
 
 Example site config (replace `para.example.com`):
 
@@ -152,20 +243,63 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
     }
 }
 ```
 
-Enable the site, then obtain TLS (certbot will adjust the server block):
+Save it as `/etc/nginx/sites-available/para-scope`, then enable and validate it:
 
 ```bash
 sudo ln -s /etc/nginx/sites-available/para-scope /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
+```
+
+Then obtain TLS (certbot will adjust the server block):
+
+```bash
 sudo certbot --nginx -d para.example.com
 ```
 
-### 4. First login
+### 7. First start and first login
 
-Open `https://para.example.com/setup` (or run `python create_user.py` from `/opt/para-scope` with the venv active). Confirm `GET https://para.example.com/health` returns OK.
+Confirm the local app is reachable through nginx:
+
+```bash
+curl -I http://127.0.0.1:8000/health
+curl -I https://para.example.com/health
+```
+
+Then open `https://para.example.com/setup` and create the first user.
+
+For headless installs, first make sure the app has started once so the DB exists, then run:
+
+```bash
+cd /opt/para-scope
+source .venv/bin/activate
+python create_user.py
+```
+
+### 8. Ongoing operations
+
+- App logs: `sudo journalctl -u para-scope -f`
+- Restart after upgrades or env changes: `sudo systemctl restart para-scope`
+- Reload nginx after config changes: `sudo nginx -t && sudo systemctl reload nginx`
+- Health check: `GET /health`
+
+### 9. Upgrade flow
+
+```bash
+sudo systemctl stop para-scope
+sudo -u parascope -H bash -lc '
+set -e
+cd /opt/para-scope
+git pull --ff-only
+uv pip install -r requirements.txt -p .venv
+'
+sudo systemctl start para-scope
+sudo systemctl status para-scope
+```

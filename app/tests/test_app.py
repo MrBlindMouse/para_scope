@@ -143,11 +143,11 @@ def _create_source(client, name="Test Source", slug=None, source_type="webhook")
     }
     if source_type == "poll":
         data.update({
+            "poll_category": "url",
             "schedule_type": "interval",
             "interval_seconds": "60",
             "handler_type": "http_get",
             "handler_url": "https://example.com",
-            "handler_params": "{}",
             "timeout_seconds": "30",
             "retry_count": "0",
         })
@@ -371,8 +371,8 @@ class TestSourcesCRUD:
         assert 'value="generic"' not in resp.text
         assert 'name="schedule_name"' not in resp.text
         assert 'id="schedule-fields"' in resp.text
+        assert 'name="poll_category"' in resp.text
         assert 'name="slug"' not in resp.text
-        assert 'name="base_url"' not in resp.text
         assert 'class="field-tip"' in resp.text
         assert "data-tip=" in resp.text
 
@@ -472,12 +472,12 @@ class TestSourcesCRUD:
             data={
                 "name": "Poll Edit",
                 "source_type": "poll",
+                "poll_category": "url",
                 "description": "",
                 "schedule_type": "interval",
                 "interval_seconds": "120",
                 "handler_type": "http_get",
                 "handler_url": "https://example.com/v2",
-                "handler_params": "{}",
                 "timeout_seconds": "30",
                 "retry_count": "1",
             },
@@ -607,10 +607,11 @@ class TestEventTypes:
             "/config/pipeline/sources",
             data={
                 "name": "Poll Seed", "source_type": "poll",
+                "poll_category": "url",
                 "description": "",
                 "schedule_type": "interval",
                 "interval_seconds": "60", "handler_type": "http_get",
-                "handler_url": "https://example.com/data", "handler_params": "{}",
+                "handler_url": "https://example.com/data",
                 "timeout_seconds": "30", "retry_count": "0",
             },
             follow_redirects=False,
@@ -633,78 +634,40 @@ class TestEventTypes:
             db.close()
 
 
-# ── Config: Schedules ────────────────────────────────────────────────────────
+# ── Config: Poll schedules (one per poll source) ──────────────────────────────
 
 class TestSchedules:
-    def test_get_schedules_empty(self, authenticated_client):
-        sid, slug = _create_source(authenticated_client, name="Sch Source", slug="sch-source")
-        resp = authenticated_client.get(f"/config/source/{sid}/schedules")
-        assert resp.status_code == 200
-        assert "No schedules yet" in resp.text
-
-    def test_create_schedule_interval(self, authenticated_client):
-        sid, slug = _create_source(authenticated_client, name="Sch Source", slug="sch-source")
-        resp = authenticated_client.post(
-            f"/config/source/{sid}/schedules",
-            data={"name": "Hourly Poll", "schedule_type": "interval",
-                  "interval_seconds": "3600", "handler_type": "http_get",
-                  "handler_url": "https://api.example.com/data", "handler_params": "{}",
-                  "timeout_seconds": "30", "retry_count": "2"},
-            follow_redirects=False,
+    def test_poll_create_yields_one_schedule(self, authenticated_client):
+        sid, _ = _create_source(
+            authenticated_client, name="One Sched", slug="one-sched", source_type="poll",
         )
-        assert resp.status_code == 303
+        from app.database import get_db
+        from app.models import PollingSchedule
+        db = next(get_db())
+        try:
+            assert db.query(PollingSchedule).filter(PollingSchedule.source_id == sid).count() == 1
+        finally:
+            db.close()
 
-    def test_create_schedule_cron(self, authenticated_client):
-        sid, slug = _create_source(authenticated_client, name="Sch Source", slug="sch-source")
-        resp = authenticated_client.post(
-            f"/config/source/{sid}/schedules",
-            data={"name": "Daily Cron", "schedule_type": "cron",
-                  "cron_expression": "0 6 * * *", "handler_type": "http_post",
-                  "handler_url": "https://api.example.com/daily", "handler_params": "{}",
-                  "timeout_seconds": "60", "retry_count": "0"},
-            follow_redirects=False,
+    def test_poll_source_run_now(self, authenticated_client, monkeypatch):
+        sid, _ = _create_source(
+            authenticated_client, name="Run Now Poll", slug="run-now-poll", source_type="poll",
         )
-        assert resp.status_code == 303
+        called = []
 
-    def test_create_schedule_allows_second(self, authenticated_client):
-        sid, slug = _create_source(authenticated_client, name="Sch Source", slug="sch-source")
-        authenticated_client.post(
-            f"/config/source/{sid}/schedules",
-            data={"schedule_type": "interval", "interval_seconds": "60",
-                  "handler_type": "http_get", "handler_url": "https://example.com",
-                  "handler_params": "{}", "timeout_seconds": "30", "retry_count": "0"},
-            follow_redirects=False,
-        )
+        def fake_run(schedule_id):
+            called.append(schedule_id)
+            return True
+
+        monkeypatch.setattr("app.routers.pipeline.run_schedule", fake_run)
         resp = authenticated_client.post(
-            f"/config/source/{sid}/schedules",
-            data={"schedule_type": "interval", "interval_seconds": "120",
-                  "handler_type": "http_get", "handler_url": "https://example.com/2",
-                  "handler_params": "{}", "timeout_seconds": "30", "retry_count": "0"},
+            f"/config/source/{sid}/poll-now",
             follow_redirects=False,
         )
         assert resp.status_code == 303
         loc = str(resp.headers.get("location", ""))
         assert "success" in loc
-        from app.database import get_db
-        from app.models import PollingSchedule
-        db = next(get_db())
-        try:
-            assert db.query(PollingSchedule).filter(PollingSchedule.source_id == sid).count() == 2
-        finally:
-            db.close()
-
-    def test_delete_schedule(self, authenticated_client):
-        sid, slug = _create_source(authenticated_client, name="Sch Source", slug="sch-source")
-        authenticated_client.post(
-            f"/config/source/{sid}/schedules",
-            data={"name": "ToDelete", "schedule_type": "interval",
-                  "interval_seconds": "60", "handler_type": "http_get",
-                  "handler_url": "", "handler_params": "{}",
-                  "timeout_seconds": "30", "retry_count": "0"},
-            follow_redirects=False,
-        )
-        resp = authenticated_client.post("/config/schedule/1/delete", follow_redirects=False)
-        assert resp.status_code == 303
+        assert len(called) == 1
 
 
 # ── Config: Actions ──────────────────────────────────────────────────────────
@@ -716,7 +679,7 @@ class TestActions:
         from app.models import Field
         db = next(get_db())
         try:
-            f = Field(name="Hits", slug="hits-act", field_type="counter", config={}, state={"value": 0})
+            f = Field(name="Hits", slug="hits-act", field_type="value", config={}, state={"value": 0})
             db.add(f)
             db.commit()
             fid = f.id
@@ -725,7 +688,7 @@ class TestActions:
         resp = authenticated_client.post(
             f"/config/pipeline/source/{sid}/actions",
             data={"action_type": "field_push",
-                  "field_id": str(fid), "field_type": "counter", "counter_op": "increment", "delta": "1"},
+                  "field_id": str(fid), "field_type": "value", "value_op": "increment", "delta": "1"},
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -1002,7 +965,7 @@ class TestRuleFirstPipeline:
         try:
             et = db.query(EventTypeRecord).filter(EventTypeRecord.source_id == sid).first()
             et_id = et.id
-            field = Field(name="RF Val", slug="rf-val", field_type="value", config={}, state={"value": ""})
+            field = Field(name="RF Val", slug="rf-val", field_type="text", config={}, state={"value": ""})
             db.add(field)
             db.commit()
             fid = field.id
@@ -1036,7 +999,7 @@ class TestRuleFirstPipeline:
 
         authenticated_client.post(
             f"/config/pipeline/source/{sid}/actions",
-            data={"action_type": "field_push", "field_id": str(fid), "field_type": "value",
+            data={"action_type": "field_push", "field_id": str(fid), "field_type": "text",
                   "value_mode": "literal", "value": "hi", "rule_id": str(rule_id)},
             follow_redirects=False,
         )
@@ -1055,7 +1018,7 @@ class TestRuleFirstPipeline:
 
         resp = authenticated_client.post(
             f"/config/pipeline/action/{action_id}",
-            data={"action_type": "field_push", "field_id": str(fid), "field_type": "value",
+            data={"action_type": "field_push", "field_id": str(fid), "field_type": "text",
                   "value_mode": "literal", "value": "updated"},
             follow_redirects=False,
         )
@@ -1862,11 +1825,11 @@ class TestWidgetTransforms:
         db = next(get_db())
         try:
             gbp = Field(
-                name="EURGBP", slug="eurgbp", field_type="value",
+                name="EURGBP", slug="eurgbp", field_type="text",
                 config={}, state={"value": "0.86"},
             )
             zar = Field(
-                name="EURZAR", slug="eurzar", field_type="value",
+                name="EURZAR", slug="eurzar", field_type="text",
                 config={}, state={"value": "19.5"},
             )
             log = Field(
@@ -2023,9 +1986,9 @@ class TestWidgetTransforms:
 
         db = next(get_db())
         try:
-            counter = Field(name="Hits", slug="hits", field_type="counter",
+            counter = Field(name="Hits", slug="hits", field_type="value",
                             config={}, state={"value": 42})
-            val = Field(name="Latency", slug="latency", field_type="value",
+            val = Field(name="Latency", slug="latency", field_type="text",
                         config={}, state={"value": "3.5"})
             db.add_all([counter, val])
             db.commit()
@@ -2048,9 +2011,9 @@ class TestWidgetTransforms:
 
         db = next(get_db())
         try:
-            counter = Field(name="Used", slug="used", field_type="counter",
+            counter = Field(name="Used", slug="used", field_type="value",
                             config={}, state={"value": 40})
-            ceiling = Field(name="Cap", slug="cap", field_type="value",
+            ceiling = Field(name="Cap", slug="cap", field_type="text",
                             config={}, state={"value": "80"})
             db.add_all([counter, ceiling])
             db.commit()
@@ -2099,8 +2062,8 @@ class TestWidgetTransforms:
 
         db = next(get_db())
         try:
-            a = Field(name="A", slug="a", field_type="counter", config={}, state={"value": 1})
-            b = Field(name="B", slug="b", field_type="counter", config={}, state={"value": 2})
+            a = Field(name="A", slug="a", field_type="value", config={}, state={"value": 1})
+            b = Field(name="B", slug="b", field_type="value", config={}, state={"value": 2})
             db.add_all([a, b])
             db.commit()
             err = validate_widget_bindings(db, [{
@@ -2136,7 +2099,7 @@ class TestWidgetTransforms:
                 },
             }])
             assert ok and "at least 3" in ok
-            c = Field(name="C", slug="c", field_type="counter", config={}, state={"value": 3})
+            c = Field(name="C", slug="c", field_type="value", config={}, state={"value": 3})
             db.add(c)
             db.commit()
             ok3 = validate_widget_bindings(db, [{
@@ -2201,7 +2164,7 @@ class TestWidgetTransforms:
 
         db = next(get_db())
         try:
-            counter = Field(name="Bad Toggle Counter", slug="c-bad-tog", field_type="counter", config={}, state={"value": 0})
+            counter = Field(name="Bad Toggle Counter", slug="c-bad-tog", field_type="value", config={}, state={"value": 0})
             db.add(counter)
             db.commit()
         finally:
@@ -2245,7 +2208,7 @@ class TestWidgetTransforms:
         db = next(get_db())
         try:
             tog = Field(name="Tone Tog", slug="tone_tog", field_type="toggle", config={}, state={"value": False})
-            ctr = Field(name="Tone Ctr", slug="tonectr", field_type="counter", config={}, state={"value": -3})
+            ctr = Field(name="Tone Ctr", slug="tonectr", field_type="value", config={}, state={"value": -3})
             db.add_all([tog, ctr])
             db.commit()
 
@@ -2354,8 +2317,8 @@ class TestWidgetTransforms:
         try:
             a = Field(name="Board Up", slug="board_up", field_type="toggle", config={}, state={"value": True})
             b = Field(name="Board Ready", slug="board_ready", field_type="toggle", config={}, state={"value": False})
-            c = Field(name="Board Hits", slug="board_hits", field_type="counter", config={}, state={"value": 1000})
-            d = Field(name="Board Lag", slug="board_lag", field_type="counter", config={}, state={"value": 50})
+            c = Field(name="Board Hits", slug="board_hits", field_type="value", config={}, state={"value": 1000})
+            d = Field(name="Board Lag", slug="board_lag", field_type="value", config={}, state={"value": 50})
             db.add_all([a, b, c, d])
             db.commit()
 
@@ -2548,10 +2511,11 @@ class TestSecretsCRUD:
             "/config/pipeline/sources",
             data={
                 "name": "Polled Source", "source_type": "poll",
+                "poll_category": "url",
                 "description": "",
                 "schedule_type": "interval",
                 "interval_seconds": "60", "handler_type": "http_get",
-                "handler_url": "https://example.com/data", "handler_params": "{}",
+                "handler_url": "https://example.com/data",
                 "timeout_seconds": "30", "retry_count": "0",
             },
             follow_redirects=False,
@@ -2565,6 +2529,7 @@ class TestSecretsCRUD:
             assert src is not None
             assert src.slug == "polled_source"
             assert src.source_type == "poll"
+            assert (src.config or {}).get("poll_category") == "url"
             sched = db.query(PollingSchedule).filter(
                 PollingSchedule.source_id == src.id,
             ).first()
@@ -2580,6 +2545,7 @@ class TestSecretsCRUD:
             "/config/pipeline/sources",
             data={
                 "name": "Poll No Sched", "source_type": "poll",
+                "poll_category": "url",
                 "description": "",
             },
             follow_redirects=False,
@@ -2666,20 +2632,14 @@ class TestSystemPage:
 
 class TestCascadeDelete:
     def test_source_delete_cleans_children(self, authenticated_client):
-        """Deleting a source should remove its event types and schedules."""
-        sid, slug = _create_source(authenticated_client, name="Cascade Test", slug="cascade-test")
+        """Deleting a source should remove its event types and schedule."""
+        sid, slug = _create_source(
+            authenticated_client, name="Cascade Test", slug="cascade-test", source_type="poll",
+        )
 
         authenticated_client.post(
             f"/config/pipeline/source/{sid}/events",
             data={"name": "child_event", "description": ""},
-            follow_redirects=False,
-        )
-        authenticated_client.post(
-            f"/config/source/{sid}/schedules",
-            data={"name": "child_schedule", "schedule_type": "interval",
-                  "interval_seconds": "60", "handler_type": "http_get",
-                  "handler_url": "", "handler_params": "{}",
-                  "timeout_seconds": "30", "retry_count": "0"},
             follow_redirects=False,
         )
 
@@ -2944,6 +2904,164 @@ class TestWebhookPipeline:
             },
         )
         assert stripped.status_code == 400
+
+    def test_webhook_paypal_postback_verification_accepts_and_dedupes(self, authenticated_client):
+        """PayPal verification succeeds via postback and replay dedup works."""
+        import hashlib
+        from unittest.mock import MagicMock, patch
+
+        from app.database import get_db
+        from app.models import Secret, Source, Event, EventTypeRecord
+        from app.security import encrypt_secret
+
+        sid, slug = _create_source(authenticated_client, name="PayPal Source", slug="paypal-src")
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            assert src is not None
+            src.config = {
+                "webhook_provider": "paypal",
+                "paypal_webhook_id": "webhook-id-1",
+                "paypal_client_id": "client-id-1",
+                "paypal_environment": "sandbox",
+            }
+            sec = Secret(
+                scoped_to_type="source",
+                scoped_to_id=src.id,
+                encrypted_value=encrypt_secret("paypal-client-secret"),
+            )
+            db.add(sec)
+            db.flush()
+            src.webhook_secret_id = sec.id
+            db.add(EventTypeRecord(
+                source_id=src.id,
+                name="PAYMENT.SALE.COMPLETED",
+                description="",
+                enabled=True,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        headers = {
+            "Content-Type": "application/json",
+            "PAYPAL-AUTH-ALGO": "SHA256withRSA",
+            "PAYPAL-CERT-URL": "https://example.com/cert",
+            "PAYPAL-TRANSMISSION-ID": "tx-123",
+            "PAYPAL-TRANSMISSION-SIG": "sig-abc",
+            "PAYPAL-TRANSMISSION-TIME": "2016-02-18T20:01:35Z",
+        }
+        payload = {"event_type": "PAYMENT.SALE.COMPLETED", "resource": {"id": "res-1"}}
+
+        mock_verify_resp = MagicMock()
+        mock_verify_resp.raise_for_status = MagicMock()
+        mock_verify_resp.json.return_value = {"verification_status": "SUCCESS"}
+
+        mock_http_client = MagicMock()
+        mock_http_client.__enter__ = MagicMock(return_value=mock_http_client)
+        mock_http_client.__exit__ = MagicMock(return_value=False)
+        mock_http_client.post.return_value = mock_verify_resp
+
+        with patch("app.webhook_verifiers._paypal_get_access_token", return_value="access-token"):
+            with patch("app.webhook_verifiers.httpx.Client", return_value=mock_http_client):
+                resp = authenticated_client.post(f"/webhook/{slug}", json=payload, headers=headers)
+                assert resp.status_code == 202
+                event_id = resp.json()["event_id"]
+
+                db = next(get_db())
+                try:
+                    ev = db.query(Event).filter(Event.id == event_id).first()
+                    assert ev is not None
+                    assert ev.normalized_data["_webhook"]["signed"] is True
+                finally:
+                    db.close()
+
+                # Same transmission id should be rejected as duplicate.
+                dup = authenticated_client.post(f"/webhook/{slug}", json=payload, headers=headers)
+                assert dup.status_code == 409
+                assert dup.json()["error"] == "Duplicate request"
+
+    def test_webhook_discord_ed25519_verification(self, authenticated_client):
+        from nacl.signing import SigningKey
+
+        from app.database import get_db
+        from app.models import Event, EventTypeRecord, Secret, Source
+        from app.security import encrypt_secret
+
+        sid, slug = _create_source(authenticated_client, name="Discord Source", slug="discord-src")
+        signing_key = SigningKey.generate()
+        verify_key_hex = signing_key.verify_key.encode().hex()
+
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            assert src is not None
+            src.config = {"webhook_provider": "discord"}
+            sec = Secret(
+                scoped_to_type="source",
+                scoped_to_id=src.id,
+                encrypted_value=encrypt_secret(verify_key_hex),
+            )
+            db.add(sec)
+            db.flush()
+            src.webhook_secret_id = sec.id
+            db.add(EventTypeRecord(
+                source_id=src.id,
+                name="application_command",
+                description="Discord application command",
+                enabled=True,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        payload = {"type": 2, "data": {"name": "status"}}
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        timestamp = str(int(time.time()))
+        signature = signing_key.sign(timestamp.encode() + body).signature.hex()
+        headers = {
+            "Content-Type": "application/json",
+            "X-Signature-Ed25519": signature,
+            "X-Signature-Timestamp": timestamp,
+        }
+
+        resp = authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers)
+        assert resp.status_code == 202
+
+        db = next(get_db())
+        try:
+            event = db.query(Event).filter(Event.id == resp.json()["event_id"]).first()
+            assert event is not None
+            assert event.normalized_data["_webhook"]["signed"] is True
+            assert event.normalized_data["_webhook"]["event_type"] == "application_command"
+        finally:
+            db.close()
+
+        dup = authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers)
+        assert dup.status_code == 409
+        assert dup.json()["error"] == "Duplicate request"
+
+        bad_headers = dict(headers)
+        bad_headers["X-Signature-Ed25519"] = ("0" if signature[0] != "0" else "1") + signature[1:]
+        bad = authenticated_client.post(f"/webhook/{slug}", data=body, headers=bad_headers)
+        assert bad.status_code == 401
+        assert bad.json()["error"] == "Invalid signature"
+
+        ping_payload = {"type": 1}
+        ping_body = json.dumps(ping_payload, separators=(",", ":")).encode()
+        ping_timestamp = str(int(time.time()) + 1)
+        ping_signature = signing_key.sign(ping_timestamp.encode() + ping_body).signature.hex()
+        ping = authenticated_client.post(
+            f"/webhook/{slug}",
+            data=ping_body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Signature-Ed25519": ping_signature,
+                "X-Signature-Timestamp": ping_timestamp,
+            },
+        )
+        assert ping.status_code == 200
+        assert ping.json() == {"type": 1}
 
 
 # ── Pipeline Tests ───────────────────────────────────────────────────────────
@@ -3289,6 +3407,150 @@ class TestPipeline:
         finally:
             db.close()
 
+    def test_logbook_template_and_maths(self, authenticated_client):
+        """Logbook Template substitutes {{ }}; Value from event accepts maths; paths keep objects."""
+        sid, _ = _create_source(authenticated_client, name="LB Tmpl Src", slug="lb-tmpl-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field, FieldLogEntry
+        from app.pipeline import evaluate_and_dispatch
+        db = next(get_db())
+        try:
+            field = Field(
+                name="LB Tmpl", slug="lb-tmpl", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.commit()
+
+            actions = [
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": field.id, "value": "x={{ status }}"},
+                ),
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": field.id, "value": "{{ 1/rate }}"},
+                ),
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": field.id, "value_key": "rate * 2"},
+                ),
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": field.id, "value_key": "payload"},
+                ),
+            ]
+            for a in actions:
+                db.add(a)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[a.id for a in actions], order_index=0,
+            )
+            db.add(rule)
+            db.commit()
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"status": "ok", "rate": 20, "payload": {"n": 1}},
+                raw_payload="{}", correlation_id="test",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+
+            values = [
+                e.value for e in db.query(FieldLogEntry)
+                .filter(FieldLogEntry.field_id == field.id)
+                .order_by(FieldLogEntry.id.asc())
+                .all()
+            ]
+            assert values == ["x=ok", "0.05", 40.0, {"n": 1}]
+        finally:
+            db.close()
+
+    def test_field_self_reference(self, authenticated_client):
+        """Reserved ``field`` is the current stored value in path/template/maths."""
+        sid, _ = _create_source(authenticated_client, name="Self Ref Src", slug="self-ref-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field, FieldLogEntry
+        from app.pipeline import evaluate_and_dispatch
+        db = next(get_db())
+        try:
+            counter = Field(
+                name="Self Ctr", slug="self-ctr", field_type="value",
+                config={}, state={"value": 10},
+            )
+            value_f = Field(
+                name="Self Val", slug="self-val", field_type="text",
+                config={}, state={"value": "a"},
+            )
+            logbook = Field(
+                name="Self LB", slug="self-lb", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add_all([counter, value_f, logbook])
+            db.commit()
+            db.add(FieldLogEntry(field_id=logbook.id, value={"n": 2}, source_id=sid))
+            db.commit()
+
+            actions = [
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": counter.id, "op": "set", "delta": "field + 1"},
+                ),
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": value_f.id, "value": "{{ field }}-{{ status }}"},
+                ),
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": logbook.id, "value": "{{ field.n }}"},
+                ),
+                ActionInstance(
+                    source_id=sid, action_type="field_push",
+                    config={"field_id": logbook.id},  # entire event — no field inject needed
+                ),
+            ]
+            for a in actions:
+                db.add(a)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[a.id for a in actions], order_index=0,
+            )
+            db.add(rule)
+            db.commit()
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"status": "ok", "field": "ignored"},
+                raw_payload="{}", correlation_id="self-ref",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+
+            db.refresh(counter)
+            db.refresh(value_f)
+            assert counter.state["value"] == 11.0
+            assert value_f.state["value"] == "a-ok"
+
+            lb_entries = (
+                db.query(FieldLogEntry)
+                .filter(FieldLogEntry.field_id == logbook.id)
+                .order_by(FieldLogEntry.id.asc())
+                .all()
+            )
+            # prior {"n":2}, then template "2", then entire event
+            assert [e.value for e in lb_entries] == [
+                {"n": 2},
+                "2",
+                {"status": "ok", "field": "ignored"},
+            ]
+        finally:
+            db.close()
+
     def test_field_push_counter(self, authenticated_client):
         """field_push increment updates counter state only (no MetricPoint history)."""
         sid, slug = _create_source(authenticated_client, name="Metric Source", slug="metric-src")
@@ -3297,7 +3559,7 @@ class TestPipeline:
         db = next(get_db())
         try:
             field = Field(
-                name="request_count", slug="request-count", field_type="counter",
+                name="request_count", slug="request-count", field_type="value",
                 config={}, state={"value": 0},
             )
             db.add(field)
@@ -3325,21 +3587,21 @@ class TestPipeline:
         finally:
             db.close()
 
-    def test_field_push_value_from_event_key(self, authenticated_client):
-        """field_push to value Field stores string from event key."""
+    def test_field_push_text_from_template(self, authenticated_client):
+        """field_push to text Field stores rendered template from event."""
         sid, slug = _create_source(authenticated_client, name="Metric Field Source", slug="metric-field-src")
         from app.database import get_db
         from app.models import ActionInstance, Rule, Event, Field
         db = next(get_db())
         try:
             field = Field(
-                name="status_code", slug="status-code", field_type="value",
+                name="status_code", slug="status-code", field_type="text",
                 config={}, state={"value": ""},
             )
             db.add(field)
             db.commit()
             action = ActionInstance(source_id=sid, action_type="field_push",
-                config={"field_id": field.id, "value_key": "code"})
+                config={"field_id": field.id, "value": "{{ code }}"})
             db.add(action)
             db.commit()
             rule = Rule(source_id=sid,
@@ -3358,22 +3620,22 @@ class TestPipeline:
         finally:
             db.close()
 
-    def test_field_push_value_dotted_path(self, authenticated_client):
-        """field_push value_key supports nested paths like _poll.response_time_ms."""
+    def test_field_push_text_dotted_path(self, authenticated_client):
+        """field_push text template supports nested paths like _poll.response_time_ms."""
         sid, slug = _create_source(authenticated_client, name="Dotted Push Src", slug="dotted-push-src")
         from app.database import get_db
         from app.models import ActionInstance, Rule, Event, Field
         db = next(get_db())
         try:
             field = Field(
-                name="latency", slug="latency-ms", field_type="value",
+                name="latency", slug="latency-ms", field_type="text",
                 config={}, state={"value": ""},
             )
             db.add(field)
             db.commit()
             action = ActionInstance(
                 source_id=sid, action_type="field_push",
-                config={"field_id": field.id, "value_key": "_poll.response_time_ms"},
+                config={"field_id": field.id, "value": "{{ _poll.response_time_ms }}"},
             )
             db.add(action)
             db.commit()
@@ -3397,6 +3659,75 @@ class TestPipeline:
         finally:
             db.close()
 
+    def test_field_push_text_template_and_maths(self, authenticated_client):
+        """Text field Template substitutes {{ }} including maths."""
+        sid, _ = _create_source(authenticated_client, name="Val Tmpl Src", slug="val-tmpl-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field
+        from app.pipeline import evaluate_and_dispatch
+        from sqlalchemy.orm.attributes import flag_modified
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Val Tmpl", slug="val-tmpl", field_type="text",
+                config={}, state={"value": ""},
+            )
+            db.add(field)
+            db.commit()
+
+            action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id, "value": "x={{ status }}"},
+            )
+            db.add(action)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[action.id], order_index=0,
+            )
+            db.add(rule)
+            db.commit()
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"status": "ok", "rate": 20},
+                raw_payload="{}", correlation_id="val-tmpl",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            db.refresh(field)
+            assert field.state["value"] == "x=ok"
+
+            action.config = {"field_id": field.id, "value": "{{ 1/rate }}"}
+            flag_modified(action, "config")
+            db.commit()
+            event2 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"status": "ok", "rate": 20},
+                raw_payload="{}", correlation_id="val-tmpl-math",
+            )
+            db.add(event2)
+            db.commit()
+            evaluate_and_dispatch(db, event2)
+            db.refresh(field)
+            assert field.state["value"] == "0.05"
+
+            action.config = {"field_id": field.id, "value": "{{ rate * 2 }}"}
+            flag_modified(action, "config")
+            db.commit()
+            event3 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"rate": 20},
+                raw_payload="{}", correlation_id="val-key-math",
+            )
+            db.add(event3)
+            db.commit()
+            evaluate_and_dispatch(db, event3)
+            db.refresh(field)
+            assert field.state["value"] == "40"
+        finally:
+            db.close()
+
     def test_field_push_counter_reset(self, authenticated_client):
         """field_push reset sets counter to 0."""
         sid, slug = _create_source(authenticated_client, name="Zero Metric", slug="zero-metric")
@@ -3405,7 +3736,7 @@ class TestPipeline:
         db = next(get_db())
         try:
             field = Field(
-                name="hits", slug="hits-reset", field_type="counter",
+                name="hits", slug="hits-reset", field_type="value",
                 config={}, state={"value": 9},
             )
             db.add(field)
@@ -3430,6 +3761,72 @@ class TestPipeline:
         finally:
             db.close()
 
+    def test_field_push_counter_set(self, authenticated_client):
+        """field_push set replaces counter with literal, path, or maths."""
+        sid, _ = _create_source(authenticated_client, name="Set Metric", slug="set-metric")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field
+        from app.pipeline import evaluate_and_dispatch
+        from sqlalchemy.orm.attributes import flag_modified
+        db = next(get_db())
+        try:
+            field = Field(
+                name="gauge", slug="gauge-set", field_type="value",
+                config={}, state={"value": 9},
+            )
+            db.add(field)
+            db.commit()
+            action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id, "op": "set", "delta": 42},
+            )
+            db.add(action)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[action.id], order_index=0,
+            )
+            db.add(rule)
+            db.commit()
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={}, raw_payload="{}", correlation_id="set-lit",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            db.refresh(field)
+            assert field.state["value"] == 42.0
+
+            action.config = {"field_id": field.id, "op": "set", "delta": "qty"}
+            flag_modified(action, "config")
+            db.commit()
+            event2 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"qty": 7}, raw_payload="{}", correlation_id="set-key",
+            )
+            db.add(event2)
+            db.commit()
+            evaluate_and_dispatch(db, event2)
+            db.refresh(field)
+            assert field.state["value"] == 7.0
+
+            action.config = {"field_id": field.id, "op": "set", "delta": "qty * 2"}
+            flag_modified(action, "config")
+            db.commit()
+            event3 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"qty": 5}, raw_payload="{}", correlation_id="set-math",
+            )
+            db.add(event3)
+            db.commit()
+            evaluate_and_dispatch(db, event3)
+            db.refresh(field)
+            assert field.state["value"] == 10.0
+        finally:
+            db.close()
+
     def test_field_push_counter_decrement(self, authenticated_client):
         """field_push decrement subtracts delta (literal and event key)."""
         sid, slug = _create_source(authenticated_client, name="Dec Metric", slug="dec-metric")
@@ -3438,7 +3835,7 @@ class TestPipeline:
         db = next(get_db())
         try:
             field = Field(
-                name="stock", slug="stock-dec", field_type="counter",
+                name="stock", slug="stock-dec", field_type="value",
                 config={}, state={"value": 10},
             )
             db.add(field)
@@ -3479,6 +3876,19 @@ class TestPipeline:
             evaluate_and_dispatch(db, event2)
             db.refresh(field)
             assert field.state["value"] == 6.0
+
+            action.config = {"field_id": field.id, "op": "increment", "delta": "qty * 2"}
+            flag_modified(action, "config")
+            db.commit()
+            event3 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"qty": 3}, raw_payload="{}", correlation_id="inc-math",
+            )
+            db.add(event3)
+            db.commit()
+            evaluate_and_dispatch(db, event3)
+            db.refresh(field)
+            assert field.state["value"] == 12.0
         finally:
             db.close()
 
@@ -3515,15 +3925,63 @@ class TestPipeline:
         finally:
             db.close()
 
+    def test_field_push_toggle_switch(self, authenticated_client):
+        """field_push Switch flips toggle bool."""
+        sid, _ = _create_source(authenticated_client, name="Toggle Switch Src", slug="toggle-switch-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field
+        from app.pipeline import evaluate_and_dispatch
+        db = next(get_db())
+        try:
+            field = Field(
+                name="flip", slug="flip-toggle", field_type="toggle",
+                config={}, state={"value": False},
+            )
+            db.add(field)
+            db.commit()
+            action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id, "op": "switch"},
+            )
+            db.add(action)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[action.id], order_index=0,
+            )
+            db.add(rule)
+            db.commit()
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={}, raw_payload="{}", correlation_id="sw1",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            db.refresh(field)
+            assert field.state["value"] is True
+
+            event2 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={}, raw_payload="{}", correlation_id="sw2",
+            )
+            db.add(event2)
+            db.commit()
+            evaluate_and_dispatch(db, event2)
+            db.refresh(field)
+            assert field.state["value"] is False
+        finally:
+            db.close()
+
     def test_field_push_unresolved_delta(self, authenticated_client):
-        """Unresolved counter delta key fails with a clear error."""
+        """Unresolved value delta key fails with a clear error."""
         sid, slug = _create_source(authenticated_client, name="Bad Field", slug="bad-field")
         from app.database import get_db
         from app.models import ActionInstance, Rule, Event, Field
         db = next(get_db())
         try:
             field = Field(
-                name="x", slug="x-counter", field_type="counter",
+                name="x", slug="x-counter", field_type="value",
                 config={}, state={"value": 0},
             )
             db.add(field)
@@ -3709,7 +4167,7 @@ class TestPipeline:
         assert get_by_path(data, "value.*.rate", star_bindings=bindings) == 19.5
 
     def test_star_binding_applies_to_field_push(self, authenticated_client):
-        """Rule * conditions bind action value_key * to the matched row."""
+        """Rule * conditions bind action template * to the matched row."""
         from app.database import SessionLocal
         from app.models import Field, Source, EventTypeRecord, Rule, ActionInstance, Event
         from app.pipeline import evaluate_and_dispatch
@@ -3719,7 +4177,7 @@ class TestPipeline:
             field = Field(
                 name="zar-rate",
                 slug="zar-rate-bind",
-                field_type="value",
+                field_type="text",
                 config={},
                 state={"value": ""},
             )
@@ -3734,7 +4192,7 @@ class TestPipeline:
             action = ActionInstance(
                 action_type="field_push",
                 source_id=src.id,
-                config={"field_id": field.id, "value_key": "value.*.rate"},
+                config={"field_id": field.id, "value": "{{ value.*.rate }}"},
                 enabled=True,
             )
             db.add(action)
@@ -4128,7 +4586,7 @@ class TestMetricGraphRange:
         db = next(get_db())
         try:
             field = Field(
-                name="Hits Only", slug="hits-only", field_type="counter",
+                name="Hits Only", slug="hits-only", field_type="value",
                 config={}, state={"value": 9},
             )
             db.add(field)
@@ -4223,6 +4681,209 @@ class TestDashboardConfigPreserve:
             db.close()
 
 
+class TestNotesWidget:
+    def test_catalog_includes_notes(self, authenticated_client):
+        from app.widgets import get_widget_kinds, KIND_DISPLAYS, default_tone
+
+        assert "notes" in KIND_DISPLAYS
+        assert KIND_DISPLAYS["notes"] == ("notes",)
+        assert default_tone("notes", "notes") == "none"
+        kinds = {k["type"]: k for k in get_widget_kinds()}
+        assert "notes" in kinds
+        assert kinds["notes"]["title"] == "Notes"
+        assert kinds["notes"]["displays"][0]["title"] == "Text"
+        resp = authenticated_client.get("/config/dashboard")
+        assert resp.status_code == 200
+        assert b'"type": "notes"' in resp.content or b'"type":"notes"' in resp.content
+
+    def test_save_layout_with_tone_rules(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        widgets = [{
+            "type": "notes",
+            "display": "notes",
+            "title": "Scratch",
+            "config": {
+                "tone": "conditional",
+                "tone_rules": [
+                    {"expr": "tonectr.value", "op": "lt", "compare": "0", "tone": "negative"},
+                ],
+                "text": "hello",
+            },
+        }]
+        resp = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = json.loads(layout.layout_config)["widgets"]
+            assert len(saved) == 1
+            assert saved[0]["type"] == "notes"
+            assert saved[0]["title"] == "Scratch"
+            assert saved[0]["config"]["text"] == "hello"
+            assert saved[0]["config"]["tone"] == "conditional"
+            assert saved[0]["config"]["tone_rules"][0]["tone"] == "negative"
+            assert saved[0].get("id")
+        finally:
+            db.close()
+
+    def test_fetch_notes_text_and_tone(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            ctr = Field(name="NCtr", slug="nctr", field_type="value", config={}, state={"value": -2})
+            db.add(ctr)
+            db.commit()
+            data = fetch_widget_data(
+                "notes", db, display="notes",
+                widget_config={
+                    "text": "keep calm",
+                    "tone": "conditional",
+                    "tone_rules": [
+                        {"expr": "nctr.value", "op": "lt", "compare": "0", "tone": "negative"},
+                        {"expr": "nctr.value", "op": "gt", "compare": "0", "tone": "positive"},
+                    ],
+                },
+            )
+            assert data["display"] == "notes"
+            assert data["text"] == "keep calm"
+            assert data["tone"] == "negative"
+            none_data = fetch_widget_data(
+                "notes", db, display="notes",
+                widget_config={"text": "x", "tone": "none"},
+            )
+            assert "tone" not in none_data
+            assert none_data["text"] == "x"
+        finally:
+            db.close()
+
+    def test_api_notes_save_and_reject(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps([
+                {"type": "notes", "display": "notes", "title": "N", "config": {"text": ""}},
+                {"type": "system", "display": "metric_summary", "title": "S"},
+            ])},
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            widgets = json.loads(layout.layout_config)["widgets"]
+            notes_id = next(w["id"] for w in widgets if w["type"] == "notes")
+            sys_id = next(w["id"] for w in widgets if w["type"] == "system")
+        finally:
+            db.close()
+
+        ok = authenticated_client.post(
+            "/api/dashboard/notes",
+            json={"id": notes_id, "text": "saved later"},
+        )
+        assert ok.status_code == 200
+        assert ok.json().get("ok") is True
+
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = {w["id"]: w for w in json.loads(layout.layout_config)["widgets"]}
+            assert saved[notes_id]["config"]["text"] == "saved later"
+        finally:
+            db.close()
+
+        bad = authenticated_client.post(
+            "/api/dashboard/notes",
+            json={"id": sys_id, "text": "nope"},
+        )
+        assert bad.status_code == 404
+
+        missing = authenticated_client.post(
+            "/api/dashboard/notes",
+            json={"id": "w_missing", "text": "nope"},
+        )
+        assert missing.status_code == 404
+
+    def test_config_save_preserves_notes_text(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps([{
+                "type": "notes",
+                "display": "notes",
+                "title": "Pad",
+                "config": {
+                    "tone": "conditional",
+                    "tone_rules": [{"expr": "value", "op": "gt", "compare": "0", "tone": "positive"}],
+                    "text": "do not wipe",
+                },
+            }])},
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            wid = json.loads(layout.layout_config)["widgets"][0]["id"]
+        finally:
+            db.close()
+
+        # Config form omits text (as if readFromDom had no notesText stash).
+        resp = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps([{
+                "id": wid,
+                "type": "notes",
+                "display": "notes",
+                "title": "Pad renamed",
+                "config": {
+                    "tone": "conditional",
+                    "tone_rules": [{"expr": "value", "op": "gt", "compare": "0", "tone": "positive"}],
+                },
+            }])},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            w = json.loads(layout.layout_config)["widgets"][0]
+            assert w["title"] == "Pad renamed"
+            assert w["config"]["text"] == "do not wipe"
+        finally:
+            db.close()
+
+    def test_dashboard_renders_notes_without_htmx_poll(self, authenticated_client):
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps([{
+                "type": "notes",
+                "display": "notes",
+                "title": "My Notes",
+                "config": {"text": "body text here", "tone": "none"},
+            }])},
+            follow_redirects=False,
+        )
+        home = authenticated_client.get("/")
+        assert home.status_code == 200
+        assert b"My Notes" in home.content
+        assert b'data-notes-widget' in home.content
+        assert b"body text here" in home.content
+        assert b"widget-notes.js" in home.content
+        # No HTMX poll on notes (same as links)
+        assert b'hx-get="/widgets/notes' not in home.content
+
+
 class TestWebhookAudit:
     def test_webhook_accepted_writes_audit(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Audit WH", slug="audit-wh")
@@ -4265,20 +4926,21 @@ class TestFields:
         assert resp.status_code == 200
         assert 'id="field-type-select"' in resp.text
         assert 'id="field-params-logbook"' in resp.text
-        assert 'id="field-params-counter" class="stack field-type-params" hidden' in resp.text
+        assert 'id="field-params-value" class="stack field-type-params" hidden' in resp.text
+        assert 'id="field-params-text"' in resp.text
         assert 'name="max_entries"' in resp.text
         assert resp.text.index('id="field-type-select"') < resp.text.index('id="field-params-logbook"')
         assert resp.text.index('id="field-params-logbook"') < resp.text.index('name="max_entries"')
-        assert resp.text.index('name="max_entries"') < resp.text.index('id="field-params-counter"')
-        counter = resp.text.split('id="field-params-counter"', 1)[1].split('id="field-params-value"', 1)[0]
-        assert "max_entries" not in counter
+        assert resp.text.index('name="max_entries"') < resp.text.index('id="field-params-value"')
+        value_panel = resp.text.split('id="field-params-value"', 1)[1].split('id="field-params-text"', 1)[0]
+        assert "max_entries" not in value_panel
 
-    def test_create_counter_ignores_max_entries(self, authenticated_client):
+    def test_create_value_ignores_max_entries(self, authenticated_client):
         resp = authenticated_client.post(
             "/config/pipeline/fields",
             data={
-                "name": "Hits Counter",
-                "field_type": "counter",
+                "name": "Hits Value",
+                "field_type": "value",
                 "max_entries": "99",
             },
             follow_redirects=False,
@@ -4288,9 +4950,9 @@ class TestFields:
         from app.models import Field
         db = next(get_db())
         try:
-            field = db.query(Field).filter(Field.name == "Hits Counter").first()
+            field = db.query(Field).filter(Field.name == "Hits Value").first()
             assert field is not None
-            assert field.field_type == "counter"
+            assert field.field_type == "value"
             assert field.config == {}
         finally:
             db.close()
@@ -4361,7 +5023,7 @@ class TestFields:
         db = next(get_db())
         try:
             field = Field(
-                name="Blocked", slug="blocked", field_type="counter",
+                name="Blocked", slug="blocked", field_type="value",
                 config={}, state={"value": 0},
             )
             db.add(field)
@@ -4447,7 +5109,7 @@ class TestFields:
         db = next(get_db())
         try:
             field = Field(
-                name="Hits", slug="hits", field_type="counter",
+                name="Hits", slug="hits", field_type="value",
                 config={}, state={"value": 0},
             )
             db.add(field)
@@ -4483,7 +5145,7 @@ class TestFields:
         db = next(get_db())
         try:
             counter = Field(
-                name="Widget Counter", slug="widget_counter", field_type="counter",
+                name="Widget Counter", slug="widget_counter", field_type="value",
                 config={}, state={"value": 7},
             )
             logbook = Field(
@@ -4521,7 +5183,7 @@ class TestFields:
         try:
             src = Source(name="MS", slug="ms-summary", source_type="webhook", enabled=True)
             counter = Field(
-                name="Summary Hits", slug="ms-hits", field_type="counter",
+                name="Summary Hits", slug="ms-hits", field_type="value",
                 config={}, state={"value": 3},
             )
             db.add_all([src, counter])

@@ -21,7 +21,7 @@ DEFAULT_W = max(1, GRID_COLUMNS // 2)
 DEFAULT_H = 3
 TABLE_H = 4
 
-_TALL_TYPES = frozenset({"system", "display", "links"})
+_TALL_TYPES = frozenset({"system", "display", "links", "notes"})
 _TALL_DISPLAYS = frozenset({
     "source_health", "recent_events", "poller_status", "logbook_list", "table", "list", "board",
 })

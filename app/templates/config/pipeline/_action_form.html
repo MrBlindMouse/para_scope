@@ -5,6 +5,8 @@
 {% for f in fields %}
   {% if f.id == selected_field_id %}{% set selected_field = f %}{% endif %}
 {% endfor %}
+{% set headers_text = headers_text if headers_text is defined else '' %}
+{% set custom_body_text = custom_body_text if custom_body_text is defined else '' %}
 <form method="post"
       action="{% if is_edit %}/config/pipeline/action/{{ action.id }}{% else %}/config/pipeline/source/{{ source.id }}/actions{% endif %}"
       class="stack dialog__form"
@@ -29,7 +31,7 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About action types"
-              data-tip="Update field: change a stored Field. Browser notification: title/body can include {{ '{{source}}' }}. Call URL: send the event to another service.">?</button>
+              data-tip="Update field: change a stored Field. Notify: ntfy/Gotify/Discord. Call URL: send the event to another service. Local script: run a command on this host (must be enabled).">?</button>
     </span>
     <select name="action_type" class="input" id="action-type-select">
       {% for t in action_types %}
@@ -61,68 +63,72 @@
         <select name="logbook_mode" class="input" id="logbook-mode">
           <option value="event" {% if 'value' not in cfg and not cfg.get('value_key') %}selected{% endif %}>Entire event</option>
           <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Value from event</option>
-          <option value="literal" {% if 'value' in cfg and not cfg.get('value_key') %}selected{% endif %}>Fixed text</option>
+          <option value="literal" {% if 'value' in cfg and not cfg.get('value_key') %}selected{% endif %}>Template</option>
         </select>
       </label>
       <label class="stack" id="logbook-key-wrap" hidden>
-        Value from event
+        <span class="field-label">
+          Value from event
+          <button type="button" class="field-tip" tabindex="0"
+                  data-tip="Path or maths; field = current stored value. e.g. status, field.n + 1">?</button>
+        </span>
         <input name="value_key" type="text" class="input" id="logbook-value-key"
-               value="{{ cfg.get('value_key') or '' }}" placeholder="status">
+               value="{{ cfg.get('value_key') or '' }}"
+               placeholder="status or field.n + 1">
       </label>
       <label class="stack" id="logbook-literal-wrap" hidden>
-        Fixed text
-        <input name="value" type="text" class="input" id="logbook-value"
-               value="{% if 'value' in cfg and not cfg.get('value_key') %}{{ cfg.get('value') }}{% endif %}">
-      </label>
-    </div>
-
-    <div id="fp-counter" class="stack fp-params" hidden>
-      <label class="stack">
-        Operation
-        <select name="counter_op" class="input" id="counter-op">
-          <option value="increment" {% if cfg.get('op', 'increment') == 'increment' %}selected{% endif %}>Increment</option>
-          <option value="decrement" {% if cfg.get('op') == 'decrement' %}selected{% endif %}>Decrement</option>
-          <option value="reset" {% if cfg.get('op') == 'reset' %}selected{% endif %}>Reset</option>
-        </select>
-      </label>
-      <label class="stack" id="counter-delta-wrap">
         <span class="field-label">
-          Amount
+          Template
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Number or event field; default 1">?</button>
+                  data-tip="Text with {{ '{{ path }}' }} / maths; field = current stored value">?</button>
         </span>
-        <input name="delta" type="text" class="input"
-               value="{% if cfg.get('delta') is not none %}{{ cfg.get('delta') }}{% endif %}"
-               placeholder="1">
+        <input name="value" type="text" class="input" id="logbook-value"
+               value="{% if 'value' in cfg and not cfg.get('value_key') %}{{ cfg.get('value') }}{% endif %}"
+               placeholder="ok {{ '{{ status }}' }}">
       </label>
     </div>
 
     <div id="fp-value" class="stack fp-params" hidden>
       <label class="stack">
-        Value source
-        <select name="value_mode" class="input" id="value-mode">
-          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Fixed text</option>
-          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Value from event</option>
+        Operation
+        <select name="value_op" class="input" id="value-op">
+          <option value="increment" {% if cfg.get('op', 'increment') == 'increment' %}selected{% endif %}>Increment</option>
+          <option value="decrement" {% if cfg.get('op') == 'decrement' %}selected{% endif %}>Decrement</option>
+          <option value="set" {% if cfg.get('op') == 'set' %}selected{% endif %}>Set</option>
+          <option value="reset" {% if cfg.get('op') == 'reset' %}selected{% endif %}>Reset</option>
         </select>
       </label>
-      <label class="stack" id="value-literal-wrap">
-        Value
-        <input name="value" type="text" class="input" id="value-literal"
-               value="{% if not cfg.get('value_key') and 'value' in cfg %}{{ cfg.get('value') }}{% endif %}">
+      <label class="stack" id="value-delta-wrap">
+        <span class="field-label">
+          Amount
+          <button type="button" class="field-tip" tabindex="0"
+                  data-tip="Number, path, or maths; field = current value. For Set this is the new value; default 1 for Inc/Dec">?</button>
+        </span>
+        <input name="delta" type="text" class="input"
+               value="{% if cfg.get('delta') is not none %}{{ cfg.get('delta') }}{% endif %}"
+               placeholder="1 or field + qty">
       </label>
-      <label class="stack" id="value-key-wrap" hidden>
-        Value from event
-        <input name="value_key" type="text" class="input" id="value-value-key"
-               value="{{ cfg.get('value_key') or '' }}" placeholder="status">
+    </div>
+
+    <div id="fp-text" class="stack fp-params" hidden>
+      <label class="stack">
+        <span class="field-label">
+          Template
+          <button type="button" class="field-tip" tabindex="0"
+                  data-tip="Text with {{ '{{ path }}' }} / maths; field = current stored value">?</button>
+        </span>
+        <input name="value" type="text" class="input" id="text-template"
+               value="{{ cfg.get('value') if 'value' in cfg else '' }}"
+               placeholder="{{ '{{ field }}' }}-{{ '{{ status }}' }}">
       </label>
     </div>
 
     <div id="fp-toggle" class="stack fp-params" hidden>
       <label class="stack">
-        Value source
+        Mode
         <select name="toggle_mode" class="input" id="toggle-mode">
-          <option value="literal" {% if not cfg.get('value_key') %}selected{% endif %}>Fixed</option>
-          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Value from event</option>
+          <option value="literal" {% if cfg.get('op') != 'switch' %}selected{% endif %}>Fixed</option>
+          <option value="switch" {% if cfg.get('op') == 'switch' %}selected{% endif %}>Switch</option>
         </select>
       </label>
       <label class="stack" id="toggle-literal-wrap">
@@ -131,11 +137,6 @@
           <option value="true" {% if cfg.get('value') is true %}selected{% endif %}>On</option>
           <option value="false" {% if cfg.get('value') is not true %}selected{% endif %}>Off</option>
         </select>
-      </label>
-      <label class="stack" id="toggle-key-wrap" hidden>
-        Value from event
-        <input name="value_key" type="text" class="input" id="toggle-value-key"
-               value="{{ cfg.get('value_key') or '' }}" placeholder="ok">
       </label>
     </div>
   </div>
@@ -152,7 +153,7 @@
       <span class="field-label">
         Body
         <button type="button" class="field-tip" tabindex="0"
-                data-tip="Use {{ '{{source}}' }} and other {{ '{{field}}' }} placeholders from event data.">?</button>
+                data-tip="Use {{ '{{ path }}' }} or maths from event data.">?</button>
       </span>
       <input name="body" type="text" class="input"
              value="{{ cfg.get('body') or '' }}"
@@ -165,16 +166,153 @@
     </label>
   </div>
 
+  {# ── notify ── #}
+  <div id="panel-notify" class="stack action-panel" hidden>
+    <label class="stack">
+      Service *
+      <select name="service" class="input" id="notify-service">
+        {% for s in ['ntfy', 'gotify', 'discord'] %}
+          <option value="{{ s }}" {% if (cfg.get('service') or 'ntfy') == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="stack">
+      <span class="field-label">
+        Server URL *
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="ntfy/Gotify base URL (e.g. https://ntfy.sh). Discord: full webhook URL.">?</button>
+      </span>
+      <input name="server_url" type="url" class="input" id="notify-server-url"
+             value="{{ cfg.get('server_url') or '' }}" placeholder="https://ntfy.sh">
+    </label>
+    <label class="stack" id="notify-topic-wrap">
+      Topic *
+      <input name="topic" type="text" class="input" id="notify-topic"
+             value="{{ cfg.get('topic') or '' }}" placeholder="my-alerts">
+    </label>
+    <label class="stack">
+      Title
+      <input name="title" type="text" class="input"
+             value="{{ cfg.get('title') or '' }}"
+             placeholder="{{ '{{ status }}' }}">
+    </label>
+    <label class="stack">
+      <span class="field-label">
+        Body
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="Templates: {{ '{{ path }}' }} or maths from event data.">?</button>
+      </span>
+      <textarea name="body" class="input" rows="3"
+                placeholder="{{ '{{ message }}' }}">{{ cfg.get('body') or '' }}</textarea>
+    </label>
+    <label class="stack">
+      Priority
+      <input name="priority" type="number" class="input" min="0" max="10"
+             value="{{ cfg.get('priority') if cfg.get('priority') is not none else '' }}" placeholder="optional">
+    </label>
+    <label class="stack">
+      Authentication
+      <select name="auth_mode" class="input" id="notify-auth-mode">
+        <option value="none" {% if cfg.get('auth_mode') != 'bearer' %}selected{% endif %}>None</option>
+        <option value="bearer" {% if cfg.get('auth_mode') == 'bearer' %}selected{% endif %}>Bearer token</option>
+      </select>
+    </label>
+    <fieldset class="stack" id="notify-secrets" hidden>
+      <legend>Credentials</legend>
+      {% if is_edit and action.secret %}
+      <p class="text-muted">Leave blank to keep.</p>
+      {% endif %}
+      <label class="stack">
+        Token
+        <input name="secret_value" type="password" class="input" autocomplete="new-password" placeholder="Bearer token">
+      </label>
+    </fieldset>
+  </div>
+
+  {# ── local_script ── #}
+  <div id="panel-local-script" class="stack action-panel" hidden>
+    {% if not local_actions_enabled %}
+    <p class="text-muted">Local scripts are disabled until <code>PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1</code> is set. You can still save this action.</p>
+    {% endif %}
+    <label class="stack">
+      Mode
+      <select name="script_mode" class="input" id="script-mode">
+        <option value="command" {% if not cfg.get('argv') %}selected{% endif %}>Shell one-liner</option>
+        <option value="argv" {% if cfg.get('argv') %}selected{% endif %}>Script path + args</option>
+      </select>
+    </label>
+    <label class="stack" id="script-command-wrap">
+      <span class="field-label">
+        Command *
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="Runs via the shell. Templates: {{ '{{ path }}' }}.">?</button>
+      </span>
+      <input name="command" type="text" class="input" id="script-command"
+             value="{{ cfg.get('command') or '' }}"
+             placeholder="echo {{ '{{ status }}' }}">
+    </label>
+    <label class="stack" id="script-argv-wrap" hidden>
+      <span class="field-label">
+        Path and args (one per line) *
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="First line is the executable. Later lines are args (templated). Prefer this over shell.">?</button>
+      </span>
+      <textarea name="argv_text" class="input" id="script-argv" rows="4"
+                placeholder="/usr/local/bin/hook.sh&#10;{{ '{{ status }}' }}">{% if cfg.get('argv') %}{{ cfg.get('argv') | join('\n') }}{% endif %}</textarea>
+    </label>
+    <label class="stack">
+      Timeout (seconds)
+      <input name="timeout_seconds" type="number" class="input" min="1" max="120"
+             value="{{ cfg.get('timeout_seconds') or '' }}" placeholder="30">
+    </label>
+  </div>
+
   {# ── http_forward ── #}
   <div id="panel-http-forward" class="stack action-panel" hidden>
     <label class="stack">
-      URL *
+      <span class="field-label">
+        Preset
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="Fills URL, body mode, and headers for common services. Edit freely afterward.">?</button>
+      </span>
+      <select name="preset" class="input" id="http-preset">
+        <option value="none" {% if not cfg.get('preset') or cfg.get('preset') == 'none' %}selected{% endif %}>None (custom)</option>
+        <option value="ntfy" {% if cfg.get('preset') == 'ntfy' %}selected{% endif %}>ntfy</option>
+        <option value="gotify" {% if cfg.get('preset') == 'gotify' %}selected{% endif %}>Gotify</option>
+        <option value="discord" {% if cfg.get('preset') == 'discord' %}selected{% endif %}>Discord webhook</option>
+      </select>
+    </label>
+    <div id="http-preset-helpers" class="stack" hidden>
+      <label class="stack">
+        Base / webhook URL
+        <input type="url" class="input" id="preset-base-url" placeholder="https://ntfy.sh or Discord webhook">
+      </label>
+      <label class="stack" id="preset-topic-wrap">
+        Topic
+        <input type="text" class="input" id="preset-topic" placeholder="my-alerts">
+      </label>
+      <label class="stack">
+        Title template
+        <input type="text" class="input" id="preset-title" placeholder="{{ '{{ status }}' }}">
+      </label>
+      <label class="stack">
+        Body template
+        <input type="text" class="input" id="preset-body" placeholder="{{ '{{ message }}' }}">
+      </label>
+      <button type="button" class="btn btn--sm" id="preset-apply">Apply preset to fields below</button>
+    </div>
+    <label class="stack">
+      <span class="field-label">
+        URL *
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="Supports {{ '{{ path }}' }} / maths templates.">?</button>
+      </span>
       <input name="url" type="url" class="input" id="http-url"
-             value="{{ cfg.get('url') or '' }}" placeholder="https://example.com/hook" required>
+             value="{{ cfg.get('url') or '' }}" placeholder="https://example.com/hook">
     </label>
     <label class="stack">
       Method
-      <select name="method" class="input">
+      <select name="method" class="input" id="http-method">
         {% for m in ['POST', 'PUT', 'PATCH', 'GET'] %}
           <option value="{{ m }}" {% if (cfg.get('method') or 'POST') == m %}selected{% endif %}>{{ m }}</option>
         {% endfor %}
@@ -193,6 +331,7 @@
         <select name="body_mode" class="input" id="http-body-mode">
           <option value="auto" {% if not cfg.get('body_mode') or cfg.get('body_mode') == 'auto' %}selected{% endif %}>Full event (default)</option>
           <option value="custom" {% if cfg.get('body_mode') == 'custom' %}selected{% endif %}>Custom JSON</option>
+          <option value="text" {% if cfg.get('body_mode') == 'text' %}selected{% endif %}>Plain text</option>
         </select>
       </label>
       <label class="stack" id="http-body-custom-wrap" hidden>
@@ -200,16 +339,35 @@
           Custom JSON body
           <button type="button" class="field-tip" tabindex="0"
                   aria-label="About body placeholders"
-                  data-tip="Use {{ '{{source}}' }} and dotted paths like {{ '{{_poll.attempts}}' }} to insert event values.">?</button>
+                  data-tip="Full request body. Use {{ '{{ path }}' }} or maths in string values.">?</button>
         </span>
-        <textarea name="custom_body" class="input" id="http-custom-body" rows="6" placeholder='&#123;&#10;  "source": "&#123;&#123; source &#125;&#125;",&#10;  "data": "&#123;&#123; _poll.attempts &#125;&#125;"&#10;&#125;'>{{ cfg.get('custom_body') or '' }}</textarea>
+        <textarea name="custom_body" class="input" id="http-custom-body" rows="6" placeholder='&#123;&#10;  "source": "&#123;&#123; source &#125;&#125;"&#10;&#125;'>{{ custom_body_text or '' }}</textarea>
+      </label>
+      <label class="stack" id="http-body-text-wrap" hidden>
+        <span class="field-label">
+          Text body
+          <button type="button" class="field-tip" tabindex="0"
+                  data-tip="Plain text with {{ '{{ path }}' }} / maths.">?</button>
+        </span>
+        <textarea name="body_text" class="input" id="http-body-text" rows="3"
+                  placeholder="{{ '{{ message }}' }}">{{ cfg.get('body_text') or '' }}</textarea>
       </label>
     </fieldset>
 
     <label class="stack">
+      <span class="field-label">
+        Extra headers
+        <button type="button" class="field-tip" tabindex="0"
+                data-tip="One per line: Key: Value. Values support {{ '{{ path }}' }} templates.">?</button>
+      </span>
+      <textarea name="headers_text" class="input" id="http-headers" rows="3"
+                placeholder="Title: {{ '{{ status }}' }}&#10;Priority: 3">{{ headers_text }}</textarea>
+    </label>
+
+    <label class="stack">
       Authentication
       <select name="auth_mode" class="input" id="auth-mode">
-        <option value="none" {% if cfg.get('auth_mode') == 'none' %}selected{% elif not cfg.get('auth_mode') %}selected{% else %}selected{% endif %}>None</option>
+        <option value="none" {% if cfg.get('auth_mode') == 'none' or not cfg.get('auth_mode') %}selected{% endif %}>None</option>
         <option value="bearer" {% if cfg.get('auth_mode') == 'bearer' %}selected{% endif %}>Bearer token (Authorization header)</option>
         <option value="key_secret" {% if cfg.get('auth_mode') == 'key_secret' %}selected{% endif %}>API key + secret (custom headers)</option>
       </select>
@@ -224,6 +382,16 @@
         Value
         <input name="secret_value" type="password" class="input" autocomplete="new-password" placeholder="{{ 'Bearer token' if not is_edit or cfg.get('auth_mode') == 'bearer' else 'API key value' }}">
       </label>
+      <div id="bearer-auth-custom-wrap" class="stack" hidden>
+        <label class="stack">
+          Auth header
+          <input name="auth_header" type="text" class="input" value="{{ cfg.get('auth_header') or 'Authorization' }}">
+        </label>
+        <label class="stack">
+          Auth prefix
+          <input name="auth_prefix" type="text" class="input" value="{{ cfg.get('auth_prefix') or 'Bearer ' }}">
+        </label>
+      </div>
       <div id="secret-secondary-wrap" class="stack" hidden>
         {% if is_edit and action.secret_2 %}
         <p class="text-muted">Leave values blank to keep.</p>
@@ -244,6 +412,27 @@
         </label>
       </div>
     </fieldset>
+
+    <fieldset class="stack" id="http-signing">
+      <legend>Request signing</legend>
+      <label class="stack">
+        Mode
+        <select name="signing_mode" class="input" id="signing-mode">
+          <option value="none" {% if cfg.get('signing_mode') == 'none' or not cfg.get('signing_mode') %}selected{% endif %}>None</option>
+          <option value="hmac_sha256" {% if cfg.get('signing_mode') == 'hmac_sha256' %}selected{% endif %}>HMAC-SHA256</option>
+        </select>
+      </label>
+      <div id="signing-headers" class="stack" hidden>
+        <label class="stack">
+          Signature header
+          <input name="signing_signature_header" type="text" class="input" value="{{ cfg.get('signing_signature_header') or 'X-Call-Signature' }}">
+        </label>
+        <label class="stack">
+          Timestamp header
+          <input name="signing_timestamp_header" type="text" class="input" value="{{ cfg.get('signing_timestamp_header') or 'X-Call-Timestamp' }}">
+        </label>
+      </div>
+    </fieldset>
   </div>
 
   <div class="flex items-center gap">
@@ -258,19 +447,25 @@
   var panels = {
     field_push: document.getElementById("panel-field-push"),
     web_push: document.getElementById("panel-web-push"),
+    notify: document.getElementById("panel-notify"),
+    local_script: document.getElementById("panel-local-script"),
     http_forward: document.getElementById("panel-http-forward")
   };
   var fpPanels = {
     logbook: document.getElementById("fp-logbook"),
-    counter: document.getElementById("fp-counter"),
     value: document.getElementById("fp-value"),
+    text: document.getElementById("fp-text"),
     toggle: document.getElementById("fp-toggle")
   };
   var authMode = document.getElementById("auth-mode");
+  var bearerCustomWrap = document.getElementById("bearer-auth-custom-wrap");
   var secretSecondary = document.getElementById("secret-secondary-wrap");
   var httpSecrets = document.getElementById("http-secrets");
+  var signingMode = document.getElementById("signing-mode");
+  var signingHeaders = document.getElementById("signing-headers");
   var httpUrl = document.getElementById("http-url");
-  var form = document.getElementById("action-form");
+  var notifyAuth = document.getElementById("notify-auth-mode");
+  var notifySecrets = document.getElementById("notify-secrets");
 
   function selectedFieldType() {
     var opt = fieldSel && fieldSel.options[fieldSel.selectedIndex];
@@ -283,7 +478,6 @@
     Object.keys(fpPanels).forEach(function (k) {
       if (fpPanels[k]) fpPanels[k].hidden = k !== ft;
     });
-    // Disable unused nested inputs so only active panel submits conflicting names
     Object.keys(fpPanels).forEach(function (k) {
       var el = fpPanels[k];
       if (!el) return;
@@ -292,9 +486,8 @@
       });
     });
     syncLogbookMode();
-    syncValueMode();
     syncToggleMode();
-    syncCounterOp();
+    syncValueOp();
   }
 
   function syncLogbookMode() {
@@ -306,25 +499,15 @@
     keyW.hidden = m !== "key";
     litW.hidden = m !== "literal";
   }
-  function syncValueMode() {
-    var mode = document.getElementById("value-mode");
-    var litW = document.getElementById("value-literal-wrap");
-    var keyW = document.getElementById("value-key-wrap");
-    if (!mode) return;
-    litW.hidden = mode.value !== "literal";
-    keyW.hidden = mode.value !== "key";
-  }
   function syncToggleMode() {
     var mode = document.getElementById("toggle-mode");
     var litW = document.getElementById("toggle-literal-wrap");
-    var keyW = document.getElementById("toggle-key-wrap");
-    if (!mode) return;
+    if (!mode || !litW) return;
     litW.hidden = mode.value !== "literal";
-    keyW.hidden = mode.value !== "key";
   }
-  function syncCounterOp() {
-    var op = document.getElementById("counter-op");
-    var delta = document.getElementById("counter-delta-wrap");
+  function syncValueOp() {
+    var op = document.getElementById("value-op");
+    var delta = document.getElementById("value-delta-wrap");
     if (!op || !delta) return;
     delta.hidden = op.value === "reset";
   }
@@ -333,15 +516,87 @@
     var m = authMode.value;
     httpSecrets.hidden = m === "none";
     secretSecondary.hidden = m !== "key_secret";
-    // Update placeholder on the value input to hint what goes in
+    if (bearerCustomWrap) bearerCustomWrap.hidden = m !== "bearer";
     var valInput = httpSecrets.querySelector("input[name='secret_value']");
     if (valInput) valInput.placeholder = m === "key_secret" ? "API key value" : "Bearer token";
   }
+  function syncSigning() {
+    if (!signingMode || !signingHeaders) return;
+    signingHeaders.hidden = signingMode.value !== "hmac_sha256";
+  }
   function syncBodyMode() {
     var mode = document.getElementById("http-body-mode");
-    var wrap = document.getElementById("http-body-custom-wrap");
-    if (!mode || !wrap) return;
-    wrap.hidden = mode.value !== "custom";
+    var custom = document.getElementById("http-body-custom-wrap");
+    var text = document.getElementById("http-body-text-wrap");
+    if (!mode) return;
+    if (custom) custom.hidden = mode.value !== "custom";
+    if (text) text.hidden = mode.value !== "text";
+  }
+  function syncNotify() {
+    var svc = document.getElementById("notify-service");
+    var topic = document.getElementById("notify-topic-wrap");
+    if (svc && topic) topic.hidden = svc.value !== "ntfy";
+    if (notifyAuth && notifySecrets) {
+      notifySecrets.hidden = notifyAuth.value !== "bearer";
+    }
+  }
+  function syncScriptMode() {
+    var mode = document.getElementById("script-mode");
+    var cmd = document.getElementById("script-command-wrap");
+    var argv = document.getElementById("script-argv-wrap");
+    if (!mode) return;
+    if (cmd) cmd.hidden = mode.value !== "command";
+    if (argv) argv.hidden = mode.value !== "argv";
+  }
+  function syncPresetUi() {
+    var preset = document.getElementById("http-preset");
+    var helpers = document.getElementById("http-preset-helpers");
+    var topicWrap = document.getElementById("preset-topic-wrap");
+    if (!preset || !helpers) return;
+    var p = preset.value;
+    helpers.hidden = p === "none";
+    if (topicWrap) topicWrap.hidden = p !== "ntfy";
+  }
+  function applyPreset() {
+    var preset = document.getElementById("http-preset");
+    if (!preset || preset.value === "none") return;
+    var base = (document.getElementById("preset-base-url").value || "").replace(/\/$/, "");
+    var topic = (document.getElementById("preset-topic").value || "").replace(/^\/|\/$/g, "");
+    var title = document.getElementById("preset-title").value || "";
+    var body = document.getElementById("preset-body").value || "";
+    var urlEl = document.getElementById("http-url");
+    var methodEl = document.getElementById("http-method");
+    var bodyMode = document.getElementById("http-body-mode");
+    var customBody = document.getElementById("http-custom-body");
+    var bodyText = document.getElementById("http-body-text");
+    var headers = document.getElementById("http-headers");
+    if (methodEl) methodEl.value = "POST";
+    if (preset.value === "ntfy") {
+      if (urlEl) urlEl.value = base && topic ? base + "/" + topic : base;
+      if (bodyMode) bodyMode.value = "text";
+      if (bodyText) bodyText.value = body;
+      var h = [];
+      if (title) h.push("Title: " + title);
+      if (headers) headers.value = h.join("\n");
+    } else if (preset.value === "gotify") {
+      if (urlEl) urlEl.value = base ? base + "/message" : "";
+      if (bodyMode) bodyMode.value = "custom";
+      var payload = { message: body || title || "Para-Scope" };
+      if (title) payload.title = title;
+      if (customBody) customBody.value = JSON.stringify(payload, null, 2);
+      if (headers) headers.value = "";
+      if (authMode) authMode.value = "bearer";
+    } else if (preset.value === "discord") {
+      if (urlEl) urlEl.value = base;
+      if (bodyMode) bodyMode.value = "custom";
+      var content = body || title || "Para-Scope";
+      if (title && body && title !== body) content = "**" + title + "**\n" + body;
+      else if (title && !body) content = title;
+      if (customBody) customBody.value = JSON.stringify({ content: content }, null, 2);
+      if (headers) headers.value = "";
+    }
+    syncBodyMode();
+    syncAuth();
   }
   function sync() {
     var t = typeSel.value;
@@ -349,35 +604,44 @@
       if (panels[k]) panels[k].hidden = k !== t;
     });
     if (httpUrl) httpUrl.required = t === "http_forward";
-    // Disable inputs in hidden panels so they don't submit
     Object.keys(panels).forEach(function (k) {
       var el = panels[k];
       if (!el) return;
       Array.prototype.forEach.call(el.querySelectorAll("input, select, textarea"), function (inp) {
         if (k !== t) inp.disabled = true;
         else if (!inp.closest(".fp-params") || !inp.closest(".fp-params").hidden) {
-          // re-enable panel, then field-param sync will refine
           inp.disabled = false;
         }
       });
     });
     if (t === "field_push") syncFieldParams();
-    if (t === "http_forward") { syncAuth(); syncBodyMode(); }
+    if (t === "http_forward") { syncAuth(); syncBodyMode(); syncSigning(); syncPresetUi(); }
+    if (t === "notify") syncNotify();
+    if (t === "local_script") syncScriptMode();
   }
 
   if (typeSel) typeSel.addEventListener("change", sync);
   if (fieldSel) fieldSel.addEventListener("change", syncFieldParams);
   var lm = document.getElementById("logbook-mode");
   if (lm) lm.addEventListener("change", syncLogbookMode);
-  var vm = document.getElementById("value-mode");
-  if (vm) vm.addEventListener("change", syncValueMode);
   var tm = document.getElementById("toggle-mode");
   if (tm) tm.addEventListener("change", syncToggleMode);
-  var co = document.getElementById("counter-op");
-  if (co) co.addEventListener("change", syncCounterOp);
+  var vo = document.getElementById("value-op");
+  if (vo) vo.addEventListener("change", syncValueOp);
   if (authMode) authMode.addEventListener("change", syncAuth);
+  if (signingMode) signingMode.addEventListener("change", syncSigning);
   var bm = document.getElementById("http-body-mode");
   if (bm) bm.addEventListener("change", syncBodyMode);
+  var ns = document.getElementById("notify-service");
+  if (ns) ns.addEventListener("change", syncNotify);
+  if (notifyAuth) notifyAuth.addEventListener("change", syncNotify);
+  var sm = document.getElementById("script-mode");
+  if (sm) sm.addEventListener("change", syncScriptMode);
+  var hp = document.getElementById("http-preset");
+  if (hp) hp.addEventListener("change", syncPresetUi);
+  var pa = document.getElementById("preset-apply");
+  if (pa) pa.addEventListener("click", applyPreset);
   sync();
+  syncSigning();
 })();
 </script>

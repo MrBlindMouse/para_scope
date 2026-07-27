@@ -31,10 +31,10 @@
       <p>Configure everything under <a href="/config/pipeline">Pipeline</a> as a chain per source:</p>
       <p><strong>Source → Events → Rules → Actions</strong></p>
       <ol class="stack help__list help__list--ordered">
-        <li><strong>Source</strong> — a webhook receiver or a poll that checks a URL on a schedule.</li>
+        <li><strong>Source</strong> — a webhook receiver or a poll that runs a typed poller on a schedule.</li>
         <li><strong>Events</strong> — named types for that source (e.g. <code>status.changed</code>, <code>on_success</code>).</li>
         <li><strong>Rules</strong> — which events (and optional conditions) should fire actions.</li>
-        <li><strong>Actions</strong> — update a Field, call a URL, or send a browser notification when the rule matches.</li>
+        <li><strong>Actions</strong> — update a Field, notify (ntfy/Gotify/Discord), call a URL, send a browser notification, or (when enabled) run a local script when the rule matches.</li>
       </ol>
       <p class="text-muted">
         Typical setup: add a source, define event types, create a rule for those types,
@@ -60,16 +60,16 @@
             <td>Growing list of entries with a max size. Good for recent activity.</td>
           </tr>
           <tr>
-            <td>Counter</td>
-            <td>A number — actions can add, subtract (default by 1), or reset.</td>
+            <td>Value</td>
+            <td>A number — actions can add, subtract, set, or reset.</td>
           </tr>
           <tr>
-            <td>Value</td>
-            <td>A single text value.</td>
+            <td>Text</td>
+            <td>A single text value set from a template.</td>
           </tr>
           <tr>
             <td>Toggle</td>
-            <td>On/off state.</td>
+            <td>On/off state — actions can set Fixed or Switch.</td>
           </tr>
         </tbody>
       </table>
@@ -198,18 +198,70 @@
         <tbody>
           <tr>
             <td>Update field</td>
-            <td>Writes to a <a href="#fields">Field</a> (append, set, count, or toggle).</td>
+            <td>Writes to a <a href="#fields">Field</a> (append, set, count, or toggle). Skips when the new value matches what is already stored.</td>
+          </tr>
+          <tr>
+            <td>Notify</td>
+            <td>Sends a message via ntfy, Gotify, or Discord (title/body templates). Thin wrapper over Call URL.</td>
           </tr>
           <tr>
             <td>Call URL</td>
-            <td>Calls a URL with optional credentials.</td>
+            <td>
+              Calls a URL with optional auth, headers, templated body (JSON or plain text), presets, and optional HMAC signing.
+              See <a href="#call-url-auth">auth &amp; signing</a> below.
+            </td>
           </tr>
           <tr>
             <td>Browser notification</td>
             <td>Sends a browser notification. Title and body can include placeholders like <code>{{ '{{source}}' }}</code>.</td>
           </tr>
+          <tr>
+            <td>Local script</td>
+            <td>
+              Runs a shell one-liner or argv list on this host.
+              Requires <code>PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1</code>; optional path allowlist via <code>PARA_SCOPE_LOCAL_ACTION_ALLOWLIST</code>.
+            </td>
+          </tr>
         </tbody>
       </table>
+
+      <h3 id="call-url-auth">Call URL — auth &amp; signing</h3>
+      <p>When the action runs, Para-Scope can authenticate and/or sign the outbound request.</p>
+      <table class="table">
+        <thead>
+          <tr><th>Auth mode</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>None</td>
+            <td>No credential headers.</td>
+          </tr>
+          <tr>
+            <td>Bearer token</td>
+            <td>
+              Sends the stored secret in a header (default <code>Authorization: Bearer …</code>).
+              Header name and prefix are configurable.
+            </td>
+          </tr>
+          <tr>
+            <td>API key + secret</td>
+            <td>Sends two custom headers (key and secret). Useful for APIs that don’t use Bearer.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Optionally enable <strong>HMAC-SHA256 signing</strong>. Para-Scope signs
+        <code>METHOD\nURL\ntimestamp\nbody</code> (compact JSON with sorted keys for POST/PUT/PATCH;
+        empty body for GET/DELETE) and adds:
+      </p>
+      <ul class="stack help__list">
+        <li><code>X-Call-Signature</code> — hex digest (header name configurable)</li>
+        <li><code>X-Call-Timestamp</code> — unix seconds (header name configurable)</li>
+      </ul>
+      <p class="text-muted">
+        Signing uses the action’s secret (or the second secret when using API key + secret).
+        The destination verifies the signature the same way.
+      </p>
     </div>
   </section>
 
@@ -220,20 +272,102 @@
       <ul class="stack help__list">
         <li>Once you’ve added any event type (except <code>always</code>), senders must include a matching type.</li>
         <li>Add an event named <code>always</code> to also run on every delivery (senders don’t send <code>always</code> — Para-Scope emits it).</li>
-        <li>Optional: set a webhook secret so only trusted senders are accepted.</li>
+        <li>Choose a <strong>Webhook verification</strong> mode and, when needed, a credential in the Webhook secret field.</li>
       </ul>
+      <p>
+        Accepted deliveries return <strong>202</strong>. Discord’s endpoint handshake (PING) returns <strong>200</strong>.
+        PayPal accepts any 2xx, so 202 is fine.
+      </p>
       <p>
         On the Pipeline page, use <strong>Recent</strong> for the last few events,
         and <strong>Sample</strong> on an event type for that type’s latest payload
         (handy when writing rules).
         Each source keeps at most 500 events; older ones are removed automatically.
       </p>
+
+      <h3>Verification modes</h3>
+      <table class="table">
+        <thead>
+          <tr><th>Mode</th><th>Credential</th><th>How it verifies</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Shared-secret HMAC</td>
+            <td>Shared secret (optional)</td>
+            <td>
+              With a secret: requires <code>X-Webhook-Timestamp</code> and <code>X-Webhook-Signature</code>
+              (HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>). Without a secret: unsigned traffic is allowed (local/dev).
+            </td>
+          </tr>
+          <tr>
+            <td>Stripe</td>
+            <td>Stripe signing secret</td>
+            <td><code>Stripe-Signature</code> header (<code>t=…,v1=…</code>), HMAC over <code>{t}.{body}</code>.</td>
+          </tr>
+          <tr>
+            <td>GitHub / Gitea</td>
+            <td>Webhook secret</td>
+            <td><code>X-Hub-Signature-256</code> = HMAC-SHA256 of the raw body (same scheme for both).</td>
+          </tr>
+          <tr>
+            <td>Slack</td>
+            <td>Slack signing secret</td>
+            <td>
+              <code>X-Slack-Signature</code> + <code>X-Slack-Request-Timestamp</code>;
+              HMAC over <code>v0:{timestamp}:{body}</code>.
+            </td>
+          </tr>
+          <tr>
+            <td>Discord</td>
+            <td>App <strong>public key</strong> (hex)</td>
+            <td>
+              Ed25519 over <code>{timestamp}{raw_body}</code> using
+              <code>X-Signature-Ed25519</code> and <code>X-Signature-Timestamp</code>.
+            </td>
+          </tr>
+          <tr>
+            <td>PayPal</td>
+            <td>Client secret (+ webhook ID &amp; client ID in source config)</td>
+            <td>
+              Calls PayPal’s <code>verify-webhook-signature</code> API with the delivery headers
+              and event body (sandbox or live).
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Signed providers also reject duplicate deliveries (replay protection) within a short window.
+      </p>
+
+      <h3>Discord notes</h3>
+      <ul class="stack help__list">
+        <li>Paste the Discord application <strong>public key</strong> into the Webhook secret field (not a shared HMAC secret).</li>
+        <li>Discord’s PING (<code>type: 1</code>) is answered with <code>{"type": 1}</code> and never becomes an event.</li>
+        <li>
+          Other interactions map to event types:
+          <code>application_command</code>, <code>message_component</code>,
+          <code>application_command_autocomplete</code>, <code>modal_submit</code>.
+          Register those names on the source to match slash commands, buttons, and modals.
+        </li>
+      </ul>
+
+      <h3>PayPal notes</h3>
+      <ul class="stack help__list">
+        <li>Set webhook ID, client ID, and environment (sandbox/live) on the source.</li>
+        <li>Store the PayPal <strong>client secret</strong> in the Webhook secret field.</li>
+        <li>Register event types that match PayPal’s <code>event_type</code> values (e.g. <code>PAYMENT.SALE.COMPLETED</code>).</li>
+      </ul>
+
       <details class="stack">
-        <summary>For senders</summary>
+        <summary>For senders (generic HMAC)</summary>
         <ul class="stack help__list">
           <li>Send <code>POST /webhook/{slug}</code> with a JSON body.</li>
           <li>Type via the <code>X-Event-Type</code> header, or body field <code>event_type</code> / <code>type</code>.</li>
-          <li>With a secret: also send <code>X-Webhook-Timestamp</code> (unix seconds) and <code>X-Webhook-Signature</code>. Sign the request so Para-Scope can verify it: HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>.</li>
+          <li>
+            With a secret: also send <code>X-Webhook-Timestamp</code> (unix seconds) and
+            <code>X-Webhook-Signature</code>. Sign with HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>
+            (hex; optional <code>sha256=</code> prefix).
+          </li>
         </ul>
       </details>
     </div>
@@ -243,18 +377,110 @@
     <div class="card__header"><h2>Polling</h2></div>
     <div class="card__body stack">
       <p>
-        <strong>Poll</strong> sources check a URL on a schedule (interval or cron) and feed the same pipeline.
-        Set the schedule when you create or edit the source: method, URL, timeout, and optional retries.
+        <strong>Poll</strong> sources run one poll subtype on a schedule (interval or cron) and feed the same pipeline.
+        Create or edit the source, choose a category, then choose the subtype and fill in its typed fields.
       </p>
+      <table class="table">
+        <thead>
+          <tr><th>Category</th><th>Examples</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>URL / HTTP</td>
+            <td>GET, POST, PUT, DELETE</td>
+          </tr>
+          <tr>
+            <td>System</td>
+            <td>Host snapshot, failed systemd units, recent journal errors</td>
+          </tr>
+          <tr>
+            <td>Connectivity / Reachability</td>
+            <td>TCP connect, ICMP ping, DNS resolve, TLS cert expiry</td>
+          </tr>
+          <tr>
+            <td>Storage / Filesystem</td>
+            <td>Free space, backup age</td>
+          </tr>
+          <tr>
+            <td>Application / Domain</td>
+            <td>Database health, git status, log pattern watch, Home Assistant snapshot, local LLM status</td>
+          </tr>
+          <tr>
+            <td>External</td>
+            <td>RSS / Atom change, IMAP unread, public endpoint status, domain expiry</td>
+          </tr>
+        </tbody>
+      </table>
+      <details class="stack">
+        <summary>Current shipped poll subtypes</summary>
+        <ul class="stack help__list">
+          <li><strong>URL / HTTP</strong> — <code>http_get</code>, <code>http_post</code>, <code>http_put</code>, <code>http_delete</code></li>
+          <li><strong>System</strong> — <code>system_snapshot</code>, <code>systemd_failed_units</code>, <code>journal_recent_errors</code></li>
+          <li><strong>Connectivity / Reachability</strong> — <code>tcp_connect</code>, <code>icmp_ping</code>, <code>dns_resolve</code>, <code>cert_expiry</code></li>
+          <li><strong>Storage / Filesystem</strong> — <code>disk_free_space</code>, <code>backup_age</code></li>
+          <li><strong>Application / Domain</strong> — <code>database_health</code>, <code>git_status</code>, <code>log_pattern_watch</code>, <code>home_assistant_snapshot</code>, <code>local_llm_http_status</code></li>
+          <li><strong>External</strong> — <code>rss_atom_change</code>, <code>public_http_status</code>, <code>imap_unread</code>, <code>domain_expiry</code></li>
+        </ul>
+      </details>
       <p>
-        A successful poll emits <code>on_success</code> (or another type you name in Extra settings).
+        A successful poll emits <code>on_success</code> by default, or another success type if that subtype exposes one.
         Failures emit <code>on_failure</code>.
         Add an event named <code>always</code> to also fire on every run.
       </p>
+
+      <h3>HTTP poll authentication</h3>
       <p>
-        Optional <strong>Extra settings</strong> (JSON) can pick which part of the response to keep,
-        a custom event name, headers, query, body, and auth for authenticated polls.
+        URL / HTTP pollers can attach credentials from an encrypted poll secret.
+        Choose an auth mode on the schedule:
       </p>
+      <table class="table">
+        <thead>
+          <tr><th>Auth mode</th><th>Secret format</th><th>What happens</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Bearer token</td>
+            <td>Raw token</td>
+            <td>
+              Sent as <code>Authorization: Bearer …</code> by default.
+              Header name and prefix are configurable.
+            </td>
+          </tr>
+          <tr>
+            <td>HTTP Basic</td>
+            <td><code>username:password</code></td>
+            <td>Standard Basic auth header.</td>
+          </tr>
+          <tr>
+            <td>OAuth2 client credentials</td>
+            <td><code>client_id:client_secret</code></td>
+            <td>
+              Fetches an access token from the token URL (optional scope),
+              caches it in-process, then sends it as a Bearer token.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p>
+        Poll-specific secrets are stored encrypted.
+        Some pollers also depend on host commands being present, and their failures will show up as poll errors.
+      </p>
+      <p>
+        Use <strong>Run now</strong> on a poll source to fire it immediately without waiting for the next interval or cron tick.
+      </p>
+      <p class="text-muted">
+        Planned / future integrations are documented separately in the design docs. They are not implied to be available just because a category exists.
+      </p>
+      <details class="stack">
+        <summary>Planned / future poll integrations</summary>
+        <ul class="stack help__list">
+          <li>Container / runtime checks such as Docker snapshots</li>
+          <li>Fuller systemd snapshots beyond failed-unit summaries</li>
+          <li>SMART, ZFS, and Btrfs health checks</li>
+          <li>MQTT / local broker checks</li>
+          <li>Deeper queue integrations for Redis, RQ, and Celery</li>
+        </ul>
+      </details>
     </div>
   </section>
 
@@ -274,9 +500,16 @@
     <div class="card__header"><h2>Secrets</h2></div>
     <div class="card__body stack">
       <p>
-        On Call URL actions you can attach credentials (Bearer token or Key+Secret)
-        in the action dialog. Values are stored encrypted.
-        Webhook source secrets and poll auth secrets use the same store.
+        Credentials are stored encrypted (Fernet, keyed from <code>PARA_SCOPE_SECRET_KEY</code>).
+        The same store covers:
+      </p>
+      <ul class="stack help__list">
+        <li><strong>Webhook sources</strong> — shared HMAC secrets, Stripe/Slack/GitHub signing secrets, Discord public key, PayPal client secret</li>
+        <li><strong>HTTP polls</strong> — bearer tokens, <code>username:password</code>, or <code>client_id:client_secret</code></li>
+        <li><strong>Call URL actions</strong> — bearer tokens, API key/secret pairs, and optional HMAC signing keys</li>
+      </ul>
+      <p class="text-muted">
+        Secrets are never shown again after save. Replace by entering a new value, or clear the webhook secret from the source edit dialog.
       </p>
     </div>
   </section>

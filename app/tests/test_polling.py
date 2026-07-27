@@ -132,6 +132,223 @@ def test_http_poll_requires_url(db, source):
         http_poll(schedule, db)
 
 
+def test_http_poll_basic_auth_header(db, source):
+    from app.pollers import http_poll
+    from app.models import Secret
+    from app.security import encrypt_secret
+    import base64
+
+    sec = Secret(
+        scoped_to_type="schedule",
+        scoped_to_id=source.id,
+        encrypted_value=encrypt_secret("user:pass"),
+    )
+    db.add(sec)
+    db.commit()
+    db.refresh(sec)
+
+    schedule = _make_schedule(
+        db,
+        source,
+        handler_params={
+            "auth_mode": "basic",
+            "auth_secret_id": sec.id,
+        },
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"payload": {"ok": True}}
+    mock_response.text = '{"payload": {"ok": true}}'
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.request.return_value = mock_response
+
+    with patch("app.pollers.httpx.Client", return_value=mock_client):
+        result = http_poll(schedule, db)
+
+    assert result["ok"] is True
+    call_kwargs = mock_client.request.call_args.kwargs
+    expected_b64 = base64.b64encode(b"user:pass").decode()
+    assert call_kwargs["headers"]["Authorization"] == f"Basic {expected_b64}"
+
+
+def test_http_poll_oauth_client_credentials_injects_bearer(db, source):
+    from app.pollers import http_poll
+    from app.models import Secret
+    from app.security import encrypt_secret
+
+    sec = Secret(
+        scoped_to_type="schedule",
+        scoped_to_id=source.id,
+        encrypted_value=encrypt_secret("client_id:client_secret"),
+    )
+    db.add(sec)
+    db.commit()
+    db.refresh(sec)
+
+    schedule = _make_schedule(
+        db,
+        source,
+        handler_params={
+            "auth_mode": "oauth_client_credentials",
+            "auth_secret_id": sec.id,
+            "token_url": "https://auth.example.com/oauth2/token",
+            "scope": "read",
+            "json_path": "payload",
+        },
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"payload": {"ok": True}}
+    mock_response.text = '{"payload": {"ok": true}}'
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.request.return_value = mock_response
+
+    with patch("app.pollers._fetch_oauth2_access_token", return_value=("token123", 3600)) as fetch_mock:
+        with patch("app.pollers.httpx.Client", return_value=mock_client):
+            result1 = http_poll(schedule, db)
+            result2 = http_poll(schedule, db)
+
+    assert result1["ok"] is True
+    assert result2["ok"] is True
+    fetch_mock.assert_called_once()
+    first_call_headers = mock_client.request.call_args_list[0].kwargs["headers"]
+    assert first_call_headers["Authorization"] == "Bearer token123"
+
+
+# ── registry + typed handlers ───────────────────────────────────────────────
+
+def test_poller_registry_exposes_categories_and_specs():
+    from app.pollers import get_poller_categories, get_poller_spec, get_poller_types
+
+    poller_types = get_poller_types()
+    assert "http_get" in poller_types
+    assert "system_snapshot" in poller_types
+    assert "public_http_status" in poller_types
+
+    spec = get_poller_spec("log_pattern_watch")
+    assert spec is not None
+    assert spec["category"] == "application"
+    assert any(field["name"] == "patterns" for field in spec["fields"])
+
+    categories = {item["slug"] for item in get_poller_categories()}
+    assert {"url", "system", "connectivity", "storage", "application", "external"} <= categories
+
+
+def test_parse_poller_form_http_schedule():
+    from app.pollers import parse_poller_form
+
+    form = {
+        "handler_type": "http_get",
+        "handler_url": "https://example.com/data",
+        "event_type": "status.ok",
+        "json_path": "payload.items",
+        "headers": '{"X-Test": "1"}',
+        "query": '{"page": 1}',
+        "body": '{"enabled": true}',
+        "auth_header": "Authorization",
+        "auth_prefix": "Bearer ",
+    }
+    values, secret_updates, error = parse_poller_form(form)
+
+    assert error is None
+    assert secret_updates == {}
+    assert values["handler_type"] == "http_get"
+    assert values["handler_url"] == "https://example.com/data"
+    assert values["handler_params"]["event_type"] == "status.ok"
+    assert values["handler_params"]["headers"] == {"X-Test": "1"}
+    assert values["handler_params"]["query"] == {"page": 1}
+
+
+def test_system_snapshot_poll(db, source):
+    from app.pollers import system_snapshot_poll
+
+    schedule = _make_schedule(db, source, handler_type="system_snapshot", handler_url="")
+    result = system_snapshot_poll(schedule, db)
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "ok"
+    assert "hostname" in result["data"]
+    assert "disk_free_bytes" in result["data"]
+
+
+def test_dns_resolve_poll(db, source):
+    from app.pollers import dns_resolve_poll
+
+    schedule = _make_schedule(
+        db,
+        source,
+        handler_type="dns_resolve",
+        handler_url="",
+        handler_params={"host": "localhost", "family": "ipv4"},
+    )
+    result = dns_resolve_poll(schedule, db)
+
+    assert result["ok"] is True
+    assert result["data"]["host"] == "localhost"
+    assert result["data"]["address_count"] >= 1
+
+
+def test_log_pattern_watch_poll(db, source, tmp_path):
+    from app.pollers import log_pattern_watch_poll
+
+    log_path = tmp_path / "app.log"
+    log_path.write_text("INFO boot\nERROR failed once\nWARN retry\n")
+    schedule = _make_schedule(
+        db,
+        source,
+        handler_type="log_pattern_watch",
+        handler_url="",
+        handler_params={
+            "file_path": str(log_path),
+            "patterns": ["ERROR", "CRITICAL"],
+            "read_bytes": 1024,
+        },
+    )
+    result = log_pattern_watch_poll(schedule, db)
+
+    assert result["ok"] is True
+    assert result["data"]["status"] == "matches"
+    assert result["data"]["matches"]["ERROR"] == 1
+
+
+def test_public_http_status_poll(db, source):
+    from app.pollers import public_http_status_poll
+
+    schedule = _make_schedule(
+        db,
+        source,
+        handler_type="public_http_status",
+        handler_url="https://example.com/health",
+        handler_params={"method": "GET", "expected_status": 200},
+    )
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.text = "ok"
+    mock_response.json.side_effect = ValueError("no json")
+    mock_response.raise_for_status = MagicMock()
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.request.return_value = mock_response
+
+    with patch("app.pollers.httpx.Client", return_value=mock_client):
+        result = public_http_status_poll(schedule, db)
+
+    assert result["ok"] is True
+    assert result["data"]["status_code"] == 200
+    assert result["data"]["url"] == "https://example.com/health"
+
+
 # ── run_schedule ────────────────────────────────────────────────────────────
 
 def test_run_schedule_creates_event(db, source):

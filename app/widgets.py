@@ -6,11 +6,9 @@ from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import func as sql_func
 
-from app.fields import get_by_path
 from app.widget_transforms import (
     apply_ops,
-    eval_expr,
-    format_expr_number,
+    render_data_template,
     resolve_tone_rules,
     series_from_points,
 )
@@ -18,12 +16,15 @@ from app.widget_transforms import (
 # ── Kind registry ────────────────────────────────────────────────────────────
 # ponytail: heatmap / calendar_heatmap / column range — To be implemented (Apex
 # grid + min/max pair data shapes; not in KIND_DISPLAYS until then).
+# ponytail: notes display "markdown" — To be implemented (render Markdown body;
+# keep plain Text as default).
 
 KIND_DISPLAYS = {
     "series": ("line", "area", "column"),
     "chart": ("pie", "radial", "radar", "polar"),
     "display": ("logbook_list", "kv_text", "toggle", "board", "table"),
     "links": ("list", "button_row", "icon_grid"),
+    "notes": ("notes",),
     "system": ("source_health", "recent_events", "poller_status", "metric_summary"),
 }
 
@@ -32,6 +33,7 @@ KIND_TITLES = {
     "chart": "Chart",
     "display": "Display",
     "links": "Links",
+    "notes": "Notes",
     "system": "System",
 }
 
@@ -51,6 +53,7 @@ DISPLAY_TITLES = {
     "list": "List",
     "button_row": "Button row",
     "icon_grid": "Icon grid",
+    "notes": "Text",
     "source_health": "Source Health",
     "recent_events": "Recent Events",
     "poller_status": "Poll status",
@@ -168,7 +171,7 @@ _BINDING_SERIES = {
 }
 _BINDING_CHART = {
     "cardinality": "multi",
-    "field_types": ("counter", "value"),
+    "field_types": ("value", "text"),
     "config_key": "sources",
     "required": True,
 }
@@ -212,6 +215,7 @@ WIDGET_BINDINGS = {
         },
     },
     "links": _BINDING_NONE,
+    "notes": _BINDING_NONE,
     "system": _BINDING_NONE,
 }
 
@@ -347,7 +351,7 @@ def resolve_widget_tone(
     data = data or {}
     if display == "toggle":
         return "positive" if data.get("value") else "negative"
-    if display == "kv_text" or display == "logbook_list":
+    if display in ("kv_text", "logbook_list", "notes"):
         return resolve_tone_rules(
             _config_tone_rules(cfg), data.get("_tone_data") or {},
         )
@@ -537,6 +541,7 @@ def fetch_widget_data(widget_type, db, widget_config=None, source_id=None, displ
         "chart": _chart_data,
         "display": _display_data,
         "links": _links_data,
+        "notes": _notes_data,
         "system": _system_data,
     }.get(widget_type)
     if not fn:
@@ -848,22 +853,22 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
     return out
 
 
-# ── chart (counter / value slices) ───────────────────────────────────────────
+# ── chart (value / text slices) ──────────────────────────────────────────────
 
 def _chart_source_value(db, src, source_id=None):
-    """Return (label, numeric_value) for one chart source (counter / value)."""
+    """Return (label, numeric_value) for one chart source (value / text)."""
     label = (src.get("label") or "").strip()
     field = resolve_field(db, src)
     if field is None:
         return None
     if not label:
         label = field.name
-    if field.field_type not in ("counter", "value"):
+    if field.field_type not in ("value", "text"):
         return None
     transform = src.get("transform") if isinstance(src.get("transform"), list) else []
     state = field.state or {}
-    raw = state.get("value", 0 if field.field_type == "counter" else "")
-    if field.field_type == "counter":
+    raw = state.get("value", 0 if field.field_type == "value" else "")
+    if field.field_type == "value":
         v = apply_ops(raw, transform) if transform else float(raw or 0)
         return label, 0.0 if v is None else v
     v = apply_ops(raw, transform) if transform else None
@@ -945,24 +950,7 @@ def _chart_data(db, config, display="pie", source_id=None, fields_snap=None):
 
 def _render_kv_template(template: str, data) -> str:
     """Substitute ``{{ path }}`` or ``{{ expr }}`` from field data."""
-    data = data if isinstance(data, dict) else {}
-
-    def repl(m):
-        body = m.group(1).strip()
-        if not body:
-            return ""
-        # Prefer plain path when it resolves (keeps non-numeric values).
-        # Allow list ``*`` (first item / bindings).
-        if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)*", body):
-            raw = get_by_path(data, body)
-            if raw is not None:
-                return str(raw)
-        num = eval_expr(body, data)
-        if num is not None:
-            return format_expr_number(num)
-        return ""
-
-    return _TEMPLATE_RE.sub(repl, template or "")
+    return render_data_template(template, data if isinstance(data, dict) else {})
 
 
 def _kv_field_data(field, entry_value=None, transform=None) -> dict:
@@ -1216,6 +1204,18 @@ def _links_data(db, config, display="list", source_id=None, fields_snap=None):
     return {"display": display, "items": cleaned}
 
 
+def _notes_data(db, config, display="notes", source_id=None, fields_snap=None):
+    text = config.get("text") if isinstance(config, dict) else ""
+    if not isinstance(text, str):
+        text = "" if text is None else str(text)
+    snap = fields_snap if isinstance(fields_snap, dict) else {}
+    return {
+        "display": display or "notes",
+        "text": text,
+        "_tone_data": snap,
+    }
+
+
 # ── system ───────────────────────────────────────────────────────────────────
 
 def _system_data(db, config, display="source_health", source_id=None, fields_snap=None):
@@ -1296,7 +1296,7 @@ def _metric_summary_data(db, config, source_id=None):
     series = series_q.scalar() or 0
     last_hour = q.filter(MetricPoint.timestamp >= sql_func.now() - timedelta(hours=1)).count()
     counters = []
-    for f in db.query(Field).filter(Field.field_type == "counter").order_by(Field.name).all():
+    for f in db.query(Field).filter(Field.field_type == "value").order_by(Field.name).all():
         raw = (f.state or {}).get("value", 0)
         try:
             value = float(raw or 0)

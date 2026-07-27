@@ -1,0 +1,114 @@
+{% set selected_handler_type = schedule.handler_type if schedule else 'http_get' %}
+{% set selected_category = selected_poll_category or 'url' %}
+{% set params = handler_params or {} %}
+
+<label class="stack">
+  <span class="field-label">
+    Poll category
+    <button type="button" class="field-tip" tabindex="0"
+            aria-label="About poll category"
+            data-tip="Choose what kind of thing Para-Scope should check. Categories narrow the available poll subtypes.">?</button>
+  </span>
+  <select name="poll_category" class="input" id="poll-category">
+    {% for category in poller_categories %}
+      <option value="{{ category.slug }}" {% if category.slug == selected_category %}selected{% endif %}>{{ category.label }}</option>
+    {% endfor %}
+  </select>
+</label>
+
+<label class="stack">
+  <span class="field-label">
+    Poll subtype
+    <button type="button" class="field-tip" tabindex="0"
+            aria-label="About poll subtype"
+            data-tip="The subtype decides which handler runs and which settings are shown below.">?</button>
+  </span>
+  <select name="handler_type" class="input" id="handler-type">
+    {% for spec in poller_specs %}
+      <option value="{{ spec.handler_type }}"
+              data-category="{{ spec.category }}"
+              {% if spec.handler_type == selected_handler_type %}selected{% endif %}>
+        {{ spec.label }}
+      </option>
+    {% endfor %}
+  </select>
+</label>
+
+{% for spec in poller_specs %}
+  <section class="stack poller-fields-panel"
+           data-handler-fields="{{ spec.handler_type }}"
+           {% if spec.handler_type != selected_handler_type %}hidden{% endif %}>
+    <p class="text-muted">{{ spec.summary }}</p>
+    {% for field in spec.fields %}
+      {% set param_key = field.param_key %}
+      {% if field.store == 'url' %}
+        {% set field_value = schedule.handler_url if schedule else (field.default or '') %}
+      {% else %}
+        {% set field_value = params.get(param_key, field.default) %}
+      {% endif %}
+
+      {% if field.input_type == 'checkbox' %}
+        <label class="flex items-center gap">
+          <input type="checkbox"
+                 name="{{ field.name }}"
+                 value="1"
+                 {% if field_value %}checked{% endif %}
+                 {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+          {{ field.label }}
+        </label>
+        {% if field.help_text %}
+          <p class="text-muted">{{ field.help_text }}</p>
+        {% endif %}
+      {% else %}
+        <label class="stack">
+          {{ field.label }}{% if field.required %} *{% endif %}
+          {% if field.help_text %}
+            <span class="text-muted">{{ field.help_text }}</span>
+          {% endif %}
+
+          {% if field.input_type == 'select' %}
+            <select name="{{ field.name }}" class="input" {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+              {% for option_value, option_label in field.options %}
+                <option value="{{ option_value }}" {% if field_value == option_value %}selected{% endif %}>{{ option_label }}</option>
+              {% endfor %}
+            </select>
+          {% elif field.input_type == 'textarea' %}
+            {% if field.parse_as in ['json_dict', 'json_any'] %}
+              {% if field_value is mapping or (field_value is sequence and field_value is not string) %}
+                {% set display_value = field_value | tojson(indent=2) %}
+              {% else %}
+                {% set display_value = field_value or '' %}
+              {% endif %}
+            {% elif field.parse_as in ['lines', 'csv'] and field_value is sequence and field_value is not string %}
+              {% set display_value = field_value | join('\n') %}
+            {% else %}
+              {% set display_value = field_value or '' %}
+            {% endif %}
+            <textarea name="{{ field.name }}"
+                      rows="{{ field.rows or 3 }}"
+                      class="input"
+                      placeholder="{{ field.placeholder }}"
+                      {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>{{ display_value }}</textarea>
+          {% else %}
+            <input name="{{ field.name }}"
+                   type="{{ field.input_type }}"
+                   class="input"
+                   placeholder="{{ field.placeholder }}"
+                   value="{{ '' if field.input_type == 'password' else (field_value if field_value is not none else '') }}"
+                   {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+          {% endif %}
+        </label>
+        {% if field.secret and schedule_secret_keys.get(param_key) %}
+          <p class="text-muted">{{ field.label }} is configured.</p>
+          <label class="flex items-center gap">
+            <input type="checkbox"
+                   name="{{ field.name }}_clear"
+                   value="1"
+                   {% if spec.handler_type != selected_handler_type %}disabled{% endif %}>
+            Clear stored secret
+          </label>
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+  </section>
+{% endfor %}

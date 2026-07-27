@@ -226,6 +226,49 @@ async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+NOTES_TEXT_MAX = 50_000
+
+
+# route: /api/dashboard/notes
+@router.post("/api/dashboard/notes")
+async def api_dashboard_notes(request: Request, db: Session = Depends(get_db)):
+    """Persist notes widget body text into shared layout config."""
+    user = ctx._get_user(request, db)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    wid = (body.get("id") or "").strip()
+    if not wid:
+        return JSONResponse({"error": "Widget id required"}, status_code=400)
+    text = body.get("text")
+    if text is None:
+        text = ""
+    if not isinstance(text, str):
+        text = str(text)
+    if len(text) > NOTES_TEXT_MAX:
+        return JSONResponse({"error": "Notes text too long"}, status_code=400)
+
+    layout = _get_layout(db)
+    if not layout:
+        return JSONResponse({"error": "No layout"}, status_code=404)
+    widgets = parse_layout_config(layout.layout_config)["widgets"]
+    widgets, _ = migrate_widgets(widgets)
+    widget = find_widget(widgets, widget_id=wid)
+    if not widget or widget.get("type") != "notes":
+        return JSONResponse({"error": "Notes widget not found"}, status_code=404)
+    cfg = dict(widget.get("config") or {})
+    cfg["text"] = text
+    widget["config"] = cfg
+    layout.layout_config = layout_json(widgets)
+    db.commit()
+    return {"ok": True}
+
+
 # ── Config: Pipeline (Sources → Rules → Actions) ────────────────────────────
 
 
@@ -282,6 +325,14 @@ async def save_dashboard(request: Request, db: Session = Depends(get_db)):
             for key in ("x", "y", "w", "h"):
                 if w.get(key) is None and prev.get(key) is not None:
                     w[key] = prev[key]
+            # Notes body is edited on the dashboard; config form omits it.
+            if w.get("type") == "notes":
+                prev_cfg = prev.get("config") if isinstance(prev.get("config"), dict) else {}
+                cfg = w.get("config") if isinstance(w.get("config"), dict) else {}
+                if "text" not in cfg and "text" in prev_cfg:
+                    cfg = dict(cfg)
+                    cfg["text"] = prev_cfg["text"]
+                    w["config"] = cfg
 
     widgets = normalize_for_save(widgets)
     err = validate_widget_bindings(db, widgets)

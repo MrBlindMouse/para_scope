@@ -27,10 +27,86 @@ from app.security import (
 from app.pipeline import evaluate_and_dispatch
 from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
+from app.pollers import (
+    get_poller_categories, get_poller_category, get_poller_specs, run_schedule,
+)
 
 from app import webctx as ctx
 
 router = APIRouter()
+
+
+def _poller_template_context(source: Source | None = None, schedule: PollingSchedule | None = None) -> dict:
+    params = dict((schedule.handler_params if schedule else None) or {})
+    source_cfg = dict((source.config if source else None) or {})
+    selected_category = (
+        source_cfg.get("poll_category")
+        or (get_poller_category(schedule.handler_type) if schedule else "url")
+    )
+    return {
+        "poller_categories": get_poller_categories(),
+        "poller_specs": get_poller_specs(),
+        "selected_poll_category": selected_category,
+        "handler_params": params,
+        "schedule_secret_keys": {
+            key: bool(value)
+            for key, value in params.items()
+            if key.endswith("_secret_id")
+        },
+    }
+
+
+def _sync_schedule_secrets(
+    db: Session,
+    schedule: PollingSchedule,
+    *,
+    previous_params: dict | None,
+    secret_updates: dict[str, str],
+) -> None:
+    params = dict(schedule.handler_params or {})
+    previous_params = dict(previous_params or {})
+    secret_keys = {
+        key
+        for key in set(previous_params) | set(params) | set(secret_updates)
+        if key.endswith("_secret_id")
+    }
+    for param_key in secret_keys:
+        existing_id = previous_params.get(param_key)
+        if param_key in secret_updates:
+            encrypted = encrypt_secret(secret_updates[param_key])
+            if existing_id:
+                secret = db.query(Secret).filter(Secret.id == existing_id).first()
+                if secret:
+                    secret.encrypted_value = encrypted
+                    params[param_key] = secret.id
+                    continue
+            secret = Secret(
+                scoped_to_type="schedule",
+                scoped_to_id=schedule.id,
+                encrypted_value=encrypted,
+            )
+            db.add(secret)
+            db.flush()
+            params[param_key] = secret.id
+            continue
+
+        if params.get(param_key) is None:
+            if existing_id:
+                secret = db.query(Secret).filter(Secret.id == existing_id).first()
+                if secret:
+                    db.delete(secret)
+            params.pop(param_key, None)
+        elif existing_id and param_key not in params:
+            params[param_key] = existing_id
+
+    schedule.handler_params = params
+
+
+def _delete_schedule_secrets(db: Session, schedule_id: int) -> None:
+    db.query(Secret).filter(
+        Secret.scoped_to_type == "schedule",
+        Secret.scoped_to_id == schedule_id,
+    ).delete(synchronize_session=False)
 
 # route: /config/pipeline
 @router.get("/config/pipeline")
@@ -222,9 +298,9 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
 # route: /config/pipeline/partials/source-form
 @router.get("/config/pipeline/partials/source-form")
 async def pipeline_source_form(request: Request):
-    return ctx.templates.TemplateResponse(
-        request, "config/pipeline/_source_form.html", {"active": "pipeline"}
-    )
+    context = {"active": "pipeline"}
+    context.update(_poller_template_context())
+    return ctx.templates.TemplateResponse(request, "config/pipeline/_source_form.html", context)
 
 
 
@@ -236,6 +312,11 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     source_type = (form.get("source_type") or "webhook").strip()
     description = (form.get("description") or "").strip()
     secret_value = (form.get("webhook_secret_value") or "").strip()
+    webhook_provider = (form.get("webhook_provider") or "generic_hmac").strip() or "generic_hmac"
+    paypal_webhook_id = (form.get("paypal_webhook_id") or "").strip()
+    paypal_client_id = (form.get("paypal_client_id") or "").strip()
+    paypal_environment = (form.get("paypal_environment") or "sandbox").strip() or "sandbox"
+    poll_category = (form.get("poll_category") or "url").strip()
 
     def _err(msg: str):
         if ctx._is_htmx(request):
@@ -256,9 +337,25 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     if schedule_error:
         return _err(schedule_error)
 
+    source_config = {}
+    if source_type == "poll":
+        source_config["poll_category"] = poll_category
+    if source_type == "webhook":
+        source_config["webhook_provider"] = webhook_provider
+        if webhook_provider == "paypal":
+            if not paypal_webhook_id:
+                return _err("PayPal webhook_id is required")
+            if not paypal_client_id:
+                return _err("PayPal client_id is required")
+            if not secret_value:
+                return _err("PayPal client secret is required (use Webhook secret field)")
+            source_config["paypal_webhook_id"] = paypal_webhook_id
+            source_config["paypal_client_id"] = paypal_client_id
+            source_config["paypal_environment"] = paypal_environment
     source = Source(
         name=name, slug=slug, source_type=source_type,
         description=description,
+        config=source_config,
     )
     db.add(source)
     db.flush()
@@ -291,12 +388,20 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
 
     schedule = None
     if schedule_kwargs:
+        secret_updates = dict(schedule_kwargs.pop("_secret_updates", {}))
         params = dict(schedule_kwargs.get("handler_params") or {})
         if source_type == "poll" and "event_type" not in params:
             params["event_type"] = "on_success"
         schedule_kwargs = {**schedule_kwargs, "handler_params": params}
         schedule = PollingSchedule(source_id=source.id, **schedule_kwargs)
         db.add(schedule)
+        db.flush()
+        _sync_schedule_secrets(
+            db,
+            schedule,
+            previous_params={},
+            secret_updates=secret_updates,
+        )
 
     db.commit()
     ctx._audit_log(db, request, "source.create", resource_type="source", resource_id=source.id, details={"name": name})
@@ -642,7 +747,7 @@ async def pipeline_update_rule(request: Request, rule_id: int, db: Session = Dep
 # route: /config/pipeline/source/{source_id}/partials/action-form
 @router.get("/config/pipeline/source/{source_id}/partials/action-form")
 async def pipeline_action_form(request: Request, source_id: int, db: Session = Depends(get_db)):
-    from app.actions import get_action_types
+    from app.actions import get_action_types, local_actions_enabled
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
         return HTMLResponse("Source not found", status_code=404)
@@ -679,6 +784,15 @@ async def pipeline_action_form(request: Request, source_id: int, db: Session = D
     else:
         return HTMLResponse("Pick a rule first", status_code=400)
 
+    cfg = (action.config if action else {}) or {}
+    headers = cfg.get("headers") or {}
+    headers_text = "\n".join(f"{k}: {v}" for k, v in headers.items()) if isinstance(headers, dict) else ""
+    custom_body = cfg.get("custom_body")
+    if isinstance(custom_body, (dict, list)):
+        custom_body_text = json.dumps(custom_body, indent=2)
+    else:
+        custom_body_text = custom_body if isinstance(custom_body, str) else ""
+
     return ctx.templates.TemplateResponse(
         request, "config/pipeline/_action_form.html", {
             "active": "pipeline",
@@ -687,6 +801,9 @@ async def pipeline_action_form(request: Request, source_id: int, db: Session = D
             "action": action,
             "rule": rule,
             "fields": db.query(Field).order_by(Field.name).all(),
+            "local_actions_enabled": local_actions_enabled(),
+            "headers_text": headers_text,
+            "custom_body_text": custom_body_text,
         }
     )
 
@@ -774,11 +891,11 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
     db.add(action)
     db.flush()
 
-    if action_type == "http_forward":
+    if action_type in ("http_forward", "notify"):
         try:
             if secret_value:
                 ctx._upsert_action_secret(db, action, value=secret_value, which="primary")
-            if config.get("auth_mode") == "key_secret" and secret2_value:
+            if action_type == "http_forward" and config.get("auth_mode") == "key_secret" and secret2_value:
                 ctx._upsert_action_secret(db, action, value=secret2_value, which="secondary")
         except ValueError as e:
             db.rollback()
@@ -853,16 +970,18 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
     action.action_type = action_type
     action.config = config
 
-    if action_type == "http_forward":
+    if action_type in ("http_forward", "notify"):
         try:
             if secret_value:
                 ctx._upsert_action_secret(db, action, value=secret_value, which="primary")
-            if config.get("auth_mode") == "key_secret" and secret2_value:
+            if action_type == "http_forward" and config.get("auth_mode") == "key_secret" and secret2_value:
                 ctx._upsert_action_secret(db, action, value=secret2_value, which="secondary")
         except ValueError as e:
             if ctx._is_htmx(request):
                 return HTMLResponse(str(e), status_code=400)
             return ctx._pipeline_redirect(error=str(e))
+        if action_type == "notify":
+            action.secret_id_2 = None
     else:
         # Non-http actions should not keep secrets
         action.secret_id = None
@@ -888,22 +1007,19 @@ async def pipeline_source_edit_form(request: Request, source_id: int, db: Sessio
     schedule = (
         db.query(PollingSchedule)
         .filter(PollingSchedule.source_id == source_id)
-        .order_by(PollingSchedule.id)
         .first()
     )
     webhook_secret = None
     if source.webhook_secret_id:
         webhook_secret = db.query(Secret).filter(Secret.id == source.webhook_secret_id).first()
-    params = (schedule.handler_params if schedule else None) or {}
-    return ctx.templates.TemplateResponse(
-        request, "config/pipeline/_source_edit_form.html", {
-            "active": "pipeline",
-            "source": source,
-            "schedule": schedule,
-            "webhook_secret": webhook_secret,
-            "handler_params_json": json.dumps(params, indent=2) if params else "{}",
-        }
-    )
+    context = {
+        "active": "pipeline",
+        "source": source,
+        "schedule": schedule,
+        "webhook_secret": webhook_secret,
+    }
+    context.update(_poller_template_context(source, schedule))
+    return ctx.templates.TemplateResponse(request, "config/pipeline/_source_edit_form.html", context)
 
 
 
@@ -928,6 +1044,11 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
     description = (form.get("description") or "").strip()
     secret_value = (form.get("webhook_secret_value") or "").strip()
     clear_secret = form.get("clear_webhook_secret") in ("1", "on", "true")
+    webhook_provider = (form.get("webhook_provider") or (source.config or {}).get("webhook_provider") or "generic_hmac").strip()
+    paypal_webhook_id = (form.get("paypal_webhook_id") or "").strip()
+    paypal_client_id = (form.get("paypal_client_id") or "").strip()
+    paypal_environment = (form.get("paypal_environment") or "sandbox").strip() or "sandbox"
+    poll_category = (form.get("poll_category") or "url").strip()
 
     if not name:
         return _err("Name is required")
@@ -941,10 +1062,26 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
     if schedule_error:
         return _err(schedule_error)
 
+    source_cfg = dict(source.config or {})
+    if source_type == "poll":
+        source_cfg["poll_category"] = poll_category
+    else:
+        source_cfg.pop("poll_category", None)
+
+    if source_type == "webhook":
+        source_cfg["webhook_provider"] = webhook_provider
+        if webhook_provider == "paypal":
+            if paypal_webhook_id:
+                source_cfg["paypal_webhook_id"] = paypal_webhook_id
+            if paypal_client_id:
+                source_cfg["paypal_client_id"] = paypal_client_id
+            source_cfg["paypal_environment"] = paypal_environment
+
     source.name = name
     source.slug = ctx._unique_slug_from_name(db, name, exclude_id=source_id)
     source.source_type = source_type
     source.description = description
+    source.config = source_cfg
 
     if schedule_kwargs:
         schedule_kwargs = {**schedule_kwargs, "name": name}
@@ -969,36 +1106,62 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
             db.add(secret)
             db.flush()
             source.webhook_secret_id = secret.id
+    elif source_type == "poll":
+        existing_type_names = {
+            et.name
+            for et in db.query(EventTypeRecord).filter(EventTypeRecord.source_id == source.id).all()
+        }
+        for et_name, et_desc in (
+            ("on_success", "Poll completed successfully"),
+            ("on_failure", "Poll failed (HTTP error or timeout)"),
+        ):
+            if et_name not in existing_type_names:
+                db.add(EventTypeRecord(
+                    source_id=source.id, name=et_name, description=et_desc,
+                ))
 
     schedule = None
     if schedule_kwargs:
-        schedule_id_raw = form.get("schedule_id")
-        existing = None
-        if schedule_id_raw:
-            try:
-                sid = int(schedule_id_raw)
-            except (TypeError, ValueError):
-                sid = None
-            if sid:
-                existing = (
-                    db.query(PollingSchedule)
-                    .filter(PollingSchedule.id == sid, PollingSchedule.source_id == source_id)
-                    .first()
-                )
-        if existing is None:
-            existing = (
-                db.query(PollingSchedule)
-                .filter(PollingSchedule.source_id == source_id)
-                .order_by(PollingSchedule.id)
-                .first()
-            )
+        secret_updates = dict(schedule_kwargs.pop("_secret_updates", {}))
+        all_schedules = (
+            db.query(PollingSchedule)
+            .filter(PollingSchedule.source_id == source_id)
+            .order_by(PollingSchedule.id)
+            .all()
+        )
+        existing = all_schedules[0] if all_schedules else None
+        # Defensive: drop any extra rows left from older multi-schedule installs.
+        for extra in all_schedules[1:]:
+            remove_job(extra.id)
+            _delete_schedule_secrets(db, extra.id)
+            db.delete(extra)
         if existing:
+            previous_params = dict(existing.handler_params or {})
             for key, value in schedule_kwargs.items():
                 setattr(existing, key, value)
+            _sync_schedule_secrets(
+                db,
+                existing,
+                previous_params=previous_params,
+                secret_updates=secret_updates,
+            )
             schedule = existing
         else:
             schedule = PollingSchedule(source_id=source.id, **schedule_kwargs)
             db.add(schedule)
+            db.flush()
+            _sync_schedule_secrets(
+                db,
+                schedule,
+                previous_params={},
+                secret_updates=secret_updates,
+            )
+    elif source_type != "poll":
+        schedules = db.query(PollingSchedule).filter(PollingSchedule.source_id == source_id).all()
+        for existing in schedules:
+            remove_job(existing.id)
+            _delete_schedule_secrets(db, existing.id)
+            db.delete(existing)
 
     db.commit()
     ctx._audit_log(db, request, "source.update", resource_type="source", resource_id=source.id, details={"name": name})
@@ -1047,6 +1210,10 @@ async def delete_source(request: Request, source_id: int, db: Session = Depends(
         Secret.scoped_to_type == "source",
         Secret.scoped_to_id == source_id,
     ).delete(synchronize_session=False)
+    db.query(Secret).filter(
+        Secret.scoped_to_type == "schedule",
+        Secret.scoped_to_id.in_([sched.id for sched in schedules]),
+    ).delete(synchronize_session=False)
     db.query(ActionInstance).filter(ActionInstance.source_id == source_id).delete()
     db.query(FieldLogEntry).filter(FieldLogEntry.source_id == source_id).update(
         {FieldLogEntry.source_id: None, FieldLogEntry.event_id: None},
@@ -1082,6 +1249,52 @@ async def toggle_source(request: Request, source_id: int, db: Session = Depends(
         resp = ctx._source_chain_template(request, db, source)
         return resp
     return ctx._pipeline_redirect(success=f"Source '{source.name}' {status_text}")
+
+
+# route: /config/source/{source_id}/poll-now
+@router.post("/config/source/{source_id}/poll-now")
+async def poll_source_now(request: Request, source_id: int, db: Session = Depends(get_db)):
+    source = db.query(Source).filter(Source.id == source_id).first()
+    if not source:
+        return ctx._pipeline_redirect(error="Source not found")
+    if source.source_type != "poll":
+        return ctx._pipeline_redirect(error="Only poll sources can be run manually")
+    if not source.enabled:
+        msg = "Enable the source before running a poll"
+        if ctx._is_htmx(request):
+            return HTMLResponse(msg, status_code=400)
+        return ctx._pipeline_redirect(error=msg)
+
+    schedule = (
+        db.query(PollingSchedule)
+        .filter(PollingSchedule.source_id == source_id)
+        .first()
+    )
+    if not schedule:
+        msg = "No schedule configured for this source"
+        if ctx._is_htmx(request):
+            return HTMLResponse(msg, status_code=400)
+        return ctx._pipeline_redirect(error=msg)
+    if not schedule.enabled:
+        msg = "Enable the schedule before running a poll"
+        if ctx._is_htmx(request):
+            return HTMLResponse(msg, status_code=400)
+        return ctx._pipeline_redirect(error=msg)
+
+    ok = run_schedule(schedule.id)
+    ctx._audit_log(
+        db, request, "source.poll_now",
+        resource_type="source", resource_id=source.id,
+        details={"ok": ok, "schedule_id": schedule.id},
+    )
+    db.refresh(source)
+
+    msg = f"Poll ran for '{source.name}'" if ok else f"Poll failed for '{source.name}'"
+    if ctx._is_htmx(request):
+        return ctx._source_chain_template(request, db, source)
+    if not ok:
+        return ctx._pipeline_redirect(error=msg)
+    return ctx._pipeline_redirect(success=msg)
 
 
 # route: /config/event-type/{et_id}/toggle
@@ -1161,72 +1374,6 @@ async def delete_event_type(request: Request, et_id: int, db: Session = Depends(
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
     return ctx._pipeline_redirect(success=f"Event type '{name}' deleted")
-
-
-# ── Config: Schedules ───────────────────────────────────────────────────────
-
-
-# route: /config/source/{source_id}/schedules
-@router.get("/config/source/{source_id}/schedules")
-async def config_schedules(request: Request, source_id: int, db: Session = Depends(get_db)):
-    success, error = ctx.get_message_params(request)
-    source = db.query(Source).filter(Source.id == source_id).first()
-    if not source:
-        return ctx._pipeline_redirect(error="Source not found")
-    schedules = db.query(PollingSchedule).filter(PollingSchedule.source_id == source_id).all()
-    return ctx.templates.TemplateResponse(
-        request, "config/schedules.html", {"active": "pipeline", "source": source,
-         "items": schedules, "success": success, "error": error}
-    )
-
-
-
-# route: /config/source/{source_id}/schedules
-@router.post("/config/source/{source_id}/schedules")
-async def create_schedule(request: Request, source_id: int, db: Session = Depends(get_db)):
-    form = await request.form()
-    source = db.query(Source).filter(Source.id == source_id).first()
-    if not source:
-        return ctx._pipeline_redirect(error="Source not found")
-
-    kwargs, error = ctx._parse_schedule_form(form, required=True)
-    if error:
-        return RedirectResponse(
-            url=ctx.flash_url(f"/config/source/{source_id}/schedules", error=error),
-            status_code=303,
-        )
-
-    schedule = PollingSchedule(source_id=source_id, name=source.name, **kwargs)
-    db.add(schedule)
-    db.commit()
-    db.refresh(schedule)
-    add_or_update_job(schedule)
-    ctx._audit_log(db, request, "schedule.create", resource_type="schedule", resource_id=schedule.id, details={"name": schedule.name})
-    return RedirectResponse(
-        url=ctx.flash_url(f"/config/source/{source_id}/schedules", success=f"Schedule for '{source.name}' created"),
-        status_code=303,
-    )
-
-
-
-# route: /config/schedule/{schedule_id}/delete
-@router.post("/config/schedule/{schedule_id}/delete")
-async def delete_schedule(request: Request, schedule_id: int, db: Session = Depends(get_db)):
-    schedule = db.query(PollingSchedule).filter(PollingSchedule.id == schedule_id).first()
-    if not schedule:
-        return ctx._pipeline_redirect(error="Schedule not found")
-    name = schedule.name
-    source_id = schedule.source_id
-    sid = schedule.id
-    remove_job(sid)
-    db.delete(schedule)
-    db.commit()
-    ctx._audit_log(db, request, "schedule.delete", resource_type="schedule", resource_id=sid, details={"name": name})
-    return RedirectResponse(
-        url=ctx.flash_url(f"/config/source/{source_id}/schedules", success=f"Schedule '{name}' deleted"),
-        status_code=303,
-    )
-
 
 
 # route: /config/action/{action_id}/delete

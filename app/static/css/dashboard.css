@@ -44,6 +44,12 @@
     overflow: auto;
   }
 
+  .dashboard-grid .card__body:has(.widget-notes-wrap) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
   .dashboard-grid .widget-chart {
     position: relative;
     block-size: 10rem;
@@ -281,6 +287,55 @@
   .widget-tone--positive { background: var(--color-positive-bg); }
   .widget-tone--negative { background: var(--color-negative-bg); }
   .widget-tone--neutral  { background: var(--color-info-bg); }
+
+  .widget-notes-wrap {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-block-size: 0;
+    align-self: stretch;
+  }
+
+  .widget-notes-wrap.widget-tone {
+    padding: 0;
+  }
+
+  .dashboard-grid .widget-notes-wrap {
+    block-size: 100%;
+  }
+
+  .widget-notes {
+    display: block;
+    flex: 1 1 auto;
+    inline-size: 100%;
+    min-block-size: 0;
+    block-size: 100%;
+    margin: 0;
+    padding: 0.5rem 0.65rem;
+    border: 0;
+    border-radius: inherit;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    line-height: 1.4;
+    resize: none;
+    overflow: auto;
+  }
+
+  .widget-notes:focus {
+    outline: none;
+  }
+
+  .widget-preview .widget-notes {
+    min-block-size: 3rem;
+    block-size: auto;
+    flex: none;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 0.35rem);
+    background: var(--color-surface);
+    resize: none;
+  }
 
   .widget-preview {
     max-inline-size: 16rem;

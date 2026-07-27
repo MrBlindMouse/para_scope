@@ -31,6 +31,16 @@
               hx-swap="innerHTML">
         Edit
       </button>
+      {% if source.source_type == 'poll' %}
+      <form method="post" action="/config/source/{{ source.id }}/poll-now"
+            hx-post="/config/source/{{ source.id }}/poll-now"
+            hx-target="#source-chain-{{ source.id }}"
+            hx-swap="outerHTML"
+            hx-disabled-elt="button">
+        {% include 'components/csrf.html' %}
+        <button type="submit" class="btn btn--sm"{% if not source.enabled %} disabled title="Enable the source first"{% endif %}>Run now</button>
+      </form>
+      {% endif %}
       <form method="post" action="/config/source/{{ source.id }}/toggle"
             hx-post="/config/source/{{ source.id }}/toggle"
             hx-target="#source-chain-{{ source.id }}"
@@ -42,7 +52,7 @@
             hx-post="/config/source/{{ source.id }}/delete"
             hx-target="#source-chain-{{ source.id }}"
             hx-swap="outerHTML"
-            hx-confirm="Delete source {{ source.name }}? This also deletes its rules, actions, event types, and schedules.">
+            hx-confirm="Delete source {{ source.name }}? This also deletes its rules, actions, event types, and schedule.">
         {% include 'components/csrf.html' %}
         <button type="submit" class="btn btn--sm btn--negative">Delete</button>
       </form>

@@ -19,7 +19,7 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About field types"
-              data-tip="Logbook: growing list. Counter: number. Value: text. Toggle: on/off. Type can’t change later.">?</button>
+              data-tip="Logbook: growing list. Value: number. Text: string. Toggle: on/off. Type can’t change later.">?</button>
     </span>
     <select name="field_type" class="input" id="field-type-select" autofocus
             {% if is_edit %}disabled{% endif %}>
@@ -50,31 +50,31 @@
     </label>
   </div>
 
-  {# ── counter ── #}
-  <div id="field-params-counter" class="stack field-type-params" {% if ft != 'counter' %}hidden{% endif %}>
-    <p class="text-muted">A number. Actions can add, subtract, or reset. Starts at 0.</p>
+  {# ── value (numeric) ── #}
+  <div id="field-params-value" class="stack field-type-params" {% if ft != 'value' %}hidden{% endif %}>
+    <p class="text-muted">A number. Actions can add, subtract, set, or reset. Starts at 0.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"
              value="{{ fname }}" placeholder="Request count"
-             {% if ft == 'counter' %}required{% else %}disabled{% endif %}>
+             {% if ft == 'value' %}required{% else %}disabled{% endif %}>
     </label>
   </div>
 
-  {# ── value ── #}
-  <div id="field-params-value" class="stack field-type-params" {% if ft != 'value' %}hidden{% endif %}>
-    <p class="text-muted">A single text value. Actions can replace it.</p>
+  {# ── text ── #}
+  <div id="field-params-text" class="stack field-type-params" {% if ft != 'text' %}hidden{% endif %}>
+    <p class="text-muted">A single text value. Actions set it from a template. Starts empty.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"
              value="{{ fname }}" placeholder="Last status"
-             {% if ft == 'value' %}required{% else %}disabled{% endif %}>
+             {% if ft == 'text' %}required{% else %}disabled{% endif %}>
     </label>
   </div>
 
   {# ── toggle ── #}
   <div id="field-params-toggle" class="stack field-type-params" {% if ft != 'toggle' %}hidden{% endif %}>
-    <p class="text-muted">On or off. Actions can set it. Starts off.</p>
+    <p class="text-muted">On or off. Actions can set or switch it. Starts off.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"

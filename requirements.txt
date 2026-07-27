@@ -13,3 +13,4 @@ itsdangerous>=2.2
 python-dotenv>=1.0
 pytest>=8.0
 pywebpush>=2.0
+PyNaCl>=1.5

@@ -10,8 +10,9 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 
 - Single-process FastAPI + SQLite (`create_all` + `ensure_schema` patches; no Alembic)
 - Cookie sessions, CSRF, Fernet-encrypted secrets, login rate limit
-- Sources (webhook + poll), event types, multiple polling schedules, rules, actions (`field_push`, `http_forward`, `web_push`)
-- Field sinks (logbook / counter / value / toggle) + MetricPoint + AuditLog + DashboardLayout widgets
+- Sources (webhook + poll), event types, one polling schedule per poll source, rules, actions (`field_push`, `http_forward`, `notify`, `web_push`, `local_script`)
+- Poll categories + typed poller subtypes for URL/HTTP, system, connectivity, storage, application, and external checks
+- Field sinks (logbook / value / text / toggle) + MetricPoint + AuditLog + DashboardLayout widgets
 - Webhook HMAC when a secret is configured (`X-Webhook-Timestamp` + HMAC over `{timestamp}.{body}`); unsigned sources allowed for local/dev
 - In-memory login and webhook rate limits (single-process ceiling)
 - In-process APScheduler pollers; HTMX dashboard refresh (not SSE)
@@ -30,6 +31,7 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 - API tokens
 - Condition rate limits / time windows
 - Formal plugin/adapter packaging and “Writing a Source Adapter” guides
+- Phase-2 poll integrations: Docker/runtime snapshots, SMART health, ZFS/Btrfs pool health, MQTT broker checks, deeper queue integrations
 - Mandatory webhook secrets in production (operator guidance only today)
 - Multi-role auth (admin vs viewer)
 - Migrations (Alembic or equivalent)
@@ -40,7 +42,7 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 
 A self-hosted, single-process Python application that acts as a unified event hub and operational dashboard for personal or small-team infrastructure and projects.
 
-Users register **Sources**. Each source can emit events via verified webhooks and/or be actively polled on configurable schedules. Incoming events are normalized, filtered by **Rules** (with conditions), and routed to one or more **Actions**. Shared **Fields** act as durable sinks (logbooks, counters, values, toggles). A modular web dashboard provides status tiles, graphs, event logs, and configuration surfaces.
+Users register **Sources**. Each source can emit events via verified webhooks or be actively polled on a configurable schedule. Incoming events are normalized, filtered by **Rules** (with conditions), and routed to one or more **Actions**. Shared **Fields** act as durable sinks (logbooks, values, text, toggles). A modular web dashboard provides status tiles, graphs, event logs, and configuration surfaces.
 
 The system prioritizes:
 
@@ -84,7 +86,7 @@ A source owns:
 - Identity and metadata (name, slug, description, tags, icon)
 - Authentication / verification material for webhooks (optional secret)
 - Zero or more webhook event type definitions
-- Zero or more independent polling schedules
+- Exactly one polling schedule when `source_type` is poll (none for webhooks)
 - Associated secrets (API keys, tokens) used by pollers or actions
 - Enabled flag and last-seen timestamp
 
@@ -100,15 +102,17 @@ A concrete occurrence. Normalized internal representation plus the original payl
 
 **Polling Schedule**  
 
-A named, independent job attached to a source: interval or cron, handler type (`http_get` / `http_post` / … or custom registered handlers), URL + params, timeout, and retry count. Multiple schedules per source are first-class. Jobs run in-process via APScheduler with jitter and consecutive-failure backoff.
+A timing/job row attached to a poll source: interval or cron, handler type (for example `http_get`, `system_snapshot`, `dns_resolve`, `backup_age`), typed handler parameters, timeout, and retry count. Each poll source has exactly one schedule. Jobs run in-process via APScheduler with jitter and consecutive-failure backoff.
 
 **Action**  
 
 A side-effect attached to rules. Built-in types:
 
-- `field_push` — write to a shared Field (logbook append, counter increment/decrement/reset, value set, toggle)
-- `http_forward` — outbound HTTP request (supports auth secrets, custom headers/body)
+- `field_push` — write to a shared Field (logbook append, value ops, text template, toggle Fixed/Switch); skips when the computed value is unchanged
+- `http_forward` — outbound HTTP request (templated URL/headers/body, auth secrets, presets for ntfy/Gotify/Discord, optional HMAC)
+- `notify` — thin convenience wrapper over HTTP for ntfy / Gotify / Discord (title/body templates)
 - `web_push` — browser push notification via VAPID
+- `local_script` — run a local command or argv list (gated by `PARA_SCOPE_ALLOW_LOCAL_ACTIONS`; optional path allowlist)
 
 Actions are dispatched by rules. Rules support field-match conditions (exact, not, gt/lt, contains, regex) on dotted paths. List segment `*` means “any element” in conditions (correlated across fields that share the same list); when those conditions match, the same indexes apply to `*` in that rule’s action/template paths. Without starred conditions, `*` is the first element. Rate limiting and time windows are planned, not shipped.
 
@@ -121,17 +125,18 @@ The binding of event type(s) + optional conditions → one or more actions (orde
 Global named sink used by both actions and widgets:
 
 - `logbook` — append-only entries (pruned to max_entries); history for charts/series
-- `counter` — numeric current value only (increment / decrement / reset; no time-series)
-- `value` — string state
-- `toggle` — boolean state
+- `value` — numeric current value only (increment / decrement / set / reset; no time-series)
+- `text` — string state (template)
+- `toggle` — boolean state (Fixed or Switch)
 
 **Dashboard View / Widget**  
 
-Modular visualization or control surface (status, charts, series, links, system info, display). Layout is stored in `DashboardLayout` and edited via GridStack. Widgets refresh via HTMX.
+Modular visualization or control surface (status, charts, series, links, notes, system info, display). Layout is stored in `DashboardLayout` and edited via GridStack. Widgets refresh via HTMX.
 
-Series displays (logbook): `line` / `area` / `column` with per-style options (e.g. stepline, stacked, horizontal). Chart displays (counter/value): `pie` / `radial` / `radar` / `polar`. Radial styles use an explicit max/target.  
+Series displays (logbook): `line` / `area` / `column` with per-style options (e.g. stepline, stacked, horizontal). Chart displays (value/text): `pie` / `radial` / `radar` / `polar`. Radial styles use an explicit max/target. Notes display: `Text` (plain body in layout config, debounced save from the dashboard).
 
 ponytail: heatmap, calendar heatmap, and range columns — To be implemented (need grid / min-max data shapes).
+ponytail: notes `Markdown` display — To be implemented (rendered Markdown alongside plain Text).
 
 ### 5. High-Level Architecture
 
@@ -181,9 +186,9 @@ Unsigned sources are accepted (convenient for local/dev).
 
 **Polling Engine**  
 
-APScheduler-backed. Each schedule knows its source, interval/cron, handler type, and parameters.  
+APScheduler-backed. Each schedule knows its source, interval/cron, handler type, and typed parameters.  
 
-Handlers today are HTTP variants registered via `register_poller`. Custom handlers (system metrics, Docker status, etc.) follow the same contract and can be added by registering a callable.
+Handlers are registered via `register_poller`, with metadata for category, label, summary, and config fields. Shipped handlers cover URL/HTTP, system snapshots, systemd/journal checks, connectivity probes, storage checks, application/domain checks, and a small external-integration set.
 
 Jobs report success/failure, latency, and extracted data back into the same pipeline as webhooks. Interval schedules receive jitter and consecutive-failure backoff.
 
@@ -223,7 +228,7 @@ Key surfaces:
 - `/config/pipeline` — sources, events, rules, actions
 - `/config/dashboard` — widget layout
 - `/config/style` — theme / appearance
-- `/config/users`, `/config/schedules`, audit log, help
+- `/config/users`, audit log, help
 
 Widgets are modular partials refreshed independently via HTMX. Layout is shared for the install (not per-user in v0.1).
 
@@ -268,7 +273,7 @@ Today the system exposes simple in-process registration hooks:
 
 A richer plugin directory or entry-point packaging is planned. Core stays unaware of specific integrations.
 
-New pollers only need to return a result dict (`ok`, `data`, optional `raw` / `response_time_ms`). The rest of the pipeline (event creation, `on_success` / `on_failure` / optional `always`, rules, actions) remains identical.
+New pollers only need to return a result dict (`ok`, `data`, optional `raw` / `response_time_ms`) and declare their config metadata. The rest of the pipeline (event creation, `on_success` / `on_failure` / optional `always`, rules, actions) remains identical.
 
 ### 9. Configuration Philosophy
 
@@ -324,16 +329,17 @@ Internal events can be treated like any other source so the same pipeline can al
 - Long-term data retention and cold storage.
 - Official packaging (PyPI entry point, standalone binary, etc.).
 - Richer plugin packaging vs keeping simple in-process registration.
-- Non-HTTP pollers (system resources, Docker, systemd, cert expiry, etc.) — high value and low weight.
+- Phase-2 / future poll integrations: Docker/runtime snapshots, SMART disk health, ZFS/Btrfs pool health, MQTT broker checks, and deeper Redis/RQ/Celery queue integrations.
 - Source templates / quick-add for common monitors.
 - Simple backup/export and event retention UI.
 - Test / dry-run of rules.
-- Thin convenience notify wrappers on top of `http_forward` only if UX gain is clear.
+- ✅ Notify convenience action (`notify`: ntfy / Gotify / Discord) on top of shared HTTP forward.
+- Local script actions require `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1` (optional `PARA_SCOPE_LOCAL_ACTION_ALLOWLIST`).
 
 ### 14. Success Criteria for an Initial Usable Version (v0.1 status)
 
 - ✅ A user can register webhook and poll sources.
-- ✅ Events appear in the event log and can trigger `field_push`, `http_forward`, and `web_push`.
+- ✅ Events appear in the event log and can trigger `field_push`, `http_forward`, `notify`, `web_push`, and (when enabled) `local_script`.
 - ✅ Basic graphs and modular widgets are available.
 - ✅ Configuration is performed through the UI.
 - ✅ The entire system runs from a git clone + virtualenv with minimal ceremony.

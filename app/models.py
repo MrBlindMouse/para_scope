@@ -68,7 +68,9 @@ class Source(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     event_types = relationship("EventTypeRecord", back_populates="source")
-    schedules = relationship("PollingSchedule", back_populates="source")
+    schedule = relationship(
+        "PollingSchedule", back_populates="source", uselist=False,
+    )
     events = relationship("Event", back_populates="source")
     metrics = relationship("MetricPoint", back_populates="source")
     actions = relationship("ActionInstance", back_populates="source")
@@ -97,7 +99,8 @@ class PollingSchedule(Base):
     __tablename__ = "polling_schedules"
 
     id = Column(Integer, primary_key=True, index=True)
-    source_id = Column(Integer, ForeignKey("sources.id"), nullable=False, index=True)
+    # One schedule per poll source (webhook sources have none).
+    source_id = Column(Integer, ForeignKey("sources.id"), nullable=False, unique=True)
     name = Column(String(200), nullable=False)
     schedule_type = Column(
         SAEnum(ScheduleType, native_enum=False, values_callable=lambda e: [m.value for m in e]),
@@ -119,7 +122,7 @@ class PollingSchedule(Base):
     last_error = Column(Text, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    source = relationship("Source", back_populates="schedules")
+    source = relationship("Source", back_populates="schedule")
 
 
 # ── ActionInstance ───────────────────────────────────────────────────────────
@@ -129,7 +132,7 @@ class ActionInstance(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     source_id = Column(Integer, ForeignKey("sources.id"), nullable=False, index=True)
-    action_type = Column(String(100), nullable=False)  # field_push | http_forward | web_push
+    action_type = Column(String(100), nullable=False)  # field_push | http_forward | notify | web_push | local_script
     config = Column(JSON, default=dict)  # action-specific config
     enabled = Column(Boolean, default=True)
     secret_id = Column(Integer, ForeignKey("secrets.id"), nullable=True)
@@ -183,16 +186,16 @@ class Event(Base):
 # ── Field (global storage sink for log / metric actions) ────────────────────
 
 class Field(Base):
-    """Named global storage target: logbook, counter, value, or toggle."""
+    """Named global storage target: logbook, value, text, or toggle."""
     __tablename__ = "fields"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), unique=True, nullable=False)
     slug = Column(String(100), unique=True, nullable=False, index=True)
-    field_type = Column(String(30), nullable=False)  # logbook | counter | value | toggle
+    field_type = Column(String(30), nullable=False)  # logbook | value | text | toggle
     # logbook: {max_entries}; others: {}
     config = Column(JSON, default=dict)
-    # counter: {"value": float}; value: {"value": str}; toggle: {"value": bool}
+    # value: {"value": float}; text: {"value": str}; toggle: {"value": bool}
     state = Column(JSON, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

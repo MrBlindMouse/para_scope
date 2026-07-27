@@ -8,8 +8,6 @@ from sqlalchemy import func, text
 from pathlib import Path
 from datetime import datetime, timezone
 import json
-import hashlib
-import hmac as hmac_mod
 import time
 import uuid
 import logging
@@ -30,8 +28,17 @@ from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
 
 from app import webctx as ctx
+from app.webhook_verifiers import verify_webhook_request, WebhookAuthError
 
 router = APIRouter()
+
+# Discord InteractionType → event type names for pipeline matching.
+_DISCORD_INTERACTION_TYPES = {
+    2: "application_command",
+    3: "message_component",
+    4: "application_command_autocomplete",
+    5: "modal_submit",
+}
 
 # route: /sw.js
 @router.get("/sw.js")
@@ -74,67 +81,34 @@ async def handle_webhook(
     if len(raw_body) > ctx._WEBHOOK_MAX_BODY:
         return JSONResponse({"error": "Payload too large (max 256KB)"}, status_code=413)
 
-    signature = (request.headers.get("x-webhook-signature") or "").strip()
-    actual = signature.replace("sha256=", "") if signature else ""
     timestamp_str = (request.headers.get("x-webhook-timestamp") or "").strip()
-
-    if source.webhook_secret_id:
-        secret = db.query(Secret).filter(Secret.id == source.webhook_secret_id).first()
-        if not secret:
-            return JSONResponse({"error": "Webhook secret not configured"}, status_code=401)
-        # Replay protection is mandatory when signing: require timestamp and bind it into HMAC
-        if not timestamp_str:
-            return JSONResponse(
-                {"error": "Timestamp required", "hint": "Send X-Webhook-Timestamp (unix seconds)"},
-                status_code=400,
-            )
-        try:
-            ts = float(timestamp_str)
-        except ValueError:
-            return JSONResponse({"error": "Invalid timestamp"}, status_code=400)
-        now = time.time()
-        if abs(now - ts) > ctx._WEBHOOK_REPLAY_TTL_SECONDS:
-            return JSONResponse({"error": "Timestamp expired"}, status_code=400)
-
-        signed_payload = f"{timestamp_str}.".encode() + raw_body
-        expected = hmac_mod.new(
-            decrypt_secret(secret.encrypted_value).encode(),
-            signed_payload,
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac_mod.compare_digest(expected, actual):
-            return JSONResponse({"error": "Invalid signature"}, status_code=401)
-
-        replay_key = f"{source.id}:{actual}"
-        ctx._cleanup_replay_cache(now - ctx._WEBHOOK_REPLAY_TTL_SECONDS)
-        if replay_key in ctx._WEBHOOK_REPLAY_CACHE:
-            return JSONResponse({"error": "Duplicate request"}, status_code=409)
-        ctx._WEBHOOK_REPLAY_CACHE[replay_key] = now
-    elif timestamp_str:
-        # Optional soft replay check for unsigned sources that send a timestamp
-        try:
-            ts = float(timestamp_str)
-        except ValueError:
-            return JSONResponse({"error": "Invalid timestamp"}, status_code=400)
-        now = time.time()
-        if abs(now - ts) > ctx._WEBHOOK_REPLAY_TTL_SECONDS:
-            return JSONResponse({"error": "Timestamp expired"}, status_code=400)
-        replay_key = f"{source.id}:{ts}"
-        ctx._cleanup_replay_cache(now - ctx._WEBHOOK_REPLAY_TTL_SECONDS)
-        if replay_key in ctx._WEBHOOK_REPLAY_CACHE:
-            return JSONResponse({"error": "Duplicate request"}, status_code=409)
-        ctx._WEBHOOK_REPLAY_CACHE[replay_key] = now
+    try:
+        verified = verify_webhook_request(db=db, source=source, request=request, raw_body=raw_body)
+    except WebhookAuthError as e:
+        return JSONResponse(e.payload, status_code=e.status_code)
 
     try:
         payload = json.loads(raw_body) if raw_body else {}
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
 
+    provider = ((source.config or {}).get("webhook_provider") or "generic_hmac").strip() or "generic_hmac"
+    if provider == "discord" and isinstance(payload, dict) and payload.get("type") == 1:
+        return JSONResponse({"type": 1}, status_code=200)
+
     # Resolve event type: header preferred, then payload fields.
     # `always` is an optional side-emission (like pollers), not a producer type.
     et_name = (request.headers.get("x-event-type") or "").strip()
     if not et_name and isinstance(payload, dict):
-        et_name = str(payload.get("event_type") or payload.get("type") or "").strip()
+        if provider == "discord":
+            raw_type = payload.get("type")
+            mapped = _DISCORD_INTERACTION_TYPES.get(raw_type)
+            if mapped:
+                et_name = mapped
+            elif raw_type is not None:
+                et_name = str(raw_type).strip()
+        if not et_name:
+            et_name = str(payload.get("event_type") or payload.get("type") or "").strip()
 
     registered_types = db.query(EventTypeRecord).filter(
         EventTypeRecord.source_id == source.id
@@ -183,7 +157,7 @@ async def handle_webhook(
         "user_agent": ((request.headers.get("user-agent") or "").strip() or None),
         "event_type": et_name or None,
         "correlation_id": correlation_id,
-        "signed": bool(source.webhook_secret_id and actual),
+        "signed": bool(verified.signed),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if isinstance(webhook_meta["user_agent"], str) and len(webhook_meta["user_agent"]) > 200:

@@ -1,18 +1,22 @@
 """Action type registry — built-in handlers for the event pipeline."""
 from __future__ import annotations
 
+import hashlib
+import hmac as hmac_mod
 import json
 import logging
-from typing import Callable
+import os
+import subprocess
+import time
+from typing import Any, Callable
+from urllib.parse import urljoin
 
 import httpx
 
 from app.fields import (
     coerce_logbook_value,
-    get_by_path,
-    resolve_bool,
     resolve_numeric,
-    resolve_string,
+    with_current_field,
 )
 from app.models import (
     ActionInstance,
@@ -23,11 +27,16 @@ from app.models import (
     PushSubscription,
 )
 from app.security import decrypt_secret
-from app.webpush_util import render_template, vapid_config
+from app.webpush_util import vapid_config
+from app.widget_transforms import render_data_template, resolve_path_or_expr
 
 logger = logging.getLogger("para_scope.pipeline")
 
 _ACTIONS: dict[str, Callable] = {}
+
+_NOTIFY_SERVICES = ("ntfy", "gotify", "discord")
+_LOCAL_TIMEOUT_DEFAULT = 30.0
+_LOCAL_TIMEOUT_MAX = 120.0
 
 
 def register_action(action_type: str, handler: Callable):
@@ -38,6 +47,13 @@ def register_action(action_type: str, handler: Callable):
 def get_action_types() -> list[str]:
     """Return registered action type names (sorted)."""
     return sorted(_ACTIONS.keys())
+
+
+def local_actions_enabled() -> bool:
+    """True when PARA_SCOPE_ALLOW_LOCAL_ACTIONS is set to a truthy value."""
+    return (os.environ.get("PARA_SCOPE_ALLOW_LOCAL_ACTIONS") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def run_registered_action(db, event: Event, action: ActionInstance) -> None:
@@ -63,6 +79,20 @@ def _require_field(db, field_id, expected_types: tuple[str, ...] | None = None) 
     return field
 
 
+def _values_equal(a, b) -> bool:
+    """Compare field values for skip-if-unchanged (JSON-stable for dict/list)."""
+    if a is b:
+        return True
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return float(a) == float(b)
+    try:
+        return json.dumps(a, sort_keys=True, default=str) == json.dumps(
+            b, sort_keys=True, default=str
+        )
+    except (TypeError, ValueError):
+        return a == b
+
+
 def _action_field_push(db, event: Event, action: ActionInstance) -> None:
     config = action.config or {}
     field = _require_field(db, config.get("field_id"))
@@ -73,14 +103,29 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
         max_entries = int(cfg.get("max_entries") or 100)
         max_entries = max(1, min(max_entries, 100_000))
 
-        if "value" in config:
-            raw = config["value"]
-        elif config.get("value_key"):
-            raw = get_by_path(nd, config["value_key"])
+        latest = (
+            db.query(FieldLogEntry)
+            .filter(FieldLogEntry.field_id == field.id)
+            .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
+            .first()
+        )
+        if "value" in config or config.get("value_key"):
+            ctx = with_current_field(nd, latest.value if latest else None)
+            if "value" in config:
+                raw = render_data_template(str(config["value"] or ""), ctx)
+            else:
+                raw = resolve_path_or_expr(str(config["value_key"]), ctx)
         else:
             raw = nd
 
         value = coerce_logbook_value(raw)
+        if latest is not None and _values_equal(value, latest.value):
+            logger.debug(
+                "field_push logbook skip unchanged field=%s event_id=%s",
+                field.name, event.id,
+            )
+            return
+
         entry = FieldLogEntry(
             field_id=field.id,
             value=value,
@@ -108,35 +153,74 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
         )
         return
 
-    if field.field_type == "counter":
+    if field.field_type == "value":
         op = (config.get("op") or "increment").strip()
-        if op not in ("increment", "decrement", "reset"):
-            raise ValueError("Unknown counter operation")
+        if op not in ("increment", "decrement", "reset", "set"):
+            raise ValueError("Unknown value operation")
         # Re-lock row so concurrent webhook/poll increments do not lose updates
         field = db.query(Field).filter(Field.id == field.id).with_for_update().one()
         state = dict(field.state or {})
+        current = float(state.get("value") or 0)
+        ctx = with_current_field(nd, current)
         if op == "reset":
             new_value = 0.0
+        elif op == "set":
+            new_value = resolve_numeric(config.get("delta"), ctx)
         else:
             delta = config.get("delta", 1)
-            resolved = resolve_numeric(delta, nd)
-            current = float(state.get("value") or 0)
+            resolved = resolve_numeric(delta, ctx)
             new_value = current - resolved if op == "decrement" else current + resolved
+        if op in ("set", "reset") and float(new_value) == float(current):
+            logger.debug(
+                "field_push value skip unchanged field=%s event_id=%s",
+                field.name, event.id,
+            )
+            db.commit()  # release FOR UPDATE
+            return
         state["value"] = new_value
         field.state = state
         db.commit()
         return
 
-    if field.field_type == "value":
+    if field.field_type == "text":
+        if "value" not in config:
+            raise ValueError("Text action needs a template")
         state = dict(field.state or {})
-        state["value"] = resolve_string(config, nd)
+        current = state.get("value", "")
+        ctx = with_current_field(nd, current)
+        new_value = render_data_template(str(config["value"] or ""), ctx)
+        if str(new_value) == str(current if current is not None else ""):
+            logger.debug(
+                "field_push text skip unchanged field=%s event_id=%s",
+                field.name, event.id,
+            )
+            return
+        state["value"] = new_value
         field.state = state
         db.commit()
         return
 
     if field.field_type == "toggle":
+        field = db.query(Field).filter(Field.id == field.id).with_for_update().one()
         state = dict(field.state or {})
-        state["value"] = resolve_bool(config, nd)
+        current = bool(state.get("value", False))
+        if (config.get("op") or "").strip() == "switch":
+            state["value"] = not current
+        elif "value" in config:
+            raw = config["value"]
+            if isinstance(raw, bool):
+                if raw == current:
+                    logger.debug(
+                        "field_push toggle skip unchanged field=%s event_id=%s",
+                        field.name, event.id,
+                    )
+                    db.commit()  # release FOR UPDATE
+                    return
+                state["value"] = raw
+            else:
+                raise ValueError("Toggle Fixed needs on or off")
+        else:
+            raise ValueError("Toggle action needs Fixed or Switch")
         field.state = state
         db.commit()
         return
@@ -154,9 +238,26 @@ def _secret_value(db, secret_id) -> str:
     return decrypt_secret(secret.encrypted_value)
 
 
-def _forward_headers(db, action: ActionInstance, config: dict) -> dict:
-    headers = dict(config.get("headers") or {})
-    auth_mode = (config.get("auth_mode") or "none").strip()
+def _template_mapping(obj: Any, data: dict) -> Any:
+    """Recursively resolve {{…}} in string values (headers, query, JSON body)."""
+    if isinstance(obj, str):
+        return render_data_template(obj, data)
+    if isinstance(obj, dict):
+        return {k: _template_mapping(v, data) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_template_mapping(item, data) for item in obj]
+    return obj
+
+
+def _forward_headers(db, action: ActionInstance, config: dict, data: dict) -> dict:
+    raw_headers = config.get("headers") or {}
+    headers = {
+        str(k): str(v)
+        for k, v in _template_mapping(dict(raw_headers), data).items()
+    }
+    raw_auth_mode = config.get("auth_mode")
+    auth_mode = (raw_auth_mode or "none").strip()
+    auth_mode_explicit = raw_auth_mode is not None
     if auth_mode == "key_secret":
         if not action.secret_id or not action.secret_id_2:
             raise ValueError("This forward needs both API key and secret")
@@ -164,7 +265,7 @@ def _forward_headers(db, action: ActionInstance, config: dict) -> dict:
         secret = _secret_value(db, action.secret_id_2)
         headers[config.get("api_key_header") or "X-Api-Key"] = key
         headers[config.get("api_secret_header") or "X-Api-Secret"] = secret
-    elif action.secret_id:
+    elif action.secret_id and (not auth_mode_explicit or auth_mode == "bearer"):
         token = _secret_value(db, action.secret_id)
         header_name = config.get("auth_header", "Authorization")
         prefix = config.get("auth_prefix", "Bearer ")
@@ -172,33 +273,156 @@ def _forward_headers(db, action: ActionInstance, config: dict) -> dict:
     return headers
 
 
+def _send_http(
+    db,
+    action: ActionInstance,
+    config: dict,
+    *,
+    url: str,
+    method: str,
+    headers: dict,
+    body: Any = None,
+    body_text: str | None = None,
+    query: dict | None = None,
+) -> None:
+    """POST/PUT/PATCH/GET with optional HMAC signing. Raises on HTTP errors."""
+    method = (method or "POST").upper()
+    timeout = float(config.get("timeout_seconds") or 30)
+    url = (url or "").strip()
+    if not url:
+        raise ValueError("Forward URL is missing")
+
+    signing_mode = (config.get("signing_mode") or "none").strip()
+    if signing_mode == "hmac_sha256":
+        if action.secret_id_2:
+            signing_key = _secret_value(db, action.secret_id_2)
+        elif action.secret_id:
+            signing_key = _secret_value(db, action.secret_id)
+        else:
+            raise ValueError("HMAC signing requires a configured secret")
+
+        ts = str(int(time.time()))
+        signature_header = (config.get("signing_signature_header") or "X-Call-Signature").strip()
+        timestamp_header = (config.get("signing_timestamp_header") or "X-Call-Timestamp").strip()
+
+        body_str = ""
+        if method in ("POST", "PUT", "PATCH"):
+            if body_text is not None:
+                body_str = body_text
+            elif body is not None:
+                body_str = json.dumps(body, separators=(",", ":"), sort_keys=True)
+        message = f"{method}\n{url}\n{ts}\n{body_str}".encode()
+        signature = hmac_mod.new(signing_key.encode(), message, hashlib.sha256).hexdigest()
+        headers = dict(headers)
+        headers[signature_header] = signature
+        headers[timestamp_header] = ts
+
+    with httpx.Client(timeout=timeout) as client:
+        kwargs: dict[str, Any] = {"method": method, "url": url, "headers": headers}
+        if method in ("POST", "PUT", "PATCH"):
+            if body_text is not None:
+                kwargs["content"] = body_text.encode("utf-8")
+                headers.setdefault("Content-Type", "text/plain; charset=utf-8")
+                kwargs["headers"] = headers
+            elif body is not None:
+                kwargs["json"] = body
+        elif method == "GET":
+            kwargs["params"] = query or None
+        response = client.request(**kwargs)
+        response.raise_for_status()
+
+
+def build_notify_request(
+    service: str,
+    *,
+    server_url: str,
+    topic: str = "",
+    title: str = "",
+    body: str = "",
+    priority: int | None = None,
+) -> dict:
+    """Map notify/preset fields to http_forward-shaped request parts.
+
+    Returns dict with keys: url, method, headers, body (JSON) or body_text (str).
+    """
+    service = (service or "").strip().lower()
+    base = (server_url or "").strip().rstrip("/")
+    if not base:
+        raise ValueError("Server URL is required")
+    title = title or ""
+    body = body or ""
+
+    if service == "ntfy":
+        topic = (topic or "").strip().strip("/")
+        if not topic:
+            raise ValueError("ntfy topic is required")
+        url = f"{base}/{topic}"
+        headers: dict[str, str] = {}
+        if title:
+            headers["Title"] = title
+        if priority is not None:
+            headers["Priority"] = str(priority)
+        return {
+            "url": url,
+            "method": "POST",
+            "headers": headers,
+            "body_text": body,
+        }
+
+    if service == "gotify":
+        url = urljoin(base + "/", "message")
+        payload: dict[str, Any] = {"message": body or title or "Para-Scope"}
+        if title:
+            payload["title"] = title
+        if priority is not None:
+            payload["priority"] = int(priority)
+        return {
+            "url": url,
+            "method": "POST",
+            "headers": {},
+            "body": payload,
+        }
+
+    if service == "discord":
+        # Discord webhook URL is the full server_url
+        content = body or title or "Para-Scope"
+        if title and body and title != body:
+            content = f"**{title}**\n{body}"
+        elif title and not body:
+            content = title
+        return {
+            "url": base if base.startswith("http") else server_url.strip(),
+            "method": "POST",
+            "headers": {},
+            "body": {"content": content[:2000]},
+        }
+
+    raise ValueError(f"Unknown notify service: {service}")
+
+
 def _action_http_forward(db, event: Event, action: ActionInstance) -> None:
     config = action.config or {}
-    url = (config.get("url") or "").strip()
+    nd = event.normalized_data or {}
+    url = render_data_template((config.get("url") or "").strip(), nd)
     if not url:
         raise ValueError("Forward URL is missing")
     method = (config.get("method") or "POST").upper()
-    timeout = float(config.get("timeout_seconds") or 30)
-    headers = _forward_headers(db, action, config)
+    headers = _forward_headers(db, action, config, nd)
 
     body_mode = config.get("body_mode", "auto")
-    nd = event.normalized_data or {}
-    if body_mode == "custom":
+    body = None
+    body_text = None
+    query = None
+
+    if body_mode == "text":
+        body_text = render_data_template(str(config.get("body_text") or ""), nd)
+    elif body_mode == "custom":
         raw_body = config.get("custom_body")
-        if isinstance(raw_body, dict):
-            # Resolve {{field}} placeholders in string values
-            resolved = _resolve_body_templates(raw_body, nd)
-            default = {
-                "event_id": event.id,
-                "source_id": event.source_id,
-                "correlation_id": event.correlation_id,
-                "data": nd,
-            }
-            body = {**default, **resolved}
+        if isinstance(raw_body, (dict, list)):
+            body = _template_mapping(raw_body, nd)
         else:
             body = raw_body if raw_body is not None else {}
     else:
-        # Default: send the full event envelope
         body = {
             "event_id": event.id,
             "source_id": event.source_id,
@@ -206,25 +430,141 @@ def _action_http_forward(db, event: Event, action: ActionInstance) -> None:
             "data": nd,
         }
 
-    with httpx.Client(timeout=timeout) as client:
-        kwargs = {"method": method, "url": url, "headers": headers}
-        if method in ("POST", "PUT", "PATCH"):
-            kwargs["json"] = body
-        elif method == "GET":
-            kwargs["params"] = config.get("query") or None
-        response = client.request(**kwargs)
-        response.raise_for_status()
+    if method == "GET":
+        raw_q = config.get("query") or {}
+        query = {
+            str(k): str(v)
+            for k, v in _template_mapping(dict(raw_q), nd).items()
+        } or None
+
+    _send_http(
+        db, action, config,
+        url=url, method=method, headers=headers,
+        body=body, body_text=body_text, query=query,
+    )
 
 
-def _resolve_body_templates(obj, data: dict):
-    """Recursively resolve {{field}} placeholders in string values of a parsed JSON body."""
-    if isinstance(obj, str):
-        return render_template(obj, data)
-    if isinstance(obj, dict):
-        return {k: _resolve_body_templates(v, data) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_resolve_body_templates(item, data) for item in obj]
-    return obj
+def _action_notify(db, event: Event, action: ActionInstance) -> None:
+    config = action.config or {}
+    service = (config.get("service") or "").strip().lower()
+    if service not in _NOTIFY_SERVICES:
+        raise ValueError("Choose ntfy, Gotify, or Discord")
+    nd = event.normalized_data or {}
+    title = render_data_template(str(config.get("title") or ""), nd)
+    body = render_data_template(str(config.get("body") or ""), nd)
+    server_url = render_data_template(str(config.get("server_url") or ""), nd)
+    topic = render_data_template(str(config.get("topic") or ""), nd)
+    priority = config.get("priority")
+    if priority is not None and priority != "":
+        try:
+            priority = int(priority)
+        except (TypeError, ValueError) as e:
+            raise ValueError("Priority must be a number") from e
+    else:
+        priority = None
+
+    req = build_notify_request(
+        service,
+        server_url=server_url,
+        topic=topic,
+        title=title,
+        body=body,
+        priority=priority,
+    )
+    # Auth: optional bearer for ntfy/gotify via secret_id
+    fwd_config = {
+        "timeout_seconds": config.get("timeout_seconds"),
+        "auth_mode": config.get("auth_mode") or ("bearer" if action.secret_id else "none"),
+        "auth_header": config.get("auth_header"),
+        "auth_prefix": config.get("auth_prefix"),
+        "signing_mode": "none",
+        "headers": req.get("headers") or {},
+    }
+    headers = _forward_headers(db, action, fwd_config, nd)
+    # Merge service headers after auth so Title etc. aren't wiped — auth wins on clash
+    for k, v in (req.get("headers") or {}).items():
+        headers.setdefault(k, v)
+
+    _send_http(
+        db, action, fwd_config,
+        url=req["url"],
+        method=req["method"],
+        headers=headers,
+        body=req.get("body"),
+        body_text=req.get("body_text"),
+    )
+
+
+def _local_allowlist() -> list[str]:
+    raw = (os.environ.get("PARA_SCOPE_LOCAL_ACTION_ALLOWLIST") or "").strip()
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(":") if p.strip()]
+
+
+def _check_local_allowlist(executable: str) -> None:
+    allow = _local_allowlist()
+    if not allow:
+        return
+    resolved = os.path.realpath(executable)
+    for entry in allow:
+        entry_real = os.path.realpath(entry)
+        if resolved == entry_real or resolved.startswith(entry_real.rstrip("/") + "/"):
+            return
+    raise ValueError(f"Script path is not on the local-action allowlist: {resolved}")
+
+
+def _action_local_script(db, event: Event, action: ActionInstance) -> None:
+    if not local_actions_enabled():
+        raise ValueError(
+            "Local scripts are disabled. Set PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1 to enable."
+        )
+    config = action.config or {}
+    nd = event.normalized_data or {}
+    timeout = float(config.get("timeout_seconds") or _LOCAL_TIMEOUT_DEFAULT)
+    timeout = max(1.0, min(timeout, _LOCAL_TIMEOUT_MAX))
+
+    argv = config.get("argv")
+    use_shell = bool(config.get("shell"))
+    if isinstance(argv, list) and argv:
+        cmd = [render_data_template(str(a), nd) for a in argv]
+        if not cmd[0]:
+            raise ValueError("Script path is empty")
+        _check_local_allowlist(cmd[0])
+        use_shell = False
+        run_arg: str | list[str] = cmd
+    else:
+        command = render_data_template(str(config.get("command") or ""), nd).strip()
+        if not command:
+            raise ValueError("Command is required")
+        use_shell = True
+        # Allowlist: first token of the command when it looks like a path
+        first = command.split(None, 1)[0]
+        if first.startswith("/") or first.startswith("./"):
+            _check_local_allowlist(first)
+        run_arg = command
+
+    try:
+        result = subprocess.run(
+            run_arg,
+            shell=use_shell,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ValueError(f"Local script timed out after {timeout}s") from e
+
+    if result.stdout:
+        logger.info("local_script stdout: %s", result.stdout[:2000])
+    if result.stderr:
+        logger.warning("local_script stderr: %s", result.stderr[:2000])
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()[:500]
+        raise ValueError(
+            f"Local script exited {result.returncode}"
+            + (f": {err}" if err else "")
+        )
 
 
 def _action_web_push(db, event: Event, action: ActionInstance) -> None:
@@ -235,9 +575,9 @@ def _action_web_push(db, event: Event, action: ActionInstance) -> None:
 
     config = action.config or {}
     data = event.normalized_data or {}
-    title = render_template(config.get("title") or "Para-Scope", data)
-    body = render_template(config.get("body") or "", data)
-    url = render_template(config.get("url") or "/", data)
+    title = render_data_template(config.get("title") or "Para-Scope", data)
+    body = render_data_template(config.get("body") or "", data)
+    url = render_data_template(config.get("url") or "/", data)
     payload = json.dumps({"title": title, "body": body, "url": url})
 
     subs = db.query(PushSubscription).all()
@@ -280,4 +620,6 @@ def _action_web_push(db, event: Event, action: ActionInstance) -> None:
 
 register_action("field_push", _action_field_push)
 register_action("http_forward", _action_http_forward)
+register_action("notify", _action_notify)
 register_action("web_push", _action_web_push)
+register_action("local_script", _action_local_script)

@@ -1,6 +1,15 @@
 """Unit tests for dotted-path event data helpers."""
 
 
+def test_with_current_field_overwrites_event_key():
+    from app.fields import with_current_field
+
+    out = with_current_field({"field": "from-event", "status": "ok"}, 10)
+    assert out["field"] == 10
+    assert out["status"] == "ok"
+    assert with_current_field(None, "x") == {"field": "x"}
+
+
 def test_get_by_path_nested():
     from app.fields import get_by_path
 
@@ -33,21 +42,23 @@ def test_get_by_path_star_bindings():
     assert get_by_path(data, "value.*.rate") == 1
 
 
-def test_resolve_string_dotted_path():
+def test_resolve_string_template_and_maths():
     from app.fields import resolve_string
 
-    nd = {"_poll": {"response_time_ms": 273.5}, "status": "ok"}
-    assert resolve_string({"value_key": "_poll.response_time_ms"}, nd) == "273.5"
-    assert resolve_string({"value_key": "status"}, nd) == "ok"
-    assert resolve_string({"value_key": "_poll.missing"}, nd) == ""
+    nd = {"status": "ok", "rate": 20, "_poll": {"response_time_ms": 273.5}}
+    assert resolve_string({"value": "x={{ status }}"}, nd) == "x=ok"
+    assert resolve_string({"value": "{{ 1/rate }}"}, nd) == "0.05"
+    assert resolve_string({"value": "{{ _poll.response_time_ms }}"}, nd) == "273.5"
+    assert resolve_string({"value": "{{ missing }}"}, nd) == ""
+    assert resolve_string({}, nd) == ""
 
 
 def test_resolve_string_star_path():
     from app.fields import resolve_string
 
     nd = {"data": [{"price": 9.5}, {"price": 1.0}]}
-    assert resolve_string({"value_key": "data.*.price"}, nd) == "9.5"
-    assert resolve_string({"value_key": "data.0.price"}, nd) == "9.5"
+    assert resolve_string({"value": "{{ data.*.price }}"}, nd) == "9.5"
+    assert resolve_string({"value": "{{ data.0.price }}"}, nd) == "9.5"
 
 
 def test_resolve_numeric_dotted_path():
@@ -58,11 +69,22 @@ def test_resolve_numeric_dotted_path():
     assert resolve_numeric("2", nd) == 2.0
 
 
-def test_resolve_bool_dotted_path():
+def test_resolve_numeric_maths():
+    from app.fields import resolve_numeric
+
+    nd = {"rate": 20, "qty": 3}
+    assert resolve_numeric("rate * 2", nd) == 40.0
+    assert resolve_numeric("1/rate", nd) == 0.05
+    assert resolve_numeric("qty", nd) == 3.0
+
+
+def test_resolve_bool_fixed():
     from app.fields import resolve_bool
 
-    nd = {"flags": {"up": True}}
-    assert resolve_bool({"value_key": "flags.up"}, nd) is True
+    assert resolve_bool({"value": True}) is True
+    assert resolve_bool({"value": False}) is False
+    assert resolve_bool({"value": "on"}) is True
+    assert resolve_bool({"value": "off"}) is False
 
 
 def test_render_template_uses_get_by_path():
@@ -78,3 +100,25 @@ def test_render_template_star_path():
     data = {"data": [{"price": 3}, {"price": 9}]}
     assert render_template("p={{data.*.price}}", data) == "p=3"
     assert render_template("p={{data.0.price}}", data) == "p=3"
+
+
+def test_resolve_path_or_expr():
+    from app.widget_transforms import resolve_path_or_expr
+
+    nd = {"status": "ok", "rate": 20, "payload": {"items": [1, 2]}}
+    assert resolve_path_or_expr("status", nd) == "ok"
+    assert resolve_path_or_expr("payload.items", nd) == [1, 2]
+    assert resolve_path_or_expr("rate * 2", nd) == 40.0
+    assert resolve_path_or_expr("1/rate", nd) == 0.05
+    assert resolve_path_or_expr("missing", nd) is None
+    assert resolve_path_or_expr("1/0", nd) is None
+
+
+def test_render_data_template():
+    from app.widget_transforms import render_data_template
+
+    nd = {"status": "ok", "rate": 20}
+    assert render_data_template("x={{ status }}", nd) == "x=ok"
+    assert render_data_template("{{ 1/rate }}", nd) == "0.05"
+    assert render_data_template("ok {{ status }} {{ rate * 2 }}", nd) == "ok ok 40"
+    assert render_data_template("{{ missing }}", nd) == ""

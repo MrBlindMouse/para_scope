@@ -1,10 +1,10 @@
-"""Helpers for global Field storage sinks (logbook / counter / value / toggle)."""
+"""Helpers for global Field storage sinks (logbook / value / text / toggle)."""
 from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-FIELD_TYPES = ("logbook", "counter", "value", "toggle")
+FIELD_TYPES = ("logbook", "value", "text", "toggle")
 DEFAULT_MAX_ENTRIES = 100
 
 # Prefix → list index for ``*`` segments (set while a matching rule's actions run).
@@ -67,13 +67,20 @@ def default_field_config(field_type: str) -> dict:
 
 
 def default_field_state(field_type: str) -> dict:
-    if field_type == "counter":
-        return {"value": 0}
     if field_type == "value":
+        return {"value": 0}
+    if field_type == "text":
         return {"value": ""}
     if field_type == "toggle":
         return {"value": False}
     return {}
+
+
+def with_current_field(nd: dict | None, current) -> dict:
+    """Shallow copy of event data with reserved ``field`` = current stored value."""
+    data = dict(nd or {})
+    data["field"] = current
+    return data
 
 
 def coerce_logbook_value(raw):
@@ -84,40 +91,40 @@ def coerce_logbook_value(raw):
 
 
 def resolve_numeric(metric_value, normalized_data: dict | None) -> float:
-    """Resolve a literal number or event-data key (dotted path OK) to float."""
+    """Resolve a literal number, event path, or maths expression to float."""
     if metric_value is None:
         raise ValueError("A number is required")
     try:
         return float(metric_value)
     except (ValueError, TypeError):
-        nd = normalized_data or {}
-        raw = get_by_path(nd, metric_value) if isinstance(metric_value, str) else None
-        if raw is None:
-            raise ValueError(f"Couldn’t find number “{metric_value}” in the event")
+        pass
+    if not isinstance(metric_value, str):
+        raise ValueError("A number is required")
+    from app.widget_transforms import resolve_path_or_expr
+
+    raw = resolve_path_or_expr(metric_value, normalized_data or {})
+    if raw is None:
+        raise ValueError(f"Couldn’t find number “{metric_value}” in the event")
+    try:
         return float(raw)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Couldn’t find number “{metric_value}” in the event") from e
 
 
 def resolve_string(config: dict, normalized_data: dict | None) -> str:
-    """Resolve literal value or value_key (dotted path OK) to string."""
-    nd = normalized_data or {}
-    if config.get("value_key"):
-        raw = get_by_path(nd, config["value_key"])
-        return "" if raw is None else str(raw)
-    if "value" in config:
-        raw = config["value"]
-        return "" if raw is None else str(raw)
-    return ""
+    """Resolve text-field template (``{{ }}`` / maths) against event (+ ``field``) data."""
+    from app.widget_transforms import render_data_template
+
+    if "value" not in config:
+        return ""
+    return render_data_template(str(config["value"] or ""), normalized_data or {})
 
 
-def resolve_bool(config: dict, normalized_data: dict | None) -> bool:
-    """Resolve literal bool or value_key (dotted path OK) to bool."""
-    nd = normalized_data or {}
-    if config.get("value_key"):
-        raw = get_by_path(nd, config["value_key"])
-    elif "value" in config:
-        raw = config["value"]
-    else:
+def resolve_bool(config: dict, normalized_data: dict | None = None) -> bool:
+    """Resolve Fixed toggle bool from config value."""
+    if "value" not in config:
         raise ValueError("Toggle action needs a value")
+    raw = config["value"]
     if isinstance(raw, bool):
         return raw
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):

@@ -30,8 +30,8 @@ Single-process FastAPI app. No migrations, no Docker. Everything is DB-backed co
 | Pipeline | `app/pipeline.py` — rule matching + action dispatch (`evaluate_and_dispatch`) |
 | Polling | `app/scheduler.py` + `app/pollers.py` — APScheduler jobs + HTTP poller |
 | Widgets | `app/widgets.py` — dashboard widget registry; ApexCharts in `static/vendor/apexcharts/` + `widget-charts.js`; transforms in `widget_transforms.py` |
-| Fields | `app/fields.py` — shared logbook / counter / value / toggle state |
-| Actions | `app/actions.py` — action type dispatch (field_push, http_forward, web_push) |
+| Fields | `app/fields.py` — shared logbook / value / text / toggle state |
+| Actions | `app/actions.py` — action type dispatch (field_push, http_forward, notify, web_push, local_script) |
 
 Config lives in the DB. Config nav: `/config/pipeline`, `/config/users`, `/config/dashboard`, `/config/style`.
 
@@ -41,7 +41,7 @@ Config lives in the DB. Config nav: `/config/pipeline`, `/config/users`, `/confi
 - **Enum class names must not collide with model class names** — `ScheduleType` is the interval/cron enum for `PollingSchedule` (not to be confused with `EventTypeRecord`). Same table name (`event_types`) is fine; only the Python class name matters for relationships.
 - **Auth middleware checks `session_username` cookie** — it queries `User` by username and verifies the itsdangerous signature. Any change to the User model or session mechanism needs a corresponding middleware update.
 - **First-run setup** — with zero users, AuthMiddleware sends browsers to `/setup` (public). After the first user exists, `/setup` redirects to `/login`. Optional CLI: `create_user.py` (needs the DB file from a prior app start).
-- **Polling jobs** — registered at startup and on schedule create/delete. Requires `apscheduler` + `httpx`. Jobs run in-process; never scale beyond 1 worker.
+- **Polling jobs** — registered at startup and on poll source create/edit/delete. Requires `apscheduler` + `httpx`. Jobs run in-process; never scale beyond 1 worker.
 - **Rate-limit dicts live on `app.main`** — tests clear them via `main_mod._LOGIN_RATE_LIMIT.clear()` etc. If you add rate limiting elsewhere, export the dict from `app.main` for test access (same pattern).
 - **CSRF** — form POSTs need a `csrf_token` cookie + `_csrf_token` form field; JSON POSTs need `X-CSRF-Token` header. Webhook endpoints skip CSRF entirely.
 
