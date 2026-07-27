@@ -1,0 +1,34 @@
+<div class="stack dialog__form">
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">Recent — {{ field.name }}</h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+  <div class="flex items-center gap">
+    <span class="text-muted">Show</span>
+    {% for n in limit_choices %}
+      <button type="button"
+              class="btn btn--sm{% if n == limit %} btn--primary{% endif %}"
+              hx-get="/config/pipeline/field/{{ field.id }}/partials/recent-entries?limit={{ n }}"
+              hx-target="#pipeline-dialog"
+              hx-swap="innerHTML">
+        {{ n }}
+      </button>
+    {% endfor %}
+  </div>
+  {% if entries %}
+    <ul class="stack stack--dense dialog__event-list">
+    {% for e in entries %}
+      <li class="stack stack--tight">
+        <p class="text-muted">
+          #{{ e.id }}
+          · {{ e.timestamp }}
+          {% if e.source_id %}· source #{{ e.source_id }}{% endif %}
+        </p>
+        <pre class="code-block">{{ e.value | tojson(indent=2) }}</pre>
+      </li>
+    {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-muted">No entries yet for this logbook.</p>
+  {% endif %}
+</div>

@@ -288,6 +288,69 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
 
 
 
+# route: /config/pipeline/field/{field_id}/partials/recent-entries
+@router.get("/config/pipeline/field/{field_id}/partials/recent-entries")
+async def pipeline_recent_logbook(request: Request, field_id: int, db: Session = Depends(get_db)):
+    from app.event_store import RECENT_LIMIT_DEFAULT, RECENT_LIMIT_MAX
+
+    field = db.query(Field).filter(Field.id == field_id).first()
+    if not field:
+        return HTMLResponse("Field not found", status_code=404)
+    if field.field_type != "logbook":
+        return HTMLResponse("Not a logbook", status_code=400)
+    try:
+        limit = int(request.query_params.get("limit") or RECENT_LIMIT_DEFAULT)
+    except ValueError:
+        limit = RECENT_LIMIT_DEFAULT
+    limit = max(1, min(limit, RECENT_LIMIT_MAX))
+
+    entries = (
+        db.query(FieldLogEntry)
+        .filter(FieldLogEntry.field_id == field_id)
+        .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return ctx.templates.TemplateResponse(
+        request, "config/pipeline/_recent_logbook.html", {
+            "field": field,
+            "entries": entries,
+            "limit": limit,
+            "limit_choices": (5, 10, 25, 50),
+        }
+    )
+
+
+
+# route: /config/pipeline/field/{field_id}/clear
+@router.post("/config/pipeline/field/{field_id}/clear")
+async def pipeline_clear_logbook(request: Request, field_id: int, db: Session = Depends(get_db)):
+    field = db.query(Field).filter(Field.id == field_id).first()
+    if not field:
+        if ctx._is_htmx(request):
+            return HTMLResponse("Field not found", status_code=404)
+        return ctx._pipeline_redirect(error="Field not found")
+    if field.field_type != "logbook":
+        msg = "Only logbooks can be cleared"
+        return ctx._pipeline_redirect(error=msg, request=request)
+
+    deleted = (
+        db.query(FieldLogEntry)
+        .filter(FieldLogEntry.field_id == field_id)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    ctx._audit_log(
+        db, request, "field.clear", resource_type="field", resource_id=field_id,
+        details={"name": field.name, "deleted": deleted},
+    )
+
+    if ctx._is_htmx(request):
+        return ctx._fields_section_template(request, db)
+    return ctx._pipeline_redirect(success=f"Cleared {deleted} entries from '{field.name}'")
+
+
+
 # route: /config/pipeline/partials/source-form
 @router.get("/config/pipeline/partials/source-form")
 async def pipeline_source_form(request: Request):

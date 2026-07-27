@@ -31,6 +31,23 @@
           {% endif %}
         </span>
       </div>
+      {% if f.field_type == 'logbook' %}
+      <button type="button"
+              class="btn btn--sm"
+              hx-get="/config/pipeline/field/{{ f.id }}/partials/recent-entries"
+              hx-target="#pipeline-dialog"
+              hx-swap="innerHTML">
+        Recent
+      </button>
+      <form method="post" action="/config/pipeline/field/{{ f.id }}/clear"
+            hx-post="/config/pipeline/field/{{ f.id }}/clear"
+            hx-target="#pipeline-fields"
+            hx-swap="outerHTML"
+            hx-confirm="Clear all entries in {{ f.name }}?">
+        {% include 'components/csrf.html' %}
+        <button type="submit" class="btn btn--sm">Clear</button>
+      </form>
+      {% endif %}
       <button type="button"
               class="btn btn--sm"
               hx-get="/config/pipeline/partials/field-form?field_id={{ f.id }}"

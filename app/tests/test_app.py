@@ -5308,6 +5308,90 @@ class TestFields:
         finally:
             db.close()
 
+    def test_logbook_recent_and_clear(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Recent Log", slug="recent-log", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.flush()
+            for i in range(7):
+                db.add(FieldLogEntry(field_id=field.id, value={"n": i}))
+            db.commit()
+            fid = field.id
+        finally:
+            db.close()
+
+        page = authenticated_client.get("/config/pipeline")
+        assert f"/config/pipeline/field/{fid}/partials/recent-entries" in page.text
+        assert f"/config/pipeline/field/{fid}/clear" in page.text
+
+        resp = authenticated_client.get(
+            f"/config/pipeline/field/{fid}/partials/recent-entries?limit=5"
+        )
+        assert resp.status_code == 200
+        assert "Recent — Recent Log" in resp.text
+        assert '"n": 6' in resp.text
+        assert '"n": 2' in resp.text
+        assert '"n": 0' not in resp.text
+
+        clamped = authenticated_client.get(
+            f"/config/pipeline/field/{fid}/partials/recent-entries?limit=999"
+        )
+        assert clamped.status_code == 200
+        assert '"n": 0' in clamped.text
+
+        clear = authenticated_client.post(
+            f"/config/pipeline/field/{fid}/clear",
+            data={},
+            follow_redirects=False,
+        )
+        assert clear.status_code in (200, 303)
+        db = next(get_db())
+        try:
+            assert db.query(FieldLogEntry).filter(FieldLogEntry.field_id == fid).count() == 0
+            assert db.query(Field).filter(Field.id == fid).first() is not None
+        finally:
+            db.close()
+
+        empty = authenticated_client.get(
+            f"/config/pipeline/field/{fid}/partials/recent-entries"
+        )
+        assert empty.status_code == 200
+        assert "No entries yet" in empty.text
+
+    def test_clear_rejects_non_logbook(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Not Log", slug="not-log", field_type="value",
+                config={}, state={"value": 1},
+            )
+            db.add(field)
+            db.commit()
+            fid = field.id
+        finally:
+            db.close()
+
+        resp = authenticated_client.post(
+            f"/config/pipeline/field/{fid}/clear",
+            data={},
+            follow_redirects=False,
+        )
+        assert resp.status_code in (400, 303)
+        recent = authenticated_client.get(
+            f"/config/pipeline/field/{fid}/partials/recent-entries"
+        )
+        assert recent.status_code == 400
+
     def test_logbook_prunes_max_entries(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Prune Src", slug="prune-src")
         from app.database import get_db
