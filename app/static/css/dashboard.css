@@ -44,7 +44,8 @@
     overflow: auto;
   }
 
-  .dashboard-grid .card__body:has(.widget-notes-wrap) {
+  .dashboard-grid .card__body:has(.widget-notes-wrap),
+  .dashboard-grid .card__body:has(.widget-chart) {
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -52,13 +53,16 @@
 
   .dashboard-grid .widget-chart {
     position: relative;
-    block-size: 10rem;
-    max-block-size: 100%;
+    flex: 1 1 auto;
+    min-block-size: 0;
+    block-size: auto;
+    inline-size: 100%;
   }
 
   .dashboard-grid .widget-chart > [data-widget-chart] {
     block-size: 100%;
     inline-size: 100%;
+    min-block-size: 0;
   }
 
   .dashboard-grid .widget-chart .apexcharts-canvas {

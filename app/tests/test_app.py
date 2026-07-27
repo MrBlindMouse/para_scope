@@ -1741,7 +1741,7 @@ class TestDashboardGridLayout:
         from pathlib import Path
 
         js = Path(__file__).resolve().parents[1].joinpath("static/js/dashboard-grid.js").read_text()
-        assert "Load widgets at design column count first" in js
+        assert "column: liveMax" in js
         assert "applyResponsiveColumns" in js
         assert 'layout = "list"' in js
         assert 'layout = "none"' in js
@@ -1752,6 +1752,31 @@ class TestDashboardGridLayout:
         assert "toggle.disabled" in js
         assert "columnOpts" not in js
         assert "checkDynamicColumn" not in js
+
+    def test_migrate_and_merge_keep_ultrawide_geometry(self):
+        from app.dashboard_layout import GRID_COLUMN_LIVE_MAX, merge_geometry, migrate_widgets
+
+        widgets, _ = migrate_widgets([
+            {"id": "w_right", "type": "system", "display": "metric_summary", "x": 40, "y": 0, "w": 4, "h": 2},
+        ])
+        assert widgets[0]["x"] == 40
+        assert widgets[0]["w"] == 4
+
+        merged = merge_geometry(
+            [{"id": "w_right", "type": "system", "display": "metric_summary", "x": 0, "y": 0, "w": 6, "h": 2}],
+            [{"id": "w_right", "x": 40, "y": 1, "w": 4, "h": 3}],
+        )
+        assert merged[0]["x"] == 40
+        assert merged[0]["w"] == 4
+        assert merged[0]["y"] == 1
+        assert merged[0]["h"] == 3
+
+        too_wide, _ = migrate_widgets([
+            {"id": "w_over", "type": "system", "display": "metric_summary", "x": 90, "y": 0, "w": 20, "h": 2},
+        ])
+        assert too_wide[0]["w"] == 20
+        assert too_wide[0]["x"] == GRID_COLUMN_LIVE_MAX - 20
+        assert too_wide[0]["x"] + too_wide[0]["w"] == GRID_COLUMN_LIVE_MAX
 
     def test_api_layout_merges_geometry_by_id(self, authenticated_client):
         from app.database import get_db

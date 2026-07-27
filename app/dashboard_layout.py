@@ -75,6 +75,16 @@ def _default_h(wtype: str, display: str | None = None) -> int:
     return DEFAULT_H
 
 
+def _clamp_geometry(item: dict) -> None:
+    """Clamp x/w into the live coordinate space (may exceed design GRID_COLUMNS)."""
+    item["w"] = max(1, min(GRID_COLUMN_LIVE_MAX, int(item["w"])))
+    item["x"] = max(0, min(GRID_COLUMN_LIVE_MAX - 1, int(item["x"])))
+    if item["x"] + item["w"] > GRID_COLUMN_LIVE_MAX:
+        item["x"] = max(0, GRID_COLUMN_LIVE_MAX - item["w"])
+    item["y"] = max(0, int(item["y"]))
+    item["h"] = max(1, int(item["h"]))
+
+
 def migrate_widgets(widgets: list[dict]) -> tuple[list[dict], bool]:
     """Ensure each widget has id + x/y/w/h. Returns (widgets, changed)."""
     changed = False
@@ -98,10 +108,7 @@ def migrate_widgets(widgets: list[dict]) -> tuple[list[dict], bool]:
                 item[key] = default
                 changed = True
         try:
-            item["x"] = int(item["x"])
-            item["y"] = int(item["y"])
-            item["w"] = max(1, min(COL_FULL, int(item["w"])))
-            item["h"] = max(1, int(item["h"]))
+            _clamp_geometry(item)
         except (TypeError, ValueError):
             item["x"], item["y"] = 0, y
             item["w"] = DEFAULT_W
@@ -138,10 +145,10 @@ def merge_geometry(existing: list[dict], updates: list[dict]) -> list[dict]:
                         item[key] = int(u[key])
                     except (TypeError, ValueError):
                         pass
-            if "w" in item:
-                item["w"] = max(1, min(COL_FULL, item["w"]))
-            if "h" in item:
-                item["h"] = max(1, item["h"])
+            try:
+                _clamp_geometry(item)
+            except (TypeError, ValueError):
+                pass
         out.append(item)
     return out
 

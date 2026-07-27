@@ -3,6 +3,7 @@
   "use strict";
 
   var charts = Object.create(null);
+  var chartObservers = Object.create(null);
   var PALETTE = [
     "#3366cc", "#dc3912", "#ff9900", "#109618", "#990099",
     "#0099c6", "#dd4477", "#66aa00", "#b82e2e", "#316395",
@@ -14,6 +15,10 @@
   }
 
   function destroy(id) {
+    if (chartObservers[id]) {
+      try { chartObservers[id].disconnect(); } catch (e) {}
+      delete chartObservers[id];
+    }
     if (charts[id]) {
       try { charts[id].destroy(); } catch (e) {}
       delete charts[id];
@@ -124,7 +129,22 @@
     var chart = new ApexCharts(el, options);
     chart.render();
     charts[id] = chart;
+    if (typeof ResizeObserver !== "undefined") {
+      var timer = null;
+      var ro = new ResizeObserver(function () {
+        clearTimeout(timer);
+        timer = setTimeout(function () {
+          try { chart.resize(); } catch (e) {}
+        }, 50);
+      });
+      ro.observe(el);
+      chartObservers[id] = ro;
+    }
     return chart;
+  }
+
+  function legendVisible(opts) {
+    return !!(opts && opts.showLegend !== false && !opts.preview);
   }
 
   function parseNum(el, attr, fallback) {
@@ -196,7 +216,7 @@
         style: { colors: [t.ink], fontSize: opts.preview ? "9px" : "10px" },
       },
       legend: {
-        show: multi && !opts.preview,
+        show: legendVisible(opts),
         position: "bottom",
         labels: { colors: t.muted },
       },
@@ -237,7 +257,7 @@
         opacity: negative ? 0.35 : 0.25,
       },
       legend: {
-        show: (packed.seriesList.length > 1 || stacked) && !opts.preview,
+        show: legendVisible(opts),
         position: "bottom",
         labels: { colors: t.muted },
       },
@@ -290,7 +310,7 @@
         offsetY: opts.preview && !horizontal ? -4 : 0,
       },
       legend: {
-        show: (packed.seriesList.length > 1 || stacked) && !opts.preview,
+        show: legendVisible(opts),
         position: "bottom",
         labels: { colors: t.muted },
       },
@@ -327,7 +347,7 @@
       labels: labels || [],
       colors: colors((values || []).length),
       legend: {
-        show: !opts.preview,
+        show: legendVisible(opts),
         position: "bottom",
         labels: { colors: t.muted },
       },
@@ -368,7 +388,7 @@
       stroke: { width: 2 },
       fill: { opacity: 0.25 },
       yaxis: { show: false },
-      legend: { show: false },
+      legend: { show: legendVisible(opts) },
       xaxis: {
         labels: {
           style: {
@@ -401,7 +421,7 @@
       stroke: { colors: [t.surface] },
       fill: { opacity: 0.85 },
       legend: {
-        show: !opts.preview,
+        show: legendVisible(opts),
         position: "bottom",
         labels: { colors: t.muted },
       },
@@ -535,7 +555,7 @@
         },
       },
       legend: {
-        show: seriesVals.length > 1,
+        show: legendVisible(opts),
         position: "bottom",
         labels: { colors: t.muted },
       },
@@ -550,6 +570,7 @@
       var display = el.getAttribute("data-chart-display") || "";
       var style = el.getAttribute("data-chart-style") || "";
       var unit = el.getAttribute("data-unit") || "";
+      var showLegend = el.getAttribute("data-show-legend") !== "0";
 
       if (kind === "series") {
         var series = [];
@@ -558,6 +579,7 @@
           style: style || "basic",
           unit: unit,
           horizontal: el.getAttribute("data-horizontal") === "1",
+          showLegend: showLegend,
         };
         if (display === "area") renderArea(el, series, sopts);
         else if (display === "column") renderColumn(el, series, sopts);
@@ -576,6 +598,7 @@
           max: parseMax(el),
           startAngle: parseNum(el, "data-start-angle", -90),
           endAngle: parseNum(el, "data-end-angle", 90),
+          showLegend: showLegend,
         };
         if (display === "radial") renderRadial(el, labels, values, copts);
         else if (display === "radar") renderRadar(el, labels, values, copts);

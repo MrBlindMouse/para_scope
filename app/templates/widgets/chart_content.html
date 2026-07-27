@@ -14,6 +14,7 @@
        data-labels='{{ wdata.labels | tojson }}'
        data-values='{{ wdata.values | tojson }}'
        data-unit="{{ wdata.unit or '' }}"
+       data-show-legend="{{ '0' if (widget_config or {}).get('show_legend') == false else '1' }}"
        {% if wdata.max is defined %}data-max="{{ wdata.max }}"{% endif %}
        {% if wdata.start_angle is defined %}data-start-angle="{{ wdata.start_angle }}"{% endif %}
        {% if wdata.end_angle is defined %}data-end-angle="{{ wdata.end_angle }}"{% endif %}></div>

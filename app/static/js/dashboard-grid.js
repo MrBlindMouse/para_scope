@@ -18,10 +18,10 @@
     var margin = parseInt(el.getAttribute("data-gs-margin") || "6", 10);
     var stackBelow = parseInt(el.getAttribute("data-gs-stack-below") || "768", 10);
 
-    // Load widgets at design column count first. Do not use GridStack's built-in
-    // columnWidth observer — it cannot combine continuous scaling with a full-width list stack.
+    // Prepare in the full live coordinate space so ultrawide right-edge x/w are not
+    // clamped into the design 36-col grid before applyResponsiveColumns runs.
     var grid = GridStack.init({
-      column: columnMax,
+      column: liveMax,
       cellHeight: cellHeight,
       margin: margin,
       float: false,

@@ -649,11 +649,17 @@
       }
       html += '<label class="stack form-field--sm">Unit' +
         '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
+      html += '<label class="flex items-center gap">' +
+        '<input type="checkbox" data-cfg="show_legend" value="1"' +
+        (cfg.show_legend === false ? "" : " checked") + "> Show legend</label>";
     }
 
     if (w.type === "chart") {
       html += '<label class="stack form-field--sm">Unit' +
         '<input type="text" class="input" data-cfg="unit" value="' + escapeAttr(cfg.unit || "") + '"></label>';
+      html += '<label class="flex items-center gap">' +
+        '<input type="checkbox" data-cfg="show_legend" value="1"' +
+        (cfg.show_legend === false ? "" : " checked") + "> Show legend</label>";
       html += styleExtraFieldsHtml(w.type, disp, style, cfg);
       var cMeta = styleMeta(w.type, disp, style);
       html += chartSourcesHtml(cfg.sources, { max_sources: cMeta.max_sources });
@@ -956,6 +962,8 @@
         } else {
           delete config.horizontal;
         }
+        var sLegend = card.querySelector('[data-cfg="show_legend"]');
+        config.show_legend = sLegend ? !!sLegend.checked : true;
         delete config.max;
         delete config.max_field_slug;
         delete config.start_angle;
@@ -972,6 +980,8 @@
         delete config.horizontal;
         delete config.tone;
         delete config.tone_rules;
+        var cLegend = card.querySelector('[data-cfg="show_legend"]');
+        config.show_legend = cLegend ? !!cLegend.checked : true;
         var cMeta = styleMeta(type, entry.display, config.style || defaultStyle(type, entry.display));
         var cKeys = cMeta.keys || [];
         if (cKeys.indexOf("max") >= 0 || cKeys.indexOf("max_field_slug") >= 0) {
@@ -1063,7 +1073,7 @@
       title: kindTitle(type),
       show_title: true,
       config: type === "series" || type === "chart"
-        ? {style: defaultStyle(type, disp)}
+        ? {style: defaultStyle(type, disp), show_legend: true}
         : {style: defaultStyle(type, disp), tone: defaultTone(type, disp)}
     });
     setWidgets(widgets);

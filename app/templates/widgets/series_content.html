@@ -13,6 +13,7 @@
        data-chart-style="{{ style }}"
        data-series='{{ wdata.series | tojson }}'
        data-unit="{{ wdata.unit or '' }}"
+       data-show-legend="{{ '0' if (widget_config or {}).get('show_legend') == false else '1' }}"
        {% if disp == 'column' and wdata.horizontal %}data-horizontal="1"{% endif %}></div>
 </div>
 {% else %}
