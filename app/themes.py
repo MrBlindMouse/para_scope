@@ -45,13 +45,13 @@ THEME_OPTIONS: list[dict] = [
     {"id": "catppuccin-mocha", "label": "Catppuccin Mocha", "kind": "dark",
      "swatches": ["#1e1e2e", "#313244", "#cdd6f4", "#89b4fa", "#cba6f7"]},
     {"id": "catppuccin-latte", "label": "Catppuccin Latte", "kind": "light",
-     "swatches": ["#eff1f5", "#e6e9ef", "#4c4f69", "#1e66f5", "#8839ef"]},
+     "swatches": ["#eff1f5", "#e6e9ef", "#4c4f69", "#1b5cdc", "#8839ef"]},
     {"id": "nord", "label": "Nord", "kind": "dark",
      "swatches": ["#2e3440", "#3b4252", "#eceff4", "#88c0d0", "#b48ead"]},
     {"id": "tokyo-night", "label": "Tokyo Night", "kind": "dark",
      "swatches": ["#1a1b26", "#24283b", "#c0caf5", "#7aa2f7", "#bb9af7"]},
     {"id": "tokyo-night-light", "label": "Tokyo Night Light", "kind": "light",
-     "swatches": ["#e1e2e7", "#d5d6db", "#3760bf", "#2e7de9", "#7847bd"]},
+     "swatches": ["#e1e2e7", "#d5d6db", "#343b58", "#2959aa", "#7847bd"]},
     {"id": "dracula", "label": "Dracula", "kind": "dark",
      "swatches": ["#282a36", "#44475a", "#f8f8f2", "#8be9fd", "#bd93f9"]},
     {"id": "gruvbox-dark", "label": "Gruvbox Dark", "kind": "dark",
@@ -59,25 +59,25 @@ THEME_OPTIONS: list[dict] = [
     {"id": "gruvbox-light", "label": "Gruvbox Light", "kind": "light",
      "swatches": ["#fbf1c7", "#f2e5bc", "#3c3836", "#076678", "#8f3f71"]},
     {"id": "solarized-dark", "label": "Solarized Dark", "kind": "dark",
-     "swatches": ["#002b36", "#073642", "#839496", "#268bd2", "#2aa198"]},
+     "swatches": ["#002b36", "#073642", "#93a1a1", "#2aa198", "#6c71c4"]},
     {"id": "solarized-light", "label": "Solarized Light", "kind": "light",
-     "swatches": ["#fdf6e3", "#eee8d5", "#657b83", "#268bd2", "#6c71c4"]},
+     "swatches": ["#fdf6e3", "#eee8d5", "#073642", "#1a6da8", "#6c71c4"]},
     {"id": "rose-pine", "label": "Rosé Pine", "kind": "dark",
      "swatches": ["#191724", "#1f1d2e", "#e0def4", "#c4a7e7", "#eb6f92"]},
     {"id": "rose-pine-dawn", "label": "Rosé Pine Dawn", "kind": "light",
-     "swatches": ["#faf4ed", "#fffaf3", "#575279", "#907aa9", "#b4637a"]},
+     "swatches": ["#faf4ed", "#fffaf3", "#575279", "#786396", "#b4637a"]},
     {"id": "everforest-dark", "label": "Everforest Dark", "kind": "dark",
      "swatches": ["#2d353b", "#343f44", "#d3c6aa", "#7fbbb3", "#a7c080"]},
     {"id": "everforest-light", "label": "Everforest Light", "kind": "light",
-     "swatches": ["#fdf6e3", "#f4f0d9", "#5c6a72", "#3a94c5", "#8da101"]},
+     "swatches": ["#fdf6e3", "#f4f0d9", "#5c6a72", "#2e769e", "#8da101"]},
     {"id": "one-dark", "label": "One Dark", "kind": "dark",
-     "swatches": ["#282c34", "#21252b", "#abb2bf", "#61afef", "#e06c75"]},
+     "swatches": ["#282c34", "#31353f", "#abb2bf", "#61afef", "#e06c75"]},
     {"id": "one-light", "label": "One Light", "kind": "light",
-     "swatches": ["#fafafa", "#f0f0f0", "#383a42", "#4078f2", "#e45649"]},
+     "swatches": ["#fafafa", "#f0f0f0", "#383a42", "#2a5ec8", "#e45649"]},
     {"id": "ayu-mirage", "label": "Ayu Mirage", "kind": "dark",
-     "swatches": ["#1f2430", "#232834", "#cbccc6", "#ffd580", "#f28779"]},
+     "swatches": ["#1f2430", "#232834", "#cbccc6", "#5ccfe6", "#f28779"]},
     {"id": "ayu-light", "label": "Ayu Light", "kind": "light",
-     "swatches": ["#fafafa", "#f3f4f5", "#5c6166", "#f2ae49", "#f07171"]},
+     "swatches": ["#fafafa", "#f3f4f5", "#5c6166", "#0860a8", "#f07171"]},
 ]
 
 KIND_LABELS = {"auto": "Follows system", "light": "Light", "dark": "Dark"}
@@ -307,6 +307,69 @@ def update_style(
     }, None
 
 
+def _hex_rgb(h: str) -> tuple[float, float, float]:
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    return tuple(int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+
+
+def _rel_lum(rgb: tuple[float, float, float]) -> float:
+    def lin(c: float) -> float:
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = rgb
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG contrast ratio between two #rrggbb colors."""
+    L1, L2 = _rel_lum(_hex_rgb(fg)), _rel_lum(_hex_rgb(bg))
+    hi, lo = max(L1, L2), min(L1, L2)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def named_theme_contrast_issues(
+    css_path: Path | None = None,
+    *,
+    text_min: float = 4.5,
+    border_min: float = 1.5,
+) -> list[str]:
+    """Parse themes.css hex themes; return human-readable AA floor failures."""
+    import re
+
+    path = css_path or Path(__file__).resolve().parent / "static" / "css" / "themes.css"
+    css = path.read_text(encoding="utf-8")
+    issues: list[str] = []
+    keys = ("canvas", "surface", "ink", "ink-muted", "border", "link")
+    for name, body in re.findall(r'html\[data-theme="([^"]+)"\]\s*\{([^}]+)\}', css):
+        vals: dict[str, str] = {}
+        for key in keys:
+            m = re.search(rf"--color-{re.escape(key)}:\s*(#[0-9a-fA-F]{{3,8}})", body)
+            if m:
+                vals[key] = m.group(1)
+        if "canvas" not in vals or "ink" not in vals:
+            continue  # light/dark use OKLCH, not hex
+        for role in ("ink", "ink-muted", "link"):
+            if role not in vals:
+                continue
+            ratio = contrast_ratio(vals[role], vals["canvas"])
+            if ratio < text_min:
+                issues.append(
+                    f"{name}: {role} {vals[role]} on canvas {vals['canvas']} = {ratio:.2f}:1"
+                )
+        if "border" in vals and "surface" in vals:
+            if vals["border"].lower() == vals["surface"].lower():
+                issues.append(f"{name}: border identical to surface ({vals['border']})")
+            else:
+                br = contrast_ratio(vals["border"], vals["surface"])
+                if br < border_min:
+                    issues.append(
+                        f"{name}: border {vals['border']} on surface {vals['surface']} = {br:.2f}:1"
+                    )
+    return issues
+
+
 if __name__ == "__main__":
     assert "nord" in THEMES and "not-a-theme" not in THEMES
     assert {o["id"] for o in THEME_OPTIONS} == THEMES
@@ -314,4 +377,7 @@ if __name__ == "__main__":
     assert {o["id"] for o in FONT_SIZE_OPTIONS} == FONT_SIZES
     assert clamp_opacity("0.5") == 0.5
     assert clamp_opacity(2) == 1.0
+    # ponytail: O(n) CSS parse is fine for ~20 themes; swap for precomputed table if we grow
+    _issues = named_theme_contrast_issues()
+    assert not _issues, _issues
     print("themes ok")

@@ -87,8 +87,8 @@
     --color-surface: #141b2d;
     --color-ink: #e8eefc;
     --color-ink-muted: #8b9bb8;
-    --color-border: #2a3548;
-    --color-border-strong: #3d4d66;
+    --color-border: #3d4d66;
+    --color-border-strong: #53627a;
     --color-link: #6ea8fe;
     --color-link-hover: #9ec1ff;
     --color-negative: #f07178;
@@ -108,8 +108,8 @@
     --color-surface: #313244;
     --color-ink: #cdd6f4;
     --color-ink-muted: #a6adc8;
-    --color-border: #45475a;
-    --color-border-strong: #585b70;
+    --color-border: #585b70;
+    --color-border-strong: #6c7086;
     --color-link: #89b4fa;
     --color-link-hover: #b4befe;
     --color-negative: #f38ba8;
@@ -128,11 +128,11 @@
     --color-canvas: #eff1f5;
     --color-surface: #e6e9ef;
     --color-ink: #4c4f69;
-    --color-ink-muted: #6c6f85;
-    --color-border: #ccd0da;
-    --color-border-strong: #bcc0cc;
-    --color-link: #1e66f5;
-    --color-link-hover: #7287fd;
+    --color-ink-muted: #5c5f77;
+    --color-border: #9ca0b0;
+    --color-border-strong: #8c8fa1;
+    --color-link: #1b5cdc;
+    --color-link-hover: #1e66f5;
     --color-negative: #d20f39;
     --color-negative-bg: color-mix(in oklch, #d20f39 12%, transparent);
     --color-positive: #40a02b;
@@ -150,8 +150,8 @@
     --color-surface: #3b4252;
     --color-ink: #eceff4;
     --color-ink-muted: #d8dee9;
-    --color-border: #434c5e;
-    --color-border-strong: #4c566a;
+    --color-border: #5e6a7e;
+    --color-border-strong: #7b88a1;
     --color-link: #88c0d0;
     --color-link-hover: #8fbcbb;
     --color-negative: #bf616a;
@@ -190,11 +190,11 @@
   html[data-theme="tokyo-night-light"] {
     --color-canvas: #e1e2e7;
     --color-surface: #d5d6db;
-    --color-ink: #3760bf;
-    --color-ink-muted: #6172b0;
-    --color-border: #c1c2c7;
-    --color-border-strong: #a1a2a7;
-    --color-link: #2e7de9;
+    --color-ink: #343b58;
+    --color-ink-muted: #565a6e;
+    --color-border: #a1a2a7;
+    --color-border-strong: #9699a3;
+    --color-link: #2959aa;
     --color-link-hover: #188092;
     --color-negative: #f52a65;
     --color-negative-bg: color-mix(in oklch, #f52a65 12%, transparent);
@@ -212,7 +212,7 @@
     --color-canvas: #282a36;
     --color-surface: #44475a;
     --color-ink: #f8f8f2;
-    --color-ink-muted: #bd93f9;
+    --color-ink-muted: #9ea8c3;
     --color-border: #6272a4;
     --color-border-strong: #7a88b8;
     --color-link: #8be9fd;
@@ -234,8 +234,8 @@
     --color-surface: #3c3836;
     --color-ink: #ebdbb2;
     --color-ink-muted: #a89984;
-    --color-border: #504945;
-    --color-border-strong: #665c54;
+    --color-border: #665c54;
+    --color-border-strong: #7c6f64;
     --color-link: #83a598;
     --color-link-hover: #8ec07c;
     --color-negative: #fb4934;
@@ -254,9 +254,9 @@
     --color-canvas: #fbf1c7;
     --color-surface: #f2e5bc;
     --color-ink: #3c3836;
-    --color-ink-muted: #7c6f64;
-    --color-border: #d5c4a1;
-    --color-border-strong: #bdae93;
+    --color-ink-muted: #665c54;
+    --color-border: #bdae93;
+    --color-border-strong: #a89984;
     --color-link: #076678;
     --color-link-hover: #427b58;
     --color-negative: #9d0006;
@@ -274,11 +274,11 @@
   html[data-theme="solarized-light"] {
     --color-canvas: #fdf6e3;
     --color-surface: #eee8d5;
-    --color-ink: #657b83;
-    --color-ink-muted: #93a1a1;
-    --color-border: #eee8d5;
-    --color-border-strong: #93a1a1;
-    --color-link: #268bd2;
+    --color-ink: #073642;
+    --color-ink-muted: #586e75;
+    --color-border: #93a1a1;
+    --color-border-strong: #839496;
+    --color-link: #1a6da8;
     --color-link-hover: #2aa198;
     --color-negative: #dc322f;
     --color-negative-bg: color-mix(in oklch, #dc322f 12%, transparent);
@@ -286,8 +286,8 @@
     --color-positive-bg: color-mix(in oklch, #859900 12%, transparent);
     --color-warning: #b58900;
     --color-warning-bg: color-mix(in oklch, #b58900 12%, transparent);
-    --color-info: #268bd2;
-    --color-info-bg: color-mix(in oklch, #268bd2 12%, transparent);
+    --color-info: #1a6da8;
+    --color-info-bg: color-mix(in oklch, #1a6da8 12%, transparent);
     --color-purple: #6c71c4;
   }
 
@@ -297,14 +297,14 @@
     --color-surface: #1f1d2e;
     --color-ink: #e0def4;
     --color-ink-muted: #908caa;
-    --color-border: #26233a;
+    --color-border: #403d52;
     --color-border-strong: #6e6a86;
     --color-link: #c4a7e7;
     --color-link-hover: #ebbcba;
     --color-negative: #eb6f92;
     --color-negative-bg: color-mix(in oklch, #eb6f92 12%, transparent);
-    --color-positive: #31748f;
-    --color-positive-bg: color-mix(in oklch, #31748f 12%, transparent);
+    --color-positive: #9ccfd8;
+    --color-positive-bg: color-mix(in oklch, #9ccfd8 12%, transparent);
     --color-warning: #f6c177;
     --color-warning-bg: color-mix(in oklch, #f6c177 12%, transparent);
     --color-info: #9ccfd8;
@@ -317,9 +317,9 @@
     --color-canvas: #2d353b;
     --color-surface: #343f44;
     --color-ink: #d3c6aa;
-    --color-ink-muted: #859289;
-    --color-border: #3d484d;
-    --color-border-strong: #4f585e;
+    --color-ink-muted: #9da9a0;
+    --color-border: #545e64;
+    --color-border-strong: #5a656b;
     --color-link: #7fbbb3;
     --color-link-hover: #83c092;
     --color-negative: #e67e80;
@@ -337,31 +337,31 @@
   html[data-theme="solarized-dark"] {
     --color-canvas: #002b36;
     --color-surface: #073642;
-    --color-ink: #839496;
-    --color-ink-muted: #586e75;
-    --color-border: #073642;
-    --color-border-strong: #586e75;
-    --color-link: #268bd2;
-    --color-link-hover: #2aa198;
+    --color-ink: #93a1a1;
+    --color-ink-muted: #839496;
+    --color-border: #586e75;
+    --color-border-strong: #657b83;
+    --color-link: #2aa198;
+    --color-link-hover: #69b7f0;
     --color-negative: #dc322f;
     --color-negative-bg: color-mix(in oklch, #dc322f 12%, transparent);
     --color-positive: #859900;
     --color-positive-bg: color-mix(in oklch, #859900 12%, transparent);
     --color-warning: #b58900;
     --color-warning-bg: color-mix(in oklch, #b58900 12%, transparent);
-    --color-info: #268bd2;
-    --color-info-bg: color-mix(in oklch, #268bd2 12%, transparent);
+    --color-info: #2aa198;
+    --color-info-bg: color-mix(in oklch, #2aa198 12%, transparent);
     --color-purple: #6c71c4;
   }
 
   /* One Dark — neutral with strong red accents */
   html[data-theme="one-dark"] {
     --color-canvas: #282c34;
-    --color-surface: #21252b;
+    --color-surface: #31353f;
     --color-ink: #abb2bf;
-    --color-ink-muted: #5c6370;
-    --color-border: #3e4451;
-    --color-border-strong: #4b5263;
+    --color-ink-muted: #9da5b4;
+    --color-border: #4b5263;
+    --color-border-strong: #5c6370;
     --color-link: #61afef;
     --color-link-hover: #56b6c2;
     --color-negative: #e06c75;
@@ -380,9 +380,9 @@
     --color-canvas: #1f2430;
     --color-surface: #232834;
     --color-ink: #cbccc6;
-    --color-ink-muted: #707a8c;
-    --color-border: #2a2f3a;
-    --color-border-strong: #3d4451;
+    --color-ink-muted: #8a9199;
+    --color-border: #3d4451;
+    --color-border-strong: #4a5260;
     --color-link: #5ccfe6;
     --color-link-hover: #73d0ff;
     --color-negative: #f28779;
@@ -401,10 +401,10 @@
     --color-canvas: #faf4ed;
     --color-surface: #fffaf3;
     --color-ink: #575279;
-    --color-ink-muted: #9893a5;
-    --color-border: #f2e9e1;
-    --color-border-strong: #dfdad9;
-    --color-link: #907aa9;
+    --color-ink-muted: #6e6a86;
+    --color-border: #cecacd;
+    --color-border-strong: #b9b5b8;
+    --color-link: #786396;
     --color-link-hover: #d7827e;
     --color-negative: #b4637a;
     --color-negative-bg: color-mix(in oklch, #b4637a 12%, transparent);
@@ -422,10 +422,10 @@
     --color-canvas: #fdf6e3;
     --color-surface: #f4f0d9;
     --color-ink: #5c6a72;
-    --color-ink-muted: #829181;
-    --color-border: #e6e2cc;
-    --color-border-strong: #d3c6aa;
-    --color-link: #3a94c5;
+    --color-ink-muted: #687467;
+    --color-border: #c0b48a;
+    --color-border-strong: #b3a890;
+    --color-link: #2e769e;
     --color-link-hover: #35a77c;
     --color-negative: #f85552;
     --color-negative-bg: color-mix(in oklch, #f85552 12%, transparent);
@@ -433,8 +433,8 @@
     --color-positive-bg: color-mix(in oklch, #8da101 12%, transparent);
     --color-warning: #dfa000;
     --color-warning-bg: color-mix(in oklch, #dfa000 12%, transparent);
-    --color-info: #3a94c5;
-    --color-info-bg: color-mix(in oklch, #3a94c5 12%, transparent);
+    --color-info: #2e769e;
+    --color-info-bg: color-mix(in oklch, #2e769e 12%, transparent);
     --color-purple: #df69ba;
   }
 
@@ -443,10 +443,10 @@
     --color-canvas: #fafafa;
     --color-surface: #f0f0f0;
     --color-ink: #383a42;
-    --color-ink-muted: #a0a1a7;
-    --color-border: #e5e5e6;
-    --color-border-strong: #d0d0d1;
-    --color-link: #4078f2;
+    --color-ink-muted: #696c77;
+    --color-border: #c0c0c1;
+    --color-border-strong: #a8a8a9;
+    --color-link: #2a5ec8;
     --color-link-hover: #0184bc;
     --color-negative: #e45649;
     --color-negative-bg: color-mix(in oklch, #e45649 12%, transparent);
@@ -454,8 +454,8 @@
     --color-positive-bg: color-mix(in oklch, #50a14f 12%, transparent);
     --color-warning: #c18401;
     --color-warning-bg: color-mix(in oklch, #c18401 12%, transparent);
-    --color-info: #4078f2;
-    --color-info-bg: color-mix(in oklch, #4078f2 12%, transparent);
+    --color-info: #2a5ec8;
+    --color-info-bg: color-mix(in oklch, #2a5ec8 12%, transparent);
     --color-purple: #a626a4;
   }
 
@@ -464,19 +464,19 @@
     --color-canvas: #fafafa;
     --color-surface: #f3f4f5;
     --color-ink: #5c6166;
-    --color-ink-muted: #8a9199;
-    --color-border: #e7e8e9;
-    --color-border-strong: #d3d4d5;
-    --color-link: #399ee6;
-    --color-link-hover: #55b4d4;
+    --color-ink-muted: #6b7178;
+    --color-border: #c2c3c4;
+    --color-border-strong: #a8a9aa;
+    --color-link: #0860a8;
+    --color-link-hover: #1a7fc0;
     --color-negative: #f07171;
     --color-negative-bg: color-mix(in oklch, #f07171 12%, transparent);
     --color-positive: #86b300;
     --color-positive-bg: color-mix(in oklch, #86b300 12%, transparent);
     --color-warning: #f2ae49;
     --color-warning-bg: color-mix(in oklch, #f2ae49 12%, transparent);
-    --color-info: #399ee6;
-    --color-info-bg: color-mix(in oklch, #399ee6 12%, transparent);
+    --color-info: #0860a8;
+    --color-info-bg: color-mix(in oklch, #0860a8 12%, transparent);
     --color-purple: #a37acc;
   }
 
