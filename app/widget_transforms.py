@@ -129,9 +129,15 @@ def apply_ops(value, ops: list | None):
 
 
 def extract_number(data, value_path: str | None, ops: list | None = None):
-    """Resolve a number from data (literal path or whole value) then apply ops."""
+    """Resolve a number from data (literal path or whole value) then apply ops.
+
+    Path ``value`` on a bare scalar (non-dict/list) uses the payload itself —
+    same synthetic wrapper convention as Key/text logbook templates.
+    """
     if value_path:
         raw = get_by_path(data, value_path)
+        if raw is None and value_path == "value" and not isinstance(data, (dict, list)):
+            raw = data
     else:
         raw = data
     return apply_ops(raw, ops)

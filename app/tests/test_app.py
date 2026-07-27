@@ -1830,6 +1830,12 @@ class TestWidgetTransforms:
             transform=[{"op": "div", "by": 1000}],
         )
         assert series == [{"ts": ts.isoformat(), "v": 1.0}]
+        # Bare scalar logbook entry + path "value" (template convention)
+        assert extract_number(0.05, "value") == 0.05
+        assert extract_number({"value": 0.05}, "value") == 0.05
+        assert series_from_points([(ts, 1.5)], value_path="value") == [
+            {"ts": ts.isoformat(), "v": 1.5}
+        ]
 
     def test_eval_expr_and_compare(self):
         from app.widget_transforms import eval_expr, eval_compare, resolve_tone_rules
@@ -1984,6 +1990,42 @@ class TestWidgetTransforms:
             })
             assert not data.get("error"), data
             assert data["series"][0]["points"][-1]["v"] == 42.0
+        finally:
+            db.close()
+
+    def test_series_from_logbook_scalar_value(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="USD Prices", slug="usd_prices", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.flush()
+            now = datetime.now(timezone.utc)
+            db.add(FieldLogEntry(
+                field_id=field.id, timestamp=now - timedelta(minutes=10),
+                value=0.04,
+            ))
+            db.add(FieldLogEntry(
+                field_id=field.id, timestamp=now - timedelta(minutes=5),
+                value=0.05,
+            ))
+            db.commit()
+            data = fetch_widget_data("series", db, display="line", widget_config={
+                "sources": [{"field_slug": "usd_prices.value"}],
+                "range_mode": "entries",
+                "range_entries": 10,
+            })
+            assert not data.get("error"), data
+            pts = data["series"][0]["points"]
+            assert len(pts) == 2
+            assert pts[0]["v"] == 0.04
+            assert pts[1]["v"] == 0.05
         finally:
             db.close()
 

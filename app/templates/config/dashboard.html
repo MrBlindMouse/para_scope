@@ -38,7 +38,7 @@
       <h2 class="dialog__title">Field slugs</h2>
       <button type="button" class="btn" data-fields-dialog-close>Close</button>
     </header>
-    <p class="text-muted text-xs">Use in templates as <code>{{ '{{ slug.value }}' }}</code> (logbooks: paths into the latest entry).</p>
+    <p class="text-muted text-xs">Use in templates as <code>{{ '{{ slug.value }}' }}</code> (logbooks: paths into the latest entry). Series: <code>slug.path</code>; bare number entries use <code>slug.value</code>.</p>
     <div id="fields-slug-list" class="stack stack--dense"></div>
   </div>
 </dialog>
@@ -492,7 +492,7 @@
         '<div class="card__body stack">' +
           '<div class="flex items-center gap flex-wrap">' +
             slugInputHtml('data-ssrc="field_slug"', (s.field_slug || "").trim(), "Field",
-              "my-log._poll.response_time_ms") +
+              "my-log.value or my-log._poll.response_time_ms") +
             '<button type="button" class="btn self-end" data-action="series-src-remove">Remove</button>' +
           "</div>" +
           '<label class="stack form-field--lg">Label' +
