@@ -96,6 +96,7 @@
     };
     if (extra) {
       Object.keys(extra).forEach(function (k) {
+        if (extra[k] == null) return;  // keep defaults (e.g. grid)
         if (k === "chart" && extra.chart) {
           Object.assign(opts.chart, extra.chart);
         } else if (
