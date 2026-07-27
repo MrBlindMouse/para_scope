@@ -1,5 +1,7 @@
 """Unit tests for dotted-path event data helpers."""
 
+import pytest
+
 
 def test_with_current_field_overwrites_event_key():
     from app.fields import with_current_field
@@ -136,6 +138,49 @@ def test_eval_expr_richer_maths():
     assert eval_expr("rate % 6", nd) == 2.0
     assert eval_expr("abs()", nd) is None
     assert eval_expr("__import__('os')", nd) is None
+
+
+def test_eval_expr_star_path_tokens():
+    """Starred paths in maths resolve via get_by_path (rule star bindings)."""
+    from app.fields import path_star_bindings
+    from app.widget_transforms import eval_expr, resolve_value_from_event
+
+    data = {
+        "value": [
+            {"quote": "EUR", "rate": 0.9},
+            {"quote": "USD", "rate": 1.1},
+        ]
+    }
+    # No bindings → * is index 0
+    assert eval_expr("1 / value.*.rate", data) == pytest.approx(1 / 0.9)
+    assert resolve_value_from_event("1 / value.*.rate", data) == pytest.approx(1 / 0.9)
+
+    with path_star_bindings({"value": 1}):
+        assert eval_expr("1 / value.*.rate", data) == pytest.approx(1 / 1.1)
+        assert resolve_value_from_event("1 / value.*.rate", data) == pytest.approx(1 / 1.1)
+        assert resolve_value_from_event("value.*.rate", data) == 1.1
+
+    assert eval_expr("1 / value.*.missing", data) is None
+
+
+def test_render_data_template_star_maths():
+    """``{{ 1 / value.*.rate }}`` uses the same star bindings as paths."""
+    from app.fields import path_star_bindings
+    from app.widget_transforms import render_data_template
+
+    data = {
+        "value": [
+            {"quote": "EUR", "rate": 0.9},
+            {"quote": "USD", "rate": 1.1},
+        ]
+    }
+    assert render_data_template("{{ 1 / value.*.rate }}", data) == "1.11111111111"
+    with path_star_bindings({"value": 1}):
+        assert render_data_template("r={{ value.*.rate }}", data) == "r=1.1"
+        assert render_data_template("inv={{ 1 / value.*.rate }}", data) == "inv=0.909090909091"
+        assert render_data_template(
+            "{{ value.*.rate }} / {{ 1/value.*.rate }}", data
+        ) == "1.1 / 0.909090909091"
 
 
 def test_resolve_value_from_event_path_and_maths():

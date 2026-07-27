@@ -4359,6 +4359,132 @@ class TestPipeline:
         finally:
             db.close()
 
+    def test_star_binding_maths_value_from_event_logbook(self, authenticated_client):
+        """Value from event maths with * uses the rule-matched list row."""
+        from app.database import SessionLocal
+        from app.models import Field, FieldLogEntry, Source, EventTypeRecord, Rule, ActionInstance, Event
+        from app.pipeline import evaluate_and_dispatch
+
+        db = SessionLocal()
+        try:
+            field = Field(
+                name="inv-rate",
+                slug="inv-rate-bind",
+                field_type="logbook",
+                config={"max_entries": 50},
+                state={},
+            )
+            src = Source(
+                name="FX Maths", slug="fx-maths-bind", source_type="webhook", enabled=True
+            )
+            db.add_all([field, src])
+            db.flush()
+            et = EventTypeRecord(source_id=src.id, name="on_success")
+            db.add(et)
+            db.flush()
+            action = ActionInstance(
+                action_type="field_push",
+                source_id=src.id,
+                config={"field_id": field.id, "value_key": "1 / value.*.rate"},
+                enabled=True,
+            )
+            db.add(action)
+            db.flush()
+            rule = Rule(
+                source_id=src.id,
+                event_type_ids=[et.id],
+                conditions={"value.*.base": "EUR", "value.*.quote": "ZAR"},
+                action_ids=[action.id],
+                enabled=True,
+            )
+            db.add(rule)
+            event = Event(
+                source_id=src.id,
+                event_type_id=et.id,
+                correlation_id="fx-maths-1",
+                raw_payload="{}",
+                normalized_data={
+                    "value": [
+                        {"base": "EUR", "quote": "AED", "rate": 4.1},
+                        {"base": "EUR", "quote": "ZAR", "rate": 19.5},
+                    ]
+                },
+                status="pending",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            entry = (
+                db.query(FieldLogEntry)
+                .filter(FieldLogEntry.field_id == field.id)
+                .order_by(FieldLogEntry.id.desc())
+                .first()
+            )
+            assert entry is not None
+            assert entry.value == pytest.approx(1 / 19.5)
+        finally:
+            db.close()
+
+    def test_star_binding_maths_template_text_field(self, authenticated_client):
+        """Text Template ``{{ 1 / value.*.rate }}`` uses rule-matched row."""
+        from app.database import SessionLocal
+        from app.models import Field, Source, EventTypeRecord, Rule, ActionInstance, Event
+        from app.pipeline import evaluate_and_dispatch
+
+        db = SessionLocal()
+        try:
+            field = Field(
+                name="inv-tmpl",
+                slug="inv-tmpl-bind",
+                field_type="text",
+                config={},
+                state={"value": ""},
+            )
+            src = Source(
+                name="FX Tmpl", slug="fx-tmpl-bind", source_type="webhook", enabled=True
+            )
+            db.add_all([field, src])
+            db.flush()
+            et = EventTypeRecord(source_id=src.id, name="on_success")
+            db.add(et)
+            db.flush()
+            action = ActionInstance(
+                action_type="field_push",
+                source_id=src.id,
+                config={"field_id": field.id, "value": "inv={{ 1 / value.*.rate }}"},
+                enabled=True,
+            )
+            db.add(action)
+            db.flush()
+            rule = Rule(
+                source_id=src.id,
+                event_type_ids=[et.id],
+                conditions={"value.*.base": "EUR", "value.*.quote": "ZAR"},
+                action_ids=[action.id],
+                enabled=True,
+            )
+            db.add(rule)
+            event = Event(
+                source_id=src.id,
+                event_type_id=et.id,
+                correlation_id="fx-tmpl-1",
+                raw_payload="{}",
+                normalized_data={
+                    "value": [
+                        {"base": "EUR", "quote": "AED", "rate": 4.1},
+                        {"base": "EUR", "quote": "ZAR", "rate": 19.5},
+                    ]
+                },
+                status="pending",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            db.refresh(field)
+            assert field.state.get("value") == "inv=0.0512820512821"
+        finally:
+            db.close()
+
 
 # ── Webhook Replay & Size Tests ─────────────────────────────────────────────
 

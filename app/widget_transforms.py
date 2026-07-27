@@ -29,8 +29,64 @@ _COMPARE_OPS = {
     "neq": operator.ne,
 }
 _PATH_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)*$")
+# Dotted paths first so ``value.*.rate`` wins over bare ``value``.
+_PATH_TOKEN_RE = re.compile(
+    r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)+|[a-zA-Z_][a-zA-Z0-9_]*"
+)
 _TEMPLATE_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
 _NUMERIC_OPS = frozenset({"gt", "lt", "gte", "lte"})
+
+
+def _as_number(raw):
+    """Return float if raw is numeric (bool excluded); else None."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    if isinstance(raw, str):
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _num_lit(v: float) -> str:
+    """Embed a float as an AST-safe numeric literal."""
+    if v != v:  # NaN
+        raise ValueError("nan")
+    if abs(v - round(v)) < 1e-12:
+        s = str(int(round(v)))
+    else:
+        s = f"{v:.12g}"
+    return f"({s})" if v < 0 else s
+
+
+def _subst_path_tokens(text: str, data: dict) -> str | None:
+    """Replace path tokens (incl. ``*`` segments) with numeric literals.
+
+    Uses ``get_by_path`` so rule star bindings apply. Fail-closed: any path
+    token that is not a number → None. Call names (``abs``, ``round``, …)
+    followed by ``(`` are left alone.
+    """
+    matches = list(_PATH_TOKEN_RE.finditer(text))
+    out = text
+    for m in reversed(matches):
+        token = m.group(0)
+        if token in _CALL_FUNCS:
+            after = text[m.end() :].lstrip()
+            if after.startswith("("):
+                continue
+        raw = get_by_path(data, token)
+        num = _as_number(raw)
+        if num is None:
+            return None
+        try:
+            lit = _num_lit(num)
+        except ValueError:
+            return None
+        out = out[: m.start()] + lit + out[m.end() :]
+    return out
 
 
 def apply_ops(value, ops: list | None):
@@ -157,29 +213,23 @@ def _eval_ast(node, data: dict):
 
 
 def eval_expr(expr: str, data: dict | None) -> float | None:
-    """Evaluate a safe arithmetic expression against ``data``. Fail-closed."""
+    """Evaluate a safe arithmetic expression against ``data``. Fail-closed.
+
+    Path tokens (including starred segments like ``value.*.rate``) are resolved
+    via ``get_by_path`` before AST eval so rule star bindings apply.
+    """
     text = (expr or "").strip()
     if not text:
         return None
+    data = data or {}
     try:
-        tree = ast.parse(text, mode="eval")
-        return float(_eval_ast(tree, data or {}))
+        rewritten = _subst_path_tokens(text, data)
+        if rewritten is None:
+            return None
+        tree = ast.parse(rewritten, mode="eval")
+        return float(_eval_ast(tree, data))
     except Exception:
         return None
-
-
-def _as_number(raw):
-    """Return float if raw is numeric (bool excluded); else None."""
-    if isinstance(raw, bool) or raw is None:
-        return None
-    if isinstance(raw, (int, float)):
-        return float(raw)
-    if isinstance(raw, str):
-        try:
-            return float(raw)
-        except ValueError:
-            return None
-    return None
 
 
 def resolve_operand(expr: str, data: dict | None):

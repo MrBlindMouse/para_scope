@@ -255,7 +255,11 @@
       <p><strong>Value from event</strong> examples:</p>
       <ul class="stack help__list">
         <li>Path (keeps objects/lists): <code>payload.sensor</code></li>
-        <li>Maths: <code>temp * 1.8 + 32</code> — ops <code>+ - * / %</code>, functions <code>abs</code>, <code>round</code>, <code>min</code>, <code>max</code></li>
+        <li>
+          Maths: <code>temp * 1.8 + 32</code> or <code>1 / value.*.rate</code> —
+          ops <code>+ - * / %</code>, functions <code>abs</code>, <code>round</code>, <code>min</code>, <code>max</code>.
+          In maths, <code>*</code> is the list row matched by the rule’s conditions (same as path-only).
+        </li>
         <li>JSON shape (string leaves = path, maths, or literal text):</li>
       </ul>
       <pre class="help__code">{{ '{' }}
