@@ -37,13 +37,31 @@ logger = logging.getLogger("para_scope.poller")
 _POLLERS: dict[str, Callable] = {}
 _POLLER_SPECS: dict[str, dict[str, Any]] = {}
 
-POLLER_CATEGORY_LABELS = {
-    "url": "URL / HTTP",
-    "system": "System",
-    "connectivity": "Connectivity / Reachability",
-    "storage": "Storage / Filesystem",
-    "application": "Application / Domain",
-    "external": "External",
+POLLER_CATEGORY_META = {
+    "url": {
+        "label": "HTTP / APIs",
+        "help_text": "Use for direct HTTP endpoint checks, generic API polling, and simple URL status checks.",
+    },
+    "system": {
+        "label": "Host / OS",
+        "help_text": "Use for host-level snapshots and operating system checks on the Para-Scope machine.",
+    },
+    "connectivity": {
+        "label": "Network / DNS / TLS",
+        "help_text": "Use for reachability, name resolution, and certificate checks between hosts.",
+    },
+    "storage": {
+        "label": "Files / Backups",
+        "help_text": "Use for filesystem capacity and backup freshness on local or mounted paths.",
+    },
+    "application": {
+        "label": "Local Apps / Data",
+        "help_text": "Use for app-specific checks on local repos, logs, databases, and self-hosted services.",
+    },
+    "external": {
+        "label": "External Services",
+        "help_text": "Use for non-HTTP internet integrations such as feeds, IMAP mailboxes, and domain registration data.",
+    },
 }
 
 _HTTP_METHODS = {
@@ -107,7 +125,7 @@ def get_poller_types() -> list[str]:
 
 def get_poller_specs() -> list[dict[str, Any]]:
     """Specs in category order, then registration order (not A–Z by label)."""
-    category_rank = {slug: index for index, slug in enumerate(POLLER_CATEGORY_LABELS)}
+    category_rank = {slug: index for index, slug in enumerate(POLLER_CATEGORY_META)}
     registration_rank = {
         handler: index for index, handler in enumerate(_POLLER_SPECS)
     }
@@ -129,9 +147,15 @@ def get_poller_spec(handler_type: str) -> dict[str, Any] | None:
 def get_poller_categories() -> list[dict[str, str]]:
     seen = {spec.get("category") for spec in _POLLER_SPECS.values()}
     categories = []
-    for slug, label in POLLER_CATEGORY_LABELS.items():
+    for slug, meta in POLLER_CATEGORY_META.items():
         if slug in seen:
-            categories.append({"slug": slug, "label": label})
+            categories.append(
+                {
+                    "slug": slug,
+                    "label": str(meta["label"]),
+                    "help_text": str(meta["help_text"]),
+                }
+            )
     return categories
 
 
@@ -459,7 +483,9 @@ def _http_request_json_or_text(
 def http_poll(schedule: PollingSchedule, db) -> dict:
     """Execute one HTTP poll for a schedule."""
     params = schedule.handler_params or {}
-    method = _HTTP_METHODS.get(schedule.handler_type, "GET")
+    method = str(params.get("method") or _HTTP_METHODS.get(schedule.handler_type, "GET")).upper()
+    expected_status = params.get("expected_status")
+    expected_status = int(expected_status) if expected_status not in (None, "") else None
 
     if not schedule.handler_url:
         raise ValueError("URL is required")
@@ -478,6 +504,7 @@ def http_poll(schedule: PollingSchedule, db) -> dict:
                 headers=headers,
                 params=params.get("query") or None,
                 json_body=params.get("body") if method in ("POST", "PUT") else None,
+                expected_status=expected_status,
             )
 
             extracted = get_by_path(payload, params.get("json_path", ""))
@@ -794,38 +821,6 @@ def rss_atom_change_poll(schedule: PollingSchedule, db) -> dict:
     }
 
 
-def public_http_status_poll(schedule: PollingSchedule, db) -> dict:
-    params = schedule.handler_params or {}
-    url = schedule.handler_url or ""
-    if not url:
-        raise ValueError("URL is required")
-    method = (params.get("method") or "GET").upper()
-    expected_status = params.get("expected_status")
-    expected_status = int(expected_status) if expected_status not in (None, "") else None
-    response, response_time_ms, payload = _http_request_json_or_text(
-        method=method,
-        url=url,
-        timeout=schedule.timeout_seconds or 30,
-        expected_status=expected_status,
-    )
-    body = payload if isinstance(payload, str) else json.dumps(payload)
-    data = {
-        "status": "ok",
-        "url": url,
-        "method": method,
-        "status_code": response.status_code,
-        "latency_ms": response_time_ms,
-        "summary": f"{method} {url} -> {response.status_code}",
-    }
-    return {
-        "ok": True,
-        "status_code": response.status_code,
-        "data": data,
-        "raw": body[:65536],
-        "response_time_ms": response_time_ms,
-    }
-
-
 def database_health_poll(schedule: PollingSchedule, db) -> dict:
     params = schedule.handler_params or {}
     database_url = (params.get("database_url") or SQLALCHEMY_DATABASE_URL).strip()
@@ -1096,6 +1091,15 @@ _HTTP_ADVANCED_FIELDS = [
         help_text="Optional dotted path inside the JSON response.",
     ),
     _field(
+        "expected_status",
+        "Expected status",
+        input_type="number",
+        parse_as="int",
+        advanced=True,
+        placeholder="200",
+        help_text="Optional exact HTTP status to require for a successful run.",
+    ),
+    _field(
         "headers",
         "Headers (JSON)",
         input_type="textarea",
@@ -1190,25 +1194,42 @@ _HTTP_PRIMARY_FIELDS = [
     _HTTP_TIMEOUT_FIELD,
     _HTTP_RETRY_FIELD,
 ]
+_HTTP_GET_METHOD_FIELD = _field(
+    "request_method",
+    "Request method",
+    param_key="method",
+    input_type="select",
+    default="GET",
+    advanced=True,
+    options=[("GET", "GET"), ("HEAD", "HEAD")],
+    help_text="Use HEAD when you only want endpoint status and headers without fetching the body.",
+)
 _HTTP_BODY_METHODS = {"http_post", "http_put", "http_patch"}
 
 for _ht, _method in _HTTP_METHODS.items():
     _fields = list(_HTTP_PRIMARY_FIELDS) + list(_HTTP_ADVANCED_FIELDS)
+    if _ht == "http_get":
+        _fields = (
+            list(_HTTP_PRIMARY_FIELDS)
+            + _HTTP_ADVANCED_FIELDS[:2]
+            + [_HTTP_GET_METHOD_FIELD]
+            + _HTTP_ADVANCED_FIELDS[2:]
+        )
     if _ht in _HTTP_BODY_METHODS:
         # Body after query params, before auth_mode.
         _fields = (
             list(_HTTP_PRIMARY_FIELDS)
-            + _HTTP_ADVANCED_FIELDS[:4]
+            + _HTTP_ADVANCED_FIELDS[:5]
             + [_HTTP_BODY_FIELD]
-            + _HTTP_ADVANCED_FIELDS[4:]
+            + _HTTP_ADVANCED_FIELDS[5:]
         )
     register_poller(
         _ht,
         _http_poll_registered,
         spec={
-            "label": _method,
+            "label": "GET / HEAD" if _ht == "http_get" else _method,
             "category": "url",
-            "summary": f"{_method} request on a schedule",
+            "summary": "GET or HEAD request on a schedule" if _ht == "http_get" else f"{_method} request on a schedule",
             "uses_url": True,
             "fields": _fields,
         },
@@ -1420,48 +1441,6 @@ register_poller(
                 required=True,
                 placeholder="https://example.com/feed.xml",
                 store="url",
-            ),
-            _field(
-                "timeout_seconds",
-                "Timeout (s)",
-                parse_as="int",
-                input_type="number",
-                store="timeout",
-                default=30,
-            ),
-        ],
-    },
-)
-register_poller(
-    "public_http_status",
-    public_http_status_poll,
-    spec={
-        "label": "Public endpoint status",
-        "category": "external",
-        "summary": "Check public endpoint status and latency",
-        "uses_url": True,
-        "fields": [
-            _field(
-                "handler_url",
-                "URL",
-                input_type="url",
-                required=True,
-                placeholder="https://status.example.com/health",
-                store="url",
-            ),
-            _field(
-                "method",
-                "Method",
-                input_type="select",
-                default="GET",
-                options=[("GET", "GET"), ("HEAD", "HEAD")],
-            ),
-            _field(
-                "expected_status",
-                "Expected status",
-                input_type="number",
-                parse_as="int",
-                placeholder="200",
             ),
             _field(
                 "timeout_seconds",

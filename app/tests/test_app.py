@@ -166,6 +166,18 @@ def _create_source(client, name="Test Source", slug=None, source_type="webhook")
     finally:
         db.close()
 
+def _set_display_timezone(name: str) -> None:
+    from app.database import get_db
+    from app.themes import get_app_settings
+
+    db = next(get_db())
+    try:
+        settings = get_app_settings(db)
+        settings.display_timezone = name
+        db.commit()
+    finally:
+        db.close()
+
 
 # ── Auth Tests ───────────────────────────────────────────────────────────────
 
@@ -342,6 +354,7 @@ class TestSourcesCRUD:
     def test_get_pipeline_empty(self, authenticated_client):
         resp = authenticated_client.get("/config/pipeline")
         assert resp.status_code == 200
+        assert 'body class="config-page"' in resp.text
         assert "No sources yet" in resp.text
         # hx-boost/hx-select must stay on the nav, not #config-panel, or dialog
         # partials get filtered to empty (inherited hx-select="#config-panel").
@@ -352,6 +365,7 @@ class TestSourcesCRUD:
         assert 'hx-get="/config/pipeline/partials/source-form"' in resp.text
         assert 'hx-target="#pipeline-dialog"' in resp.text
         assert 'hx-on::after-swap="this.showModal()"' in resp.text
+        assert '/static/js/dialogs.js' in resp.text
         assert '/static/js/htmx.min.js' in resp.text
         assert "unpkg.com/htmx" not in resp.text
 
@@ -378,6 +392,8 @@ class TestSourcesCRUD:
         assert 'id="webhook-provider-fields"' in resp.text
         assert 'data-webhook-provider="paypal"' in resp.text
         assert "Client secret" in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
+        assert 'hx-swap="innerHTML"' in resp.text
 
     def test_create_source(self, authenticated_client):
         resp = authenticated_client.post(
@@ -408,7 +424,7 @@ class TestSourcesCRUD:
         assert "Name" in loc or "name" in loc.lower()
 
     def test_htmx_empty_required_flashes_error(self, authenticated_client):
-        """HTMX form validation should HX-Redirect with a flash naming the field."""
+        """HTMX source validation should re-render the dialog with the error inline."""
         resp = authenticated_client.post(
             "/config/pipeline/sources",
             data={
@@ -423,11 +439,11 @@ class TestSourcesCRUD:
             follow_redirects=False,
         )
         assert resp.status_code == 200
-        loc = resp.headers.get("HX-Redirect") or ""
-        assert "error=" in loc
-        from urllib.parse import unquote, urlparse, parse_qs
-        err = unquote(parse_qs(urlparse(loc).query).get("error", [""])[0])
-        assert err == "URL is required"
+        assert resp.headers.get("HX-Redirect") is None
+        assert "URL is required" in resp.text
+        assert 'value="Needs URL"' in resp.text
+        assert 'option value="poll" selected' in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
 
     def test_slug_auto_from_name_and_uniquified(self, authenticated_client):
         resp1 = authenticated_client.post(
@@ -457,6 +473,21 @@ class TestSourcesCRUD:
         resp = authenticated_client.get("/config/pipeline")
         assert resp.status_code == 200
         assert "List Test" in resp.text
+        assert 'class="pipeline-chain__toolbar"' in resp.text
+        assert 'class="pipeline-action-menu"' in resp.text
+        assert '/static/js/disclosures.js' in resp.text
+
+    def test_sources_render_collapsed_in_creation_order(self, authenticated_client):
+        first_id, _ = _create_source(authenticated_client, name="Zulu Source")
+        second_id, _ = _create_source(authenticated_client, name="Alpha Source")
+
+        resp = authenticated_client.get("/config/pipeline")
+
+        assert resp.status_code == 200
+        assert 'class="btn btn--sm pipeline-disclosure-toggle"' in resp.text
+        assert 'data-disclosure-key="source-chain-' in resp.text
+        assert 'aria-controls="source-chain-body-' in resp.text
+        assert resp.text.index(f'id="source-chain-{first_id}"') < resp.text.index(f'id="source-chain-{second_id}"')
 
     def test_edit_source_partial(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Edit Partial", slug="edit-partial")
@@ -469,6 +500,31 @@ class TestSourcesCRUD:
         assert 'data-webhook-provider="discord"' in resp.text
         assert 'data-webhook-provider="paypal"' in resp.text
         assert "Application public key" in resp.text
+        assert "Webhook path" in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
+        assert 'hx-swap="innerHTML"' in resp.text
+
+    def test_edit_poll_source_hides_webhook_path(self, authenticated_client):
+        sid, _ = _create_source(
+            authenticated_client, name="Poll Edit Partial", slug="poll-edit-partial", source_type="poll"
+        )
+        resp = authenticated_client.get(f"/config/pipeline/source/{sid}/partials/edit-form")
+        assert resp.status_code == 200
+        assert "Webhook path" not in resp.text
+
+    def test_htmx_edit_source_validation_stays_in_dialog(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="HTMX Edit", slug="htmx-edit")
+        resp = authenticated_client.post(
+            f"/config/source/{sid}/edit",
+            data={"name": "", "source_type": "webhook", "description": "Keep me"},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("HX-Redirect") is None
+        assert "Name is required" in resp.text
+        assert "Keep me" in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
 
     def test_edit_source_not_found(self, authenticated_client):
         resp = authenticated_client.get("/config/pipeline/source/9999/partials/edit-form")
@@ -583,6 +639,20 @@ class TestEventTypes:
         )
         assert resp.status_code == 303
         assert "error" in resp.headers.get("location", "").lower() or "Name" in resp.headers.get("location", "")
+
+    def test_htmx_event_validation_stays_in_dialog(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="ET HTMX", slug="et-htmx")
+        resp = authenticated_client.post(
+            f"/config/pipeline/source/{sid}/events",
+            data={"name": "", "description": "Keep me"},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("HX-Redirect") is None
+        assert "Name is required" in resp.text
+        assert "Keep me" in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
 
     def test_pipeline_create_event(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="ET Pipeline", slug="et-pipeline")
@@ -760,6 +830,29 @@ class TestActions:
         assert resp.status_code == 303
         assert "error" in str(resp.headers.get("location", ""))
 
+    def test_htmx_action_validation_stays_in_dialog(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="Act HTMX", slug="act-htmx")
+        from app.database import get_db
+        db = next(get_db())
+        try:
+            rule = Rule(source_id=sid, event_type_ids=[], action_ids=[], conditions={}, order_index=0)
+            db.add(rule)
+            db.commit()
+            rid = rule.id
+        finally:
+            db.close()
+        resp = authenticated_client.post(
+            f"/config/pipeline/source/{sid}/actions",
+            data={"action_type": "field_push", "rule_id": str(rid)},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("HX-Redirect") is None
+        assert "Field is required" in resp.text
+        assert f'value="{rid}"' in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
+
     def test_create_http_forward_requires_url(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Act Src", slug="act-src-json")
         resp = authenticated_client.post(
@@ -892,6 +985,20 @@ class TestRules:
         )
         assert resp.status_code == 303
         assert "error" in str(resp.headers.get("location", ""))
+
+    def test_htmx_rule_validation_stays_in_dialog(self, authenticated_client):
+        sid = self._setup(authenticated_client)
+        resp = authenticated_client.post(
+            f"/config/pipeline/source/{sid}/rules",
+            data={"event_type_ids": "[]", "conditions": "{bad", "order_index": "7"},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("HX-Redirect") is None
+        assert "Conditions must be valid JSON" in resp.text
+        assert 'value="7"' in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
 
     def test_delete_rule(self, authenticated_client):
         sid = self._setup(authenticated_client)
@@ -1203,6 +1310,32 @@ class TestPipelineEventSamples:
         # Max 50 — still shows all 7
         assert '"n": 0' in clamped.text
 
+    def test_recent_events_partial_uses_display_timezone(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Event
+
+        sid, _ = _create_source(authenticated_client, name="TZ Recent Src", slug="tz-recent-src")
+        _set_display_timezone("Africa/Johannesburg")
+        db = next(get_db())
+        try:
+            db.add(Event(
+                source_id=sid,
+                timestamp=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+                normalized_data={"n": 1},
+                raw_payload="{}",
+                correlation_id="tz-recent-1",
+                status="processed",
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        resp = authenticated_client.get(
+            f"/config/pipeline/source/{sid}/partials/recent-events?limit=5"
+        )
+        assert resp.status_code == 200
+        assert "2026-01-02 05:04:05" in resp.text
+
     def test_prune_source_events(self, authenticated_client):
         from app.database import get_db
         from app.models import Event
@@ -1307,10 +1440,12 @@ class TestPipelineEventSamples:
         from app.models import Event
 
         sid, _ = _create_source(authenticated_client, name="Detail Ev", slug="detail-ev")
+        _set_display_timezone("Africa/Johannesburg")
         db = next(get_db())
         try:
             ev = Event(
                 source_id=sid,
+                timestamp=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
                 normalized_data={"hello": "world", "n": 1},
                 raw_payload="{}",
                 correlation_id="detail-1",
@@ -1326,6 +1461,7 @@ class TestPipelineEventSamples:
         assert resp.status_code == 200
         assert "hello" in resp.text
         assert "world" in resp.text
+        assert "2026-01-02 05:04:05" in resp.text
 
     def test_pipeline_shows_recent_and_sample_buttons(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Btn Src", slug="btn-src")
@@ -1416,6 +1552,8 @@ class TestDashboardLayout:
         assert b'id="widget-catalog"' in resp.content
         assert b'id="add-widget-btn"' in resp.content
         assert b'name="widget_type"' not in resp.content
+        assert b'data-widget-toggle' in resp.content
+        assert b'dashboard-widget-editor__toggle' in resp.content
 
     def test_save_dashboard_layout(self, authenticated_client):
         widgets = [
@@ -1428,6 +1566,25 @@ class TestDashboardLayout:
             follow_redirects=False,
         )
         assert resp.status_code == 303
+
+    def test_dashboard_config_keeps_saved_widget_order(self, authenticated_client):
+        widgets = [
+            {"type": "system", "display": "recent_events", "title": "Second In Alphabet"},
+            {"type": "system", "display": "source_health", "title": "First In Alphabet"},
+        ]
+        save = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert save.status_code == 303
+
+        resp = authenticated_client.get("/config/dashboard")
+
+        assert resp.status_code == 200
+        assert resp.text.index("Second In Alphabet") < resp.text.index("First In Alphabet")
+        assert 'data-widget-toggle' in resp.text
+        assert 'dashboard-widget-editor__toggle' in resp.text
 
     def test_dashboard_root_shows_widgets(self, authenticated_client):
         widgets = [{"type": "system", "display": "source_health", "title": "Health"}]
@@ -1570,6 +1727,139 @@ class TestDashboardLayout:
         assert resp.status_code == 200
         assert b"Shared Health" in resp.content
 
+    def test_dashboard_editor_lists_clock_widget(self, authenticated_client):
+        resp = authenticated_client.get("/config/dashboard")
+        assert resp.status_code == 200
+        assert b">Clock</option>" in resp.content
+        assert b'"type": "clock"' in resp.content
+
+    def test_save_clock_widget_layout_and_render_root(self, authenticated_client):
+        widgets = [{
+            "type": "clock",
+            "display": "digital",
+            "title": "Tokyo Clock",
+            "config": {
+                "style": "mono",
+                "timezone_mode": "custom",
+                "timezone": "Asia/Tokyo",
+                "show_seconds": True,
+                "show_date": True,
+                "hour_format": "24",
+            },
+        }]
+        resp = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        home = authenticated_client.get("/")
+        assert home.status_code == 200
+        assert b"Tokyo Clock" in home.content
+        assert b"data-clock-widget" in home.content
+        assert b'hx-get="/widgets/clock' not in home.content
+        assert b"/static/js/widget-clock.js" in home.content
+
+    def test_invalid_clock_timezone_rejected(self, authenticated_client):
+        widgets = [{
+            "type": "clock",
+            "display": "digital",
+            "title": "Broken Clock",
+            "config": {
+                "style": "plain",
+                "timezone_mode": "custom",
+                "timezone": "Mars/Olympus",
+            },
+        }]
+        resp = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+
+        follow = authenticated_client.get(resp.headers["location"])
+        assert b"valid IANA timezone" in follow.content
+
+    def test_clock_partial_renders_world_clocks(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        widgets = [{
+            "type": "clock",
+            "display": "world_clock",
+            "title": "Markets",
+            "config": {
+                "style": "cards",
+                "show_seconds": False,
+                "show_date": True,
+                "hour_format": "24",
+                "world_clocks": [
+                    {"label": "UTC", "timezone": "UTC"},
+                    {"label": "Sydney", "timezone": "Australia/Sydney"},
+                ],
+            },
+        }]
+        save = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert save.status_code == 303
+
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            wid = json.loads(layout.layout_config)["widgets"][0]["id"]
+        finally:
+            db.close()
+
+        resp = authenticated_client.get(f"/widgets/clock?id={wid}")
+        assert resp.status_code == 200
+        assert "data-clock-display=\"world_clock\"" in resp.text
+        assert "Sydney" in resp.text
+        assert "data-clock-row" in resp.text
+
+    def test_clock_can_hide_timezone_details(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        widgets = [{
+            "type": "clock",
+            "display": "digital",
+            "title": "Quiet Clock",
+            "config": {
+                "style": "plain",
+                "timezone_mode": "utc",
+                "show_seconds": True,
+                "show_date": False,
+                "show_timezone": False,
+                "hour_format": "24",
+            },
+        }]
+        save = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert save.status_code == 303
+
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = json.loads(layout.layout_config)["widgets"][0]
+            wid = saved["id"]
+            assert saved["config"]["show_timezone"] is False
+        finally:
+            db.close()
+
+        resp = authenticated_client.get(f"/widgets/clock?id={wid}")
+        assert resp.status_code == 200
+        assert 'data-show-timezone="0"' in resp.text
+        assert "data-clock-offset" not in resp.text
+        assert "widget-clock__label" not in resp.text
+
 
 class TestStyleConfig:
     def test_get_style(self, authenticated_client):
@@ -1578,6 +1868,7 @@ class TestStyleConfig:
         assert b"Catppuccin Mocha" in resp.content
         assert b"Clean sans" in resp.content
         assert b"Text size" in resp.content
+        assert b'name="display_timezone"' in resp.content
         assert b'name="theme"' in resp.content
         assert b'name="font"' in resp.content
         assert b'name="font_size"' in resp.content
@@ -1586,7 +1877,12 @@ class TestStyleConfig:
     def test_save_theme(self, authenticated_client):
         resp = authenticated_client.post(
             "/config/style",
-            data={"theme": "nord", "font": "serif", "font_size": "lg"},
+            data={
+                "theme": "nord",
+                "font": "serif",
+                "font_size": "lg",
+                "display_timezone": "Africa/Johannesburg",
+            },
             follow_redirects=False,
         )
         assert resp.status_code == 303
@@ -1594,8 +1890,36 @@ class TestStyleConfig:
         assert b'data-theme="nord"' in page.content
         assert b'data-font="serif"' in page.content
         assert b'data-font-size="lg"' in page.content
+        assert b'data-display-timezone="Africa/Johannesburg"' in page.content
+        assert b'value="Africa/Johannesburg"' in page.content
         assert b'value="nord"' in page.content
         assert b"checked" in page.content
+
+    def test_invalid_timezone_rejected(self, authenticated_client):
+        authenticated_client.post(
+            "/config/style",
+            data={
+                "theme": "system",
+                "font": "system",
+                "font_size": "md",
+                "display_timezone": "UTC",
+            },
+            follow_redirects=False,
+        )
+        resp = authenticated_client.post(
+            "/config/style",
+            data={
+                "theme": "system",
+                "font": "system",
+                "font_size": "md",
+                "display_timezone": "SAST",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=" in resp.headers.get("location", "")
+        page = authenticated_client.get("/")
+        assert b'data-display-timezone="UTC"' in page.content
 
     def test_invalid_theme_rejected(self, authenticated_client):
         authenticated_client.post(
@@ -1989,6 +2313,39 @@ class TestWidgetTransforms:
         finally:
             db.close()
 
+    def test_fields_snapshot_and_table_display_for_data_field(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data, fields_snapshot
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Latest Payload", slug="latest_payload", field_type="data",
+                config={}, state={"payload": {"id": 7}, "status": "ok"},
+            )
+            db.add(field)
+            db.commit()
+
+            snap = fields_snapshot(db)
+            assert snap["latest_payload"]["payload"]["id"] == 7
+            assert snap["latest_payload"]["status"] == "ok"
+
+            kv = fetch_widget_data(
+                "display", db, display="kv_text",
+                widget_config={"template": "{{ latest_payload.payload.id }} {{ latest_payload.status }}"},
+            )
+            assert kv["text"] == "7 ok"
+
+            table = fetch_widget_data(
+                "display", db, display="table",
+                widget_config={"field_slugs": ["latest_payload"]},
+            )
+            assert table["rows"][0]["field_type"] == "data"
+            assert table["rows"][0]["value"] == {"payload": {"id": 7}, "status": "ok"}
+        finally:
+            db.close()
+
     def test_series_field_slug_sources(self, authenticated_client):
         from app.database import get_db
         from app.models import Field, FieldLogEntry
@@ -2101,6 +2458,57 @@ class TestWidgetTransforms:
         finally:
             db.close()
 
+    def test_chart_from_logbook_latest_entry(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            speed = Field(
+                name="Chart Speed Log", slug="chart_speed_log", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            usd = Field(
+                name="Chart USD Prices", slug="chart_usd_prices", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add_all([speed, usd])
+            db.flush()
+            now = datetime.now(timezone.utc)
+            db.add(FieldLogEntry(
+                field_id=speed.id, timestamp=now - timedelta(minutes=10),
+                value={"_poll": {"response_time_ms": 250}},
+            ))
+            db.add(FieldLogEntry(
+                field_id=speed.id, timestamp=now - timedelta(minutes=5),
+                value={"_poll": {"response_time_ms": 500}},
+            ))
+            db.add(FieldLogEntry(
+                field_id=usd.id, timestamp=now - timedelta(minutes=10),
+                value=0.04,
+            ))
+            db.add(FieldLogEntry(
+                field_id=usd.id, timestamp=now - timedelta(minutes=5),
+                value=0.05,
+            ))
+            db.commit()
+
+            data = fetch_widget_data("chart", db, display="pie", widget_config={
+                "sources": [
+                    {
+                        "field_slug": "chart_speed_log._poll.response_time_ms",
+                        "label": "Latency",
+                        "transform": [{"op": "div", "by": 1000}],
+                    },
+                    {"field_slug": "chart_usd_prices.value", "label": "USD"},
+                ],
+            })
+            assert data["labels"] == ["Latency", "USD"]
+            assert data["values"] == [0.5, 0.05]
+        finally:
+            db.close()
+
     def test_chart_counter_and_value(self, authenticated_client):
         from app.database import get_db
         from app.models import Field
@@ -2179,14 +2587,24 @@ class TestWidgetTransforms:
 
     def test_chart_style_source_cardinality(self, authenticated_client):
         from app.database import get_db
-        from app.models import Field
+        from app.models import Field, FieldLogEntry
         from app.widgets import validate_widget_bindings
 
         db = next(get_db())
         try:
             a = Field(name="A", slug="a", field_type="value", config={}, state={"value": 1})
             b = Field(name="B", slug="b", field_type="value", config={}, state={"value": 2})
-            db.add_all([a, b])
+            log = Field(
+                name="Chart Cardinality Log", slug="chart_cardinality_log", field_type="logbook",
+                config={}, state={},
+            )
+            db.add_all([a, b, log])
+            db.commit()
+            db.add(FieldLogEntry(
+                field_id=log.id,
+                timestamp=datetime.now(timezone.utc),
+                value={"_poll": {"response_time_ms": 500}},
+            ))
             db.commit()
             err = validate_widget_bindings(db, [{
                 "type": "chart",
@@ -2237,6 +2655,18 @@ class TestWidgetTransforms:
                 },
             }])
             assert ok3 is None
+            ok_logbook = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "pie",
+                "config": {
+                    "style": "pie",
+                    "sources": [{
+                        "field_slug": "chart_cardinality_log._poll.response_time_ms",
+                        "label": "Latency",
+                    }],
+                },
+            }])
+            assert ok_logbook is None
             polar_short = validate_widget_bindings(db, [{
                 "type": "chart",
                 "display": "polar",
@@ -2748,6 +3178,44 @@ class TestSystemPage:
         resp = authenticated_client.get("/system")
         assert resp.status_code == 200
         assert "waiting to be processed" in resp.text
+
+    def test_system_and_metrics_use_display_timezone(self, authenticated_client):
+        from app.database import get_db
+        from app.models import MetricPoint, PollingSchedule
+
+        sid, _ = _create_source(authenticated_client, name="TZ System", slug="tz-system")
+        _set_display_timezone("Africa/Johannesburg")
+        db = next(get_db())
+        try:
+            ts = datetime(2026, 1, 2, 3, 4, 0, tzinfo=timezone.utc)
+            source = db.query(Source).filter(Source.id == sid).first()
+            source.last_seen_at = ts
+            db.add(PollingSchedule(
+                source_id=sid,
+                name="TZ Schedule",
+                schedule_type="interval",
+                interval_seconds=60,
+                handler_type="http_get",
+                handler_url="https://example.com",
+                last_run_at=ts,
+                next_run_at=ts + timedelta(hours=1),
+                success_count=1,
+                failure_count=0,
+            ))
+            db.add(MetricPoint(source_id=sid, name="tz-metric", value=1.0, timestamp=ts))
+            db.commit()
+        finally:
+            db.close()
+
+        system_resp = authenticated_client.get("/system")
+        assert system_resp.status_code == 200
+        assert "2026-01-02 05:04" in system_resp.text
+        assert "2026-01-02 06:04" in system_resp.text
+
+        metrics_resp = authenticated_client.get("/metrics?name=tz-metric")
+        assert metrics_resp.status_code == 200
+        assert 'data-display-timezone="Africa/Johannesburg"' in metrics_resp.text
+        assert "Intl.DateTimeFormat" in metrics_resp.text
 
 
 # ── Webhook provider UI metadata ─────────────────────────────────────────────
@@ -3666,6 +4134,121 @@ class TestPipeline:
                 "raw": {"id": 1},
                 "next": 4.0,
             }
+        finally:
+            db.close()
+
+    def test_field_push_data_from_event_and_shape(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="Data Src", slug="data-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Rule, Event, Field
+        from app.pipeline import evaluate_and_dispatch
+        from sqlalchemy.orm.attributes import flag_modified
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Data State", slug="data-state", field_type="data",
+                config={}, state={},
+            )
+            db.add(field)
+            db.commit()
+
+            action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id},
+            )
+            db.add(action)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[], conditions={},
+                action_ids=[action.id], order_index=0,
+            )
+            db.add(rule)
+            db.commit()
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"payload": {"id": 1}, "status": "ok"},
+                raw_payload="{}", correlation_id="data-event",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            db.refresh(field)
+            assert field.state == {"payload": {"id": 1}, "status": "ok"}
+
+            action.config = {"field_id": field.id, "value_key": "payload"}
+            flag_modified(action, "config")
+            db.commit()
+            event2 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"payload": {"id": 2, "kind": "sensor"}},
+                raw_payload="{}", correlation_id="data-path",
+            )
+            db.add(event2)
+            db.commit()
+            evaluate_and_dispatch(db, event2)
+            db.refresh(field)
+            assert field.state == {"id": 2, "kind": "sensor"}
+
+            action.config = {
+                "field_id": field.id,
+                "value_key": '{"reading":"temp","next":"field.id + 1","meta":"payload"}',
+            }
+            flag_modified(action, "config")
+            db.commit()
+            event3 = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"temp": 20, "payload": {"sensor": "a"}},
+                raw_payload="{}", correlation_id="data-shape",
+            )
+            db.add(event3)
+            db.commit()
+            evaluate_and_dispatch(db, event3)
+            db.refresh(field)
+            assert field.state == {"reading": 20, "next": 3.0, "meta": {"sensor": "a"}}
+        finally:
+            db.close()
+
+    def test_field_push_data_rejects_non_object_values(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="Data Reject Src", slug="data-reject-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Event, Field
+        from app.actions import _action_field_push
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Data Only", slug="data-only", field_type="data",
+                config={}, state={"keep": True},
+            )
+            db.add(field)
+            db.commit()
+
+            event = Event(
+                source_id=sid, event_type_id=None,
+                normalized_data={"items": [1, 2], "count": 2},
+                raw_payload="{}", correlation_id="data-reject",
+            )
+            db.add(event)
+            db.commit()
+
+            list_action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id, "value_key": "items"},
+            )
+            with pytest.raises(ValueError, match="JSON object"):
+                _action_field_push(db, event, list_action)
+
+            scalar_action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": field.id, "value_key": "count"},
+            )
+            with pytest.raises(ValueError, match="JSON object"):
+                _action_field_push(db, event, scalar_action)
+
+            db.refresh(field)
+            assert field.state == {"keep": True}
         finally:
             db.close()
 
@@ -5260,6 +5843,20 @@ class TestFields:
         assert resp.text.index('name="max_entries"') < resp.text.index('id="field-params-value"')
         value_panel = resp.text.split('id="field-params-value"', 1)[1].split('id="field-params-text"', 1)[0]
         assert "max_entries" not in value_panel
+        assert 'hx-target="#pipeline-dialog"' in resp.text
+
+    def test_htmx_field_validation_stays_in_dialog(self, authenticated_client):
+        resp = authenticated_client.post(
+            "/config/pipeline/fields",
+            data={"name": "", "field_type": "value"},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert resp.headers.get("HX-Redirect") is None
+        assert "Name is required" in resp.text
+        assert 'option value="value" selected' in resp.text
+        assert 'hx-target="#pipeline-dialog"' in resp.text
 
     def test_create_value_ignores_max_entries(self, authenticated_client):
         resp = authenticated_client.post(
@@ -5282,6 +5879,52 @@ class TestFields:
             assert field.config == {}
         finally:
             db.close()
+
+    def test_create_data_field_defaults_to_empty_object(self, authenticated_client):
+        resp = authenticated_client.post(
+            "/config/pipeline/fields",
+            data={
+                "name": "Latest Payload",
+                "field_type": "data",
+                "max_entries": "99",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code in (200, 303)
+        from app.database import get_db
+        from app.models import Field
+        db = next(get_db())
+        try:
+            field = db.query(Field).filter(Field.name == "Latest Payload").first()
+            assert field is not None
+            assert field.field_type == "data"
+            assert field.config == {}
+            assert field.state == {}
+        finally:
+            db.close()
+
+        page = authenticated_client.get("/config/pipeline")
+        assert "Latest Payload" in page.text
+        assert "Data" in page.text
+
+    def test_htmx_field_refresh_uses_creation_order(self, authenticated_client):
+        first = authenticated_client.post(
+            "/config/pipeline/fields",
+            data={"name": "Zulu Field", "field_type": "value"},
+            follow_redirects=False,
+        )
+        assert first.status_code in (200, 303)
+
+        resp = authenticated_client.post(
+            "/config/pipeline/fields",
+            data={"name": "Alpha Field", "field_type": "value"},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 200
+        assert 'id="pipeline-fields"' in resp.text
+        assert resp.text.index("Zulu Field") < resp.text.index("Alpha Field")
 
     def test_create_list_edit_delete_field(self, authenticated_client):
         resp = authenticated_client.post(
@@ -5311,6 +5954,8 @@ class TestFields:
         page = authenticated_client.get("/config/pipeline")
         assert "Errors" in page.text
         assert "Logbook" in page.text
+        assert 'class="pipeline-action-menu"' in page.text
+        assert 'pipeline-action-menu__item' in page.text
 
         resp = authenticated_client.post(
             f"/config/pipeline/field/{fid}",
@@ -5431,6 +6076,38 @@ class TestFields:
         )
         assert empty.status_code == 200
         assert "No entries yet" in empty.text
+
+    def test_logbook_recent_entries_use_display_timezone(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+
+        _set_display_timezone("Africa/Johannesburg")
+        db = next(get_db())
+        try:
+            field = Field(
+                name="TZ Log",
+                slug="tz-log",
+                field_type="logbook",
+                config={"max_entries": 10},
+                state={},
+            )
+            db.add(field)
+            db.flush()
+            db.add(FieldLogEntry(
+                field_id=field.id,
+                timestamp=datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
+                value={"n": 1},
+            ))
+            db.commit()
+            fid = field.id
+        finally:
+            db.close()
+
+        resp = authenticated_client.get(
+            f"/config/pipeline/field/{fid}/partials/recent-entries?limit=5"
+        )
+        assert resp.status_code == 200
+        assert "2026-01-02 05:04:05" in resp.text
 
     def test_clear_rejects_non_logbook(self, authenticated_client):
         from app.database import get_db
@@ -5585,7 +6262,7 @@ class TestFields:
             db.close()
 
     def test_metric_summary_uses_metric_points_and_counters(self, authenticated_client):
-        from datetime import datetime, timezone
+        from datetime import datetime, timezone, timedelta
         from app.database import get_db
         from app.models import Field, MetricPoint, Source
         from app.widgets import fetch_widget_data
@@ -5601,13 +6278,17 @@ class TestFields:
             now = datetime.now(timezone.utc)
             db.add(MetricPoint(source_id=src.id, field_id=counter.id, name="Summary Hits", value=3.0, timestamp=now))
             db.add(MetricPoint(source_id=src.id, name="latency", value=1.5, timestamp=now))
+            db.add(MetricPoint(
+                source_id=src.id, name="old-latency", value=9.0,
+                timestamp=now - timedelta(hours=2),
+            ))
             db.commit()
 
             data = fetch_widget_data(
                 "system", db, display="metric_summary", widget_config={}, source_id=src.id,
             )
-            assert data["series"] == 2
-            assert data["points"] == 2
+            assert data["series"] == 3
+            assert data["points"] == 3
             assert data["last_hour"] == 2
             assert {"name": "Summary Hits", "value": 3.0} in data["counters"]
         finally:
@@ -5641,3 +6322,118 @@ class TestFields:
             assert "not found" in (ev.processing_error or "").lower()
         finally:
             db.close()
+
+
+class TestSystemWidgets:
+    def test_source_health_status_bands(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Source
+        from app.widgets import fetch_widget_data, source_age_status
+
+        now = datetime.now(timezone.utc)
+        assert source_age_status(now, now=now) == "healthy"
+        assert source_age_status(now - timedelta(hours=3), now=now) == "recent"
+        assert source_age_status(now - timedelta(hours=30), now=now) == "stale"
+        assert source_age_status(None, now=now) == "never"
+
+        db = next(get_db())
+        try:
+            healthy = Source(
+                name="SW Healthy", slug="sw-healthy", source_type="webhook",
+                enabled=True, last_seen_at=now,
+            )
+            recent = Source(
+                name="SW Recent", slug="sw-recent", source_type="webhook",
+                enabled=True, last_seen_at=now - timedelta(hours=3),
+            )
+            stale = Source(
+                name="SW Stale", slug="sw-stale", source_type="webhook",
+                enabled=True, last_seen_at=now - timedelta(hours=30),
+            )
+            disabled = Source(
+                name="SW Disabled", slug="sw-disabled", source_type="webhook",
+                enabled=False, last_seen_at=now,
+            )
+            db.add_all([healthy, recent, stale, disabled])
+            db.commit()
+
+            data = fetch_widget_data("system", db, display="source_health", widget_config={})
+            by_name = {s["name"]: s["status"] for s in data["sources"]}
+            assert by_name["SW Healthy"] == "healthy"
+            assert by_name["SW Recent"] == "recent"
+            assert by_name["SW Stale"] == "stale"
+            assert by_name["SW Disabled"] == "disabled"
+        finally:
+            db.close()
+
+    def test_poller_status_includes_disabled_and_errors(self, authenticated_client):
+        from app.database import get_db
+        from app.models import PollingSchedule, Source
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            ok_src = Source(name="SW Poll Ok", slug="sw-poll-ok", source_type="poll", enabled=True)
+            bad_src = Source(name="SW Poll Bad", slug="sw-poll-bad", source_type="poll", enabled=True)
+            off_src = Source(name="SW Poll Off", slug="sw-poll-off", source_type="poll", enabled=True)
+            db.add_all([ok_src, bad_src, off_src])
+            db.flush()
+            db.add(PollingSchedule(
+                source_id=ok_src.id, name="SW Ok Sched", schedule_type="interval",
+                interval_seconds=60, handler_type="http_get",
+                handler_url="https://example.com", enabled=True,
+                success_count=2, failure_count=0,
+            ))
+            db.add(PollingSchedule(
+                source_id=bad_src.id, name="SW Err Sched", schedule_type="interval",
+                interval_seconds=60, handler_type="http_get",
+                handler_url="https://example.com", enabled=True,
+                success_count=0, failure_count=4, last_error="timeout",
+            ))
+            db.add(PollingSchedule(
+                source_id=off_src.id, name="SW Off Sched", schedule_type="interval",
+                interval_seconds=60, handler_type="http_get",
+                handler_url="https://example.com", enabled=False,
+                success_count=1, failure_count=0,
+            ))
+            db.commit()
+
+            data = fetch_widget_data("system", db, display="poller_status", widget_config={})
+            by_name = {s["name"]: s for s in data["schedules"]}
+            assert "SW Off Sched" in by_name
+            assert by_name["SW Off Sched"]["enabled"] is False
+            assert by_name["SW Err Sched"]["last_error"] == "timeout"
+            assert by_name["SW Err Sched"]["source"] == "SW Poll Bad"
+            assert by_name["SW Ok Sched"]["enabled"] is True
+        finally:
+            db.close()
+
+    def test_system_widget_partial_uses_display_timezone(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout, Source
+
+        _set_display_timezone("Africa/Johannesburg")
+        authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps([{"type": "system", "display": "source_health", "title": "Health"}])},
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            src = Source(
+                name="SW TZ Src", slug="sw-tz-src", source_type="webhook",
+                enabled=True,
+                last_seen_at=datetime(2026, 1, 2, 3, 4, 0, tzinfo=timezone.utc),
+            )
+            db.add(src)
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            wid = json.loads(layout.layout_config)["widgets"][0]["id"]
+            db.commit()
+        finally:
+            db.close()
+
+        resp = authenticated_client.get(f"/widgets/system?id={wid}")
+        assert resp.status_code == 200
+        assert "2026-01-02 05:04" in resp.text
+        assert "SW TZ Src" in resp.text
+        assert "healthy" in resp.text or "recent" in resp.text or "stale" in resp.text

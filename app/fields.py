@@ -1,10 +1,10 @@
-"""Helpers for global Field storage sinks (logbook / value / text / toggle)."""
+"""Helpers for global Field storage sinks (logbook / value / text / toggle / data)."""
 from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-FIELD_TYPES = ("logbook", "value", "text", "toggle")
+FIELD_TYPES = ("logbook", "value", "text", "toggle", "data")
 DEFAULT_MAX_ENTRIES = 100
 
 # Prefix → list index for ``*`` segments (set while a matching rule's actions run).
@@ -88,6 +88,13 @@ def coerce_logbook_value(raw):
     if isinstance(raw, (dict, list, str, int, float, bool)) or raw is None:
         return raw
     raise ValueError("Log entry value isn’t valid")
+
+
+def coerce_data_value(raw):
+    """Ensure data-field value is a JSON object. Raises ValueError on failure."""
+    if isinstance(raw, dict):
+        return raw
+    raise ValueError("Data field value must be a JSON object")
 
 
 def resolve_numeric(metric_value, normalized_data: dict | None) -> float:

@@ -12,10 +12,11 @@
       <div class="widget-entry-card">
         <strong>{{ s.name }}</strong>
         {% if s.status == 'healthy' %}<span class="text-success">healthy</span>
+        {% elif s.status == 'recent' %}<span class="text-muted">recent</span>
         {% elif s.status == 'stale' %}<span class="text-muted">stale</span>
         {% elif s.status == 'disabled' %}<span class="text-muted">disabled</span>
         {% else %}{{ s.status }}{% endif %}
-        <span class="text-muted">{{ s.last_seen.strftime('%Y-%m-%d %H:%M') if s.last_seen else 'never' }}</span>
+        <span class="text-muted">{{ s.last_seen|display_dt('%Y-%m-%d %H:%M', 'never') }}</span>
       </div>
       {% endfor %}
     </div>
@@ -28,11 +29,12 @@
           <td>{{ s.name }}</td>
           <td>
             {% if s.status == 'healthy' %}<span class="text-success">healthy</span>
+            {% elif s.status == 'recent' %}<span class="text-muted">recent</span>
             {% elif s.status == 'stale' %}<span class="text-muted">stale</span>
             {% elif s.status == 'disabled' %}<span class="text-muted">disabled</span>
             {% else %}{{ s.status }}{% endif %}
           </td>
-          <td>{{ s.last_seen.strftime('%Y-%m-%d %H:%M') if s.last_seen else 'never' }}</td>
+          <td>{{ s.last_seen|display_dt('%Y-%m-%d %H:%M', 'never') }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -51,7 +53,7 @@
         {% if e.status == 'processed' %}<span class="text-success">{{ e.status }}</span>
         {% elif e.status == 'failed' %}<span class="text-danger">{{ e.status }}</span>
         {% else %}{{ e.status }}{% endif %}
-        <span class="text-muted">{{ e.timestamp.strftime('%Y-%m-%d %H:%M') if e.timestamp else '' }}</span>
+        <span class="text-muted">{{ e.timestamp|display_dt('%Y-%m-%d %H:%M', '') }}</span>
       </div>
       {% endfor %}
     </div>
@@ -69,7 +71,7 @@
             {% elif e.status == 'failed' %}<span class="text-danger">{{ e.status }}</span>
             {% else %}{{ e.status }}{% endif %}
           </td>
-          <td>{{ e.timestamp.strftime('%Y-%m-%d %H:%M') if e.timestamp else '' }}</td>
+          <td>{{ e.timestamp|display_dt('%Y-%m-%d %H:%M', '') }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -85,20 +87,30 @@
       {% for s in wdata.schedules %}
       <div class="widget-entry-card">
         <strong>{{ s.name }}</strong>
+        <span class="text-muted">{{ s.source }}</span>
         <span class="text-muted">{{ s.success_count }} / {{ s.failure_count }} (lifetime)</span>
+        {% if not s.enabled %}<span class="text-muted">disabled</span>
+        {% elif s.last_error %}<span class="text-danger" title="{{ s.last_error }}">error</span>
+        {% else %}<span class="text-success">enabled</span>{% endif %}
       </div>
       {% endfor %}
     </div>
     {% else %}
     <table class="table {% if style == 'compact' %}table--compact{% endif %}">
-      <thead><tr><th>Name</th><th>Last Run</th><th>Next Run</th><th>OK / Fail (lifetime)</th></tr></thead>
+      <thead><tr><th>Name</th><th>Source</th><th>Last Run</th><th>Next Run</th><th>OK / Fail (lifetime)</th><th>Status</th></tr></thead>
       <tbody>
         {% for s in wdata.schedules %}
         <tr>
           <td>{{ s.name }}</td>
-          <td>{{ s.last_run.strftime('%Y-%m-%d %H:%M') if s.last_run else 'never' }}</td>
-          <td>{{ s.next_run.strftime('%Y-%m-%d %H:%M') if s.next_run else '-' }}</td>
+          <td>{{ s.source }}</td>
+          <td>{{ s.last_run|display_dt('%Y-%m-%d %H:%M', 'never') }}</td>
+          <td>{{ s.next_run|display_dt('%Y-%m-%d %H:%M', '-') }}</td>
           <td>{{ s.success_count }} / {{ s.failure_count }}</td>
+          <td>
+            {% if not s.enabled %}<span class="text-muted">disabled</span>
+            {% elif s.last_error %}<span class="text-danger" title="{{ s.last_error }}">error</span>
+            {% else %}enabled{% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -109,7 +121,29 @@
   {% endif %}
 {% elif disp == "metric_summary" %}
   {% if wdata and (wdata.points or wdata.counters) %}
-  <div class="grid-auto {% if style == 'compact' %}widget-summary--compact{% elif style == 'cards' %}widget-summary--cards{% endif %}" style="--grid-min: 8em; --grid-gap: 0.5rem;">
+  {% if style == "cards" %}
+  <div class="stack stack--tight">
+    <div class="widget-entry-card">
+      <div class="stat__label">Series</div>
+      <div class="stat__value">{{ wdata.series }}</div>
+    </div>
+    <div class="widget-entry-card">
+      <div class="stat__label">Points</div>
+      <div class="stat__value">{{ wdata.points }}</div>
+    </div>
+    <div class="widget-entry-card">
+      <div class="stat__label">Last hour</div>
+      <div class="stat__value">{{ wdata.last_hour }}</div>
+    </div>
+    {% for c in wdata.counters %}
+    <div class="widget-entry-card">
+      <div class="stat__label">{{ c.name }}</div>
+      <div class="stat__value">{{ c.value }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="grid-auto" style="--grid-min: {% if style == 'compact' %}6em{% else %}8em{% endif %}; --grid-gap: {% if style == 'compact' %}0.25rem{% else %}0.5rem{% endif %};">
     <div class="stat">
       <div class="stat__label">Series</div>
       <div class="stat__value">{{ wdata.series }}</div>
@@ -129,6 +163,7 @@
     </div>
     {% endfor %}
   </div>
+  {% endif %}
   {% else %}
   <p class="text-muted">No metrics yet.</p>
   {% endif %}

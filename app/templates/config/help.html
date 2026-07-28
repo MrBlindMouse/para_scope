@@ -431,46 +431,60 @@
         <strong>Poll</strong> sources run one poll subtype on a schedule (interval or cron) and feed the same pipeline.
         Create or edit the source, choose a category, then choose the subtype and fill in its typed fields.
       </p>
+      <p class="text-muted">
+        Think of the category as the target shape and the subtype as the exact implementation.
+        Start broad, then pick the concrete check.
+      </p>
+      <p class="text-muted">
+        Rule of thumb: use the generic HTTP pollers for direct endpoint checks, status checks, auth, headers, and simple payload extraction.
+        Keep specialized HTTP-based subtypes only when they add distinct integration logic such as feed change detection or domain-specific summarization.
+      </p>
       <table class="table">
         <thead>
-          <tr><th>Category</th><th>Examples</th></tr>
+          <tr><th>Category</th><th>Choose this when…</th><th>Examples</th></tr>
         </thead>
         <tbody>
           <tr>
-            <td>URL / HTTP</td>
-            <td>GET, POST, PUT, DELETE</td>
+            <td>HTTP / APIs</td>
+            <td>You want to call an HTTP endpoint directly, whether it is private, local, or public.</td>
+            <td>GET / HEAD, POST, PUT, DELETE</td>
           </tr>
           <tr>
-            <td>System</td>
+            <td>Host / OS</td>
+            <td>You are inspecting the Para-Scope host itself: machine state, systemd, or the local journal.</td>
             <td>Host snapshot, failed systemd units, recent journal errors</td>
           </tr>
           <tr>
-            <td>Connectivity / Reachability</td>
+            <td>Network / DNS / TLS</td>
+            <td>You care about network reachability, DNS answers, or certificate validity between hosts.</td>
             <td>TCP connect, ICMP ping, DNS resolve, TLS cert expiry</td>
           </tr>
           <tr>
-            <td>Storage / Filesystem</td>
-            <td>Free space, backup age</td>
+            <td>Files / Backups</td>
+            <td>You are checking local or mounted paths for disk capacity or backup freshness.</td>
+            <td>Path free space, backup age</td>
           </tr>
           <tr>
-            <td>Application / Domain</td>
+            <td>Local Apps / Data</td>
+            <td>You are checking an app-specific dependency on this host, such as a repo, log file, database, or self-hosted service.</td>
             <td>Database health, git status, log pattern watch, Home Assistant snapshot, local LLM status</td>
           </tr>
           <tr>
-            <td>External</td>
-            <td>RSS / Atom change, IMAP unread, public endpoint status, domain expiry</td>
+            <td>External Services</td>
+            <td>You are querying an outside service or internet-facing data source that is not just a generic HTTP status/API call.</td>
+            <td>RSS / Atom change, IMAP unread, domain expiry</td>
           </tr>
         </tbody>
       </table>
       <details class="stack">
         <summary>Current shipped poll subtypes</summary>
         <ul class="stack help__list">
-          <li><strong>URL / HTTP</strong> — <code>http_get</code>, <code>http_post</code>, <code>http_put</code>, <code>http_delete</code></li>
-          <li><strong>System</strong> — <code>system_snapshot</code>, <code>systemd_failed_units</code>, <code>journal_recent_errors</code></li>
-          <li><strong>Connectivity / Reachability</strong> — <code>tcp_connect</code>, <code>icmp_ping</code>, <code>dns_resolve</code>, <code>cert_expiry</code></li>
-          <li><strong>Storage / Filesystem</strong> — <code>disk_free_space</code>, <code>backup_age</code></li>
-          <li><strong>Application / Domain</strong> — <code>database_health</code>, <code>git_status</code>, <code>log_pattern_watch</code>, <code>home_assistant_snapshot</code>, <code>local_llm_http_status</code></li>
-          <li><strong>External</strong> — <code>rss_atom_change</code>, <code>public_http_status</code>, <code>imap_unread</code>, <code>domain_expiry</code></li>
+          <li><strong>HTTP / APIs</strong> — <code>http_get</code>, <code>http_post</code>, <code>http_put</code>, <code>http_delete</code></li>
+          <li><strong>Host / OS</strong> — <code>system_snapshot</code>, <code>systemd_failed_units</code>, <code>journal_recent_errors</code></li>
+          <li><strong>Network / DNS / TLS</strong> — <code>tcp_connect</code>, <code>icmp_ping</code>, <code>dns_resolve</code>, <code>cert_expiry</code></li>
+          <li><strong>Files / Backups</strong> — <code>disk_free_space</code>, <code>backup_age</code></li>
+          <li><strong>Local Apps / Data</strong> — <code>database_health</code>, <code>git_status</code>, <code>log_pattern_watch</code>, <code>home_assistant_snapshot</code>, <code>local_llm_http_status</code></li>
+          <li><strong>External Services</strong> — <code>rss_atom_change</code>, <code>imap_unread</code>, <code>domain_expiry</code></li>
         </ul>
       </details>
       <p>
@@ -481,8 +495,11 @@
 
       <h3>HTTP poll authentication</h3>
       <p>
-        URL / HTTP pollers can attach credentials from an encrypted poll secret.
+        HTTP / API pollers can attach credentials from an encrypted poll secret.
         Choose an auth mode on the schedule:
+      </p>
+      <p class="text-muted">
+        Use <code>http_get</code> for plain uptime/status-style checks too. It covers optional exact status matching and HEAD requests, so a separate public-status subtype is no longer part of the poller set.
       </p>
       <table class="table">
         <thead>

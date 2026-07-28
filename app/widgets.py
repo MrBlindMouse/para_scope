@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func as sql_func
 
 from app.widget_transforms import (
     apply_ops,
+    extract_number,
     render_data_template,
     resolve_tone_rules,
     series_from_points,
@@ -23,6 +25,7 @@ KIND_DISPLAYS = {
     "series": ("line", "area", "column"),
     "chart": ("pie", "radial", "radar", "polar"),
     "display": ("logbook_list", "kv_text", "toggle", "board", "table"),
+    "clock": ("digital", "analog", "compact", "world_clock"),
     "links": ("list", "button_row", "icon_grid"),
     "notes": ("notes",),
     "system": ("source_health", "recent_events", "poller_status", "metric_summary"),
@@ -32,6 +35,7 @@ KIND_TITLES = {
     "series": "Time series",
     "chart": "Chart",
     "display": "Display",
+    "clock": "Clock",
     "links": "Links",
     "notes": "Notes",
     "system": "System",
@@ -50,6 +54,10 @@ DISPLAY_TITLES = {
     "toggle": "Toggle",
     "board": "Board",
     "table": "Table",
+    "digital": "Digital",
+    "analog": "Analog",
+    "compact": "Compact",
+    "world_clock": "World clocks",
     "list": "List",
     "button_row": "Button row",
     "icon_grid": "Icon grid",
@@ -66,6 +74,10 @@ DISPLAY_STYLES = {
     "logbook_list": ("code", "timeline", "cards"),
     "kv_text": ("plain", "mono", "callout"),
     "table": ("plain", "compact", "striped"),
+    "digital": ("plain", "mono", "callout"),
+    "analog": ("plain", "ring"),
+    "compact": ("plain", "mono"),
+    "world_clock": ("list", "cards"),
     "line": ("basic", "labels", "multi", "stepline"),
     "area": ("basic", "negative", "stacked"),
     "column": ("basic", "labels", "stacked", "stacked_100", "negative"),
@@ -116,6 +128,7 @@ STYLE_TITLES = {
     "needle": "Needle gauge",
     "emphasized": "Emphasized",
     "table": "Table",
+    "ring": "Ring face",
 }
 
 # Extra config keys + source cardinality per (display, style).
@@ -171,7 +184,7 @@ _BINDING_SERIES = {
 }
 _BINDING_CHART = {
     "cardinality": "multi",
-    "field_types": ("value", "text"),
+    "field_types": ("value", "text", "logbook"),
     "config_key": "sources",
     "required": True,
 }
@@ -214,6 +227,7 @@ WIDGET_BINDINGS = {
             },
         },
     },
+    "clock": _BINDING_NONE,
     "links": _BINDING_NONE,
     "notes": _BINDING_NONE,
     "system": _BINDING_NONE,
@@ -305,6 +319,10 @@ BOARD_CELL_FIELD_TYPES = {
     "toggle": ("toggle",),
     "kv_text": None,  # any
 }
+
+CLOCK_TIMEZONE_MODES = ("app", "browser", "utc", "custom")
+CLOCK_HOUR_FORMATS = ("12", "24")
+CLOCK_WORLD_CLOCK_LIMIT = 8
 
 
 def default_tone(widget_type: str, display: str) -> str:
@@ -439,6 +457,10 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
         if raw_style and raw_style not in style_allowed:
             return f"{label}: that style isn’t available"
         sc = style_config_for(disp, style)
+        if kind == "clock":
+            err = _validate_clock_widget(label, disp, cfg)
+            if err:
+                return f"{label}: {err}"
         if card == "none":
             continue
         allowed = rule.get("field_types")  # None = any
@@ -540,6 +562,7 @@ def fetch_widget_data(widget_type, db, widget_config=None, source_id=None, displ
         "series": _series_data,
         "chart": _chart_data,
         "display": _display_data,
+        "clock": _clock_data,
         "links": _links_data,
         "notes": _notes_data,
         "system": _system_data,
@@ -755,6 +778,158 @@ def _int_limit(config, key, default, lo=1, hi=100) -> int:
     return max(lo, min(hi, n))
 
 
+def _bool_config(config: dict | None, key: str, default: bool = False) -> bool:
+    if not isinstance(config, dict) or key not in config:
+        return default
+    value = config.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in ("1", "true", "yes", "on"):
+            return True
+        if raw in ("0", "false", "no", "off", ""):
+            return False
+    return bool(value)
+
+
+def _clock_timezone_name(raw: str | None) -> str:
+    value = (raw or "").strip()
+    if not value:
+        raise ValueError("enter an IANA timezone like Africa/Johannesburg")
+    try:
+        return ZoneInfo(value).key
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("enter a valid IANA timezone like Africa/Johannesburg") from exc
+
+
+def _clock_timezone_mode(config: dict | None) -> str:
+    raw = (config.get("timezone_mode") or "").strip().lower() if isinstance(config, dict) else ""
+    return raw if raw in CLOCK_TIMEZONE_MODES else "app"
+
+
+def _clock_hour_format(config: dict | None) -> str:
+    raw = (config.get("hour_format") or "").strip() if isinstance(config, dict) else ""
+    return raw if raw in CLOCK_HOUR_FORMATS else "24"
+
+
+def _clock_world_clocks(config: dict | None) -> list[dict]:
+    rows = config.get("world_clocks") if isinstance(config, dict) else None
+    if not isinstance(rows, list):
+        return []
+    cleaned = []
+    for row in rows[:CLOCK_WORLD_CLOCK_LIMIT]:
+        if not isinstance(row, dict):
+            continue
+        label = (row.get("label") or "").strip()
+        timezone_name = (row.get("timezone") or "").strip()
+        if not (label or timezone_name):
+            continue
+        cleaned.append({"label": label, "timezone": timezone_name})
+    return cleaned
+
+
+def _clock_app_timezone(db) -> str:
+    from app.themes import get_display_timezone
+
+    return get_display_timezone(db)
+
+
+def _clock_resolved_timezone(db, config: dict | None) -> tuple[str, str | None]:
+    mode = _clock_timezone_mode(config)
+    if mode == "utc":
+        return mode, "UTC"
+    if mode == "custom":
+        return mode, _clock_timezone_name((config or {}).get("timezone"))
+    return mode, _clock_app_timezone(db)
+
+
+def _clock_label(label: str | None, timezone_name: str, fallback: str) -> str:
+    return (label or "").strip() or timezone_name or fallback
+
+
+def _clock_offset_label(value: datetime) -> str:
+    offset = value.utcoffset() or timedelta()
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    hours, minutes = divmod(abs(total_minutes), 60)
+    return f"UTC{sign}{hours:02d}:{minutes:02d}"
+
+
+def _clock_time_text(value: datetime, *, show_seconds: bool, hour_format: str) -> str:
+    fmt = "%I:%M:%S %p" if hour_format == "12" and show_seconds else (
+        "%I:%M %p" if hour_format == "12" else "%H:%M:%S" if show_seconds else "%H:%M"
+    )
+    text = value.strftime(fmt)
+    return text[1:] if hour_format == "12" and text.startswith("0") else text
+
+
+def _clock_face_payload(
+    *,
+    label: str,
+    timezone_name: str,
+    now_utc: datetime,
+    show_seconds: bool,
+    show_date: bool,
+    hour_format: str,
+) -> dict:
+    current = now_utc.astimezone(ZoneInfo(timezone_name))
+    hour = current.hour % 12
+    minute = current.minute
+    second = current.second
+    return {
+        "label": label,
+        "timezone": timezone_name,
+        "time_text": _clock_time_text(current, show_seconds=show_seconds, hour_format=hour_format),
+        "date_text": current.strftime("%a %d %b %Y") if show_date else "",
+        "day_text": current.strftime("%A"),
+        "offset_text": _clock_offset_label(current),
+        "hour_angle": (hour + (minute / 60.0) + (second / 3600.0)) * 30.0,
+        "minute_angle": (minute + (second / 60.0)) * 6.0,
+        "second_angle": second * 6.0,
+    }
+
+
+def _validate_clock_widget(label: str, display: str, config: dict | None) -> str | None:
+    cfg = config or {}
+    mode = _clock_timezone_mode(cfg)
+    raw_mode = (cfg.get("timezone_mode") or "").strip().lower()
+    if raw_mode and raw_mode not in CLOCK_TIMEZONE_MODES:
+        return "that timezone mode isn’t available"
+    if mode == "custom":
+        try:
+            _clock_timezone_name(cfg.get("timezone"))
+        except ValueError as exc:
+            return str(exc)
+    elif (cfg.get("timezone") or "").strip() and mode != "custom":
+        return "custom timezone only applies when timezone mode is Custom"
+    raw_hour = (cfg.get("hour_format") or "").strip()
+    if raw_hour and raw_hour not in CLOCK_HOUR_FORMATS:
+        return "that hour format isn’t available"
+    for key in ("show_seconds", "show_date", "show_timezone"):
+        raw = cfg.get(key)
+        if raw is not None and not isinstance(raw, (bool, int, str)):
+            return f"{key.replace('_', ' ')} must be on or off"
+    world_clocks = _clock_world_clocks(cfg)
+    if display == "world_clock":
+        if not world_clocks:
+            return "add at least one world clock"
+        for row in world_clocks:
+            if not row["label"].strip():
+                return "world clocks need a label"
+            try:
+                _clock_timezone_name(row["timezone"])
+            except ValueError as exc:
+                return f"world clock “{row['label']}”: {exc}"
+    elif world_clocks:
+        for row in world_clocks:
+            try:
+                _clock_timezone_name(row["timezone"])
+            except ValueError as exc:
+                return f"world clock “{row['label'] or 'clock'}”: {exc}"
+    return None
+
+
 # ── series ───────────────────────────────────────────────────────────────────
 
 def _series_source_rows(config) -> list[dict]:
@@ -855,29 +1030,49 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
 
 # ── chart (value / text slices) ──────────────────────────────────────────────
 
+def _latest_logbook_entry_value(db, field, source_id=None):
+    from app.models import FieldLogEntry
+
+    q = db.query(FieldLogEntry).filter(FieldLogEntry.field_id == field.id)
+    if source_id:
+        q = q.filter(FieldLogEntry.source_id == source_id)
+    entry = q.order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc()).first()
+    return None if entry is None else entry.value
+
+
+def _latest_chart_source_payload(db, field, *, source_id=None):
+    if field.field_type == "logbook":
+        return _latest_logbook_entry_value(db, field, source_id=source_id)
+    state = field.state or {}
+    return state.get("value", 0 if field.field_type == "value" else "")
+
+
 def _chart_source_value(db, src, source_id=None):
-    """Return (label, numeric_value) for one chart source (value / text)."""
+    """Return (label, numeric_value) for one chart source."""
     label = (src.get("label") or "").strip()
     field = resolve_field(db, src)
     if field is None:
         return None
     if not label:
         label = field.name
-    if field.field_type not in ("value", "text"):
+    if field.field_type not in ("value", "text", "logbook"):
         return None
     transform = src.get("transform") if isinstance(src.get("transform"), list) else []
-    state = field.state or {}
-    raw = state.get("value", 0 if field.field_type == "value" else "")
+    _, value_path = split_slug_path(_config_field_slug(src))
+    raw = _latest_chart_source_payload(db, field, source_id=source_id)
     if field.field_type == "value":
         v = apply_ops(raw, transform) if transform else float(raw or 0)
         return label, 0.0 if v is None else v
-    v = apply_ops(raw, transform) if transform else None
-    if v is None:
-        try:
-            v = float(raw)
-        except (TypeError, ValueError):
-            v = 0.0
-    return label, v
+    if field.field_type == "text":
+        v = apply_ops(raw, transform) if transform else None
+        if v is None:
+            try:
+                v = float(raw)
+            except (TypeError, ValueError):
+                v = 0.0
+        return label, v
+    v = extract_number(raw, value_path, transform)
+    return label, 0.0 if v is None else v
 
 
 def _chart_max(db, config) -> float:
@@ -947,6 +1142,53 @@ def _chart_data(db, config, display="pie", source_id=None, fields_snap=None):
 
 
 # ── display ──────────────────────────────────────────────────────────────────
+
+def _clock_data(db, config, display="digital", source_id=None, fields_snap=None):
+    cfg = config if isinstance(config, dict) else {}
+    mode, resolved_timezone = _clock_resolved_timezone(db, cfg)
+    now_utc = datetime.now(timezone.utc)
+    show_seconds = _bool_config(cfg, "show_seconds", default=display != "compact")
+    show_date = _bool_config(cfg, "show_date", default=display in ("compact", "world_clock"))
+    show_timezone = _bool_config(cfg, "show_timezone", default=True)
+    hour_format = _clock_hour_format(cfg)
+    primary_timezone = resolved_timezone or "UTC"
+    primary_label = "Browser time" if mode == "browser" else _clock_label("", primary_timezone, "UTC")
+    primary = _clock_face_payload(
+        label=primary_label,
+        timezone_name=primary_timezone,
+        now_utc=now_utc,
+        show_seconds=show_seconds,
+        show_date=show_date,
+        hour_format=hour_format,
+    )
+    world_rows = []
+    if display == "world_clock":
+        for row in _clock_world_clocks(cfg):
+            try:
+                timezone_name = _clock_timezone_name(row["timezone"])
+            except ValueError:
+                continue
+            world_rows.append(_clock_face_payload(
+                label=_clock_label(row["label"], timezone_name, "Clock"),
+                timezone_name=timezone_name,
+                now_utc=now_utc,
+                show_seconds=show_seconds,
+                show_date=True,
+                hour_format=hour_format,
+            ))
+    return {
+        "display": display,
+        "timezone_mode": mode,
+        "timezone": primary_timezone,
+        "server_timezone": primary_timezone,
+        "show_seconds": show_seconds,
+        "show_date": show_date,
+        "show_timezone": show_timezone,
+        "hour_format": hour_format,
+        "clock": primary,
+        "world_clocks": world_rows,
+    }
+
 
 def _render_kv_template(template: str, data) -> str:
     """Substitute ``{{ path }}`` or ``{{ expr }}`` from field data."""
@@ -1021,7 +1263,7 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
                 )
                 value = entry.value if entry else None
             else:
-                value = state.get("value")
+                value = state if field.field_type == "data" else state.get("value")
             rows.append({
                 "field_id": field.id, "name": field.name,
                 "field_type": field.field_type, "value": value,
@@ -1230,6 +1472,31 @@ def _system_data(db, config, display="source_health", source_id=None, fields_sna
     return {"display": display, "error": "Unknown display"}
 
 
+def source_age_status(
+    last_seen_at,
+    *,
+    now: datetime | None = None,
+    recent_hours: float = 1.0,
+    stale_hours: float = 24.0,
+) -> str:
+    """Age band for a source: healthy / recent / stale / never / unknown."""
+    if last_seen_at is None:
+        return "never"
+    try:
+        ts = last_seen_at
+        if getattr(ts, "tzinfo", None) is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        now = now or datetime.now(timezone.utc)
+        age = (now - ts).total_seconds() / 3600
+        if age <= recent_hours:
+            return "healthy"
+        if age <= stale_hours:
+            return "recent"
+        return "stale"
+    except Exception:
+        return "unknown"
+
+
 def _source_health_data(db, config, source_id=None):
     from app.models import Source
     now = datetime.now(timezone.utc)
@@ -1244,20 +1511,12 @@ def _source_health_data(db, config, source_id=None):
     sources = query.order_by(Source.name).all()
     rows = []
     for s in sources:
-        status = "healthy"
         if not s.enabled:
             status = "disabled"
-        elif s.last_seen_at:
-            try:
-                ts = s.last_seen_at
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                age = (now - ts).total_seconds() / 3600
-                status = "stale" if age > threshold_hours else "healthy"
-            except Exception:
-                status = "unknown"
         else:
-            status = "never"
+            status = source_age_status(
+                s.last_seen_at, now=now, stale_hours=threshold_hours,
+            )
         rows.append({
             "name": s.name, "slug": s.slug, "enabled": s.enabled,
             "last_seen": s.last_seen_at, "status": status,
@@ -1294,7 +1553,8 @@ def _metric_summary_data(db, config, source_id=None):
     if source_id:
         series_q = series_q.filter(MetricPoint.source_id == source_id)
     series = series_q.scalar() or 0
-    last_hour = q.filter(MetricPoint.timestamp >= sql_func.now() - timedelta(hours=1)).count()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+    last_hour = q.filter(MetricPoint.timestamp >= cutoff).count()
     counters = []
     for f in db.query(Field).filter(Field.field_type == "value").order_by(Field.name).all():
         raw = (f.state or {}).get("value", 0)
@@ -1308,7 +1568,7 @@ def _metric_summary_data(db, config, source_id=None):
 
 def _poller_status_data(db, config, source_id=None):
     from app.models import PollingSchedule, Source
-    query = db.query(PollingSchedule).filter(PollingSchedule.enabled == True)  # noqa: E712
+    query = db.query(PollingSchedule)
     if source_id:
         query = query.filter(PollingSchedule.source_id == source_id)
     schedules = query.order_by(PollingSchedule.name).all()
@@ -1317,6 +1577,7 @@ def _poller_status_data(db, config, source_id=None):
         src = db.query(Source).filter(Source.id == s.source_id).first() if s.source_id else None
         rows.append({
             "name": s.name, "source": src.name if src else "?",
+            "enabled": bool(s.enabled),
             "last_run": s.last_run_at, "next_run": s.next_run_at,
             "success_count": s.success_count or 0,
             "failure_count": s.failure_count or 0,

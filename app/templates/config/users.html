@@ -39,7 +39,7 @@
     {% for item in items %}
     <tr>
       <td>{{ item.username }}</td>
-      <td>{{ item.created_at.strftime('%Y-%m-%d %H:%M') if item.created_at else '-' }}</td>
+      <td>{{ item.created_at|display_dt('%Y-%m-%d %H:%M', '-') }}</td>
     </tr>
     {% endfor %}
   </tbody>

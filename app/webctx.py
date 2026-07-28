@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import quote, parse_qs
+from zoneinfo import ZoneInfo
 from fastapi import BackgroundTasks, FastAPI, Request, Depends, Form, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import (
@@ -38,6 +39,7 @@ from app.security import (
     create_session_token, verify_session_token, generate_csrf_token,
     SESSION_MAX_AGE_SECONDS,
 )
+from jinja2 import pass_context
 from app.pipeline import evaluate_and_dispatch
 from app.dashboard_layout import parse_layout_config
 from app.scheduler import start_scheduler, stop_scheduler, add_or_update_job, remove_job, job_count
@@ -209,7 +211,7 @@ def _unique_field_slug(db: Session, name: str, exclude_id: int | None = None) ->
 
 
 def _fields_section_template(request: Request, db: Session):
-    fields = db.query(Field).order_by(Field.name).all()
+    fields = db.query(Field).order_by(Field.created_at, Field.id).all()
     return templates.TemplateResponse(
         request, "config/pipeline/_fields_section.html", {"fields": fields}
     )
@@ -285,6 +287,22 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             else:
                 raw = (form.get("toggle_value") or "false").strip().lower()
                 out["value"] = raw in ("1", "true", "yes", "on")
+        elif field_type == "data":
+            mode = (form.get("data_mode") or "event").strip()
+            if mode == "key":
+                key = (form.get("value_key") or "").strip()
+                if not key:
+                    return None, "Object from event is required"
+                if key[0] == "[":
+                    return None, "Data field JSON must be an object"
+                if key[0] == "{":
+                    try:
+                        parsed = json.loads(key)
+                    except json.JSONDecodeError:
+                        return None, "Data field JSON is invalid"
+                    if not isinstance(parsed, dict):
+                        return None, "Data field JSON must be an object"
+                out["value_key"] = key
         else:
             # field_type unknown at parse time — still store field_id; handler checks type
             pass
@@ -748,6 +766,21 @@ templates.env.filters["operator_label"] = operator_label
 templates.env.filters["poll_category_label"] = poll_category_label
 templates.env.filters["poller_label"] = poller_label
 templates.env.filters["rule_label"] = rule_label
+
+
+@pass_context
+def display_dt(context, value, fmt: str = "%Y-%m-%d %H:%M", empty: str = ""):
+    if value is None:
+        return empty
+    if not isinstance(value, datetime):
+        return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    tz_name = (context.get("display_timezone") or "UTC").strip() or "UTC"
+    return value.astimezone(ZoneInfo(tz_name)).strftime(fmt)
+
+
+templates.env.filters["display_dt"] = display_dt
 
 
 

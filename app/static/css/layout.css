@@ -1,6 +1,10 @@
 @layer layout;
 
 @layer layout {
+  .config-page {
+    --config-page-header-offset: 4.5rem;
+  }
+
   .page-header {
     display: flex;
     align-items: center;
@@ -18,6 +22,22 @@
   .page-content {
     padding-inline: calc(var(--inline-space) * 4);
     padding-block: var(--block-space);
+  }
+
+  .config-page .page-header {
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline: 0;
+    z-index: 100;
+    background: var(--color-canvas);
+  }
+
+  .config-page .page-content {
+    padding-block-start: calc(var(--config-page-header-offset) + var(--block-space));
+  }
+
+  .config-page [id] {
+    scroll-margin-top: calc(var(--config-page-header-offset) + var(--block-space));
   }
 
   .container {

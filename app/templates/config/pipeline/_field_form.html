@@ -1,25 +1,28 @@
-{% set is_edit = field is defined and field %}
-{% set ft = field.field_type if is_edit else 'logbook' %}
-{% set fname = field.name if is_edit else '' %}
+{% set is_edit = is_edit if is_edit is defined else (field is defined and field and field.id) %}
+{% set ft = field.field_type if field is defined and field else 'logbook' %}
+{% set fname = field.name if field is defined and field else '' %}
 <form method="post"
       action="{% if is_edit %}/config/pipeline/field/{{ field.id }}{% else %}/config/pipeline/fields{% endif %}"
       class="stack dialog__form"
       hx-post="{% if is_edit %}/config/pipeline/field/{{ field.id }}{% else %}/config/pipeline/fields{% endif %}"
-      hx-target="#pipeline-fields"
-      hx-swap="outerHTML"
+      hx-target="#pipeline-dialog"
+      hx-swap="innerHTML"
       id="field-form">
   {% include 'components/csrf.html' %}
   <header class="dialog__header flex items-center gap">
     <h2 class="dialog__title">{% if is_edit %}Edit Field{% else %}Add Field{% endif %}</h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
+  {% if error %}
+    <p class="alert alert--danger" role="alert">{{ error }}</p>
+  {% endif %}
 
   <label class="stack">
     <span class="field-label">
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About field types"
-              data-tip="Logbook: growing list. Value: number. Text: string. Toggle: on/off. Type can’t change later.">?</button>
+              data-tip="Logbook: growing list. Value: number. Text: string. Toggle: on/off. Data: JSON object. Type can’t change later.">?</button>
     </span>
     <select name="field_type" class="input" id="field-type-select" autofocus
             {% if is_edit %}disabled{% endif %}>
@@ -80,6 +83,17 @@
       <input name="name" type="text" class="input field-name-input"
              value="{{ fname }}" placeholder="Service up"
              {% if ft == 'toggle' %}required{% else %}disabled{% endif %}>
+    </label>
+  </div>
+
+  {# ── data ── #}
+  <div id="field-params-data" class="stack field-type-params" {% if ft != 'data' %}hidden{% endif %}>
+    <p class="text-muted">A single JSON object. Actions replace it from event data or a JSON shape. Starts empty.</p>
+    <label class="stack">
+      Name *
+      <input name="name" type="text" class="input field-name-input"
+             value="{{ fname }}" placeholder="Latest payload"
+             {% if ft == 'data' %}required{% else %}disabled{% endif %}>
     </label>
   </div>
 

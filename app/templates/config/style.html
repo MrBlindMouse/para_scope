@@ -68,6 +68,23 @@
   </section>
 
   <section class="style-section stack">
+    <h2 class="style-section__title">Display timezone</h2>
+    <p class="style-section__lead">Rendered timestamps use this IANA timezone. Scheduling stays in UTC.</p>
+    <label class="stack" for="display-timezone">
+      Timezone
+      <input id="display-timezone"
+             name="display_timezone"
+             type="text"
+             class="input"
+             inputmode="text"
+             spellcheck="false"
+             placeholder="Africa/Johannesburg"
+             value="{{ current_display_timezone }}">
+    </label>
+    <p class="text-muted">Use an IANA name like <code>UTC</code>, <code>Africa/Johannesburg</code>, or <code>Europe/Berlin</code>.</p>
+  </section>
+
+  <section class="style-section stack">
     <h2 class="style-section__title">Dashboard background</h2>
     <p class="style-section__lead">Optional image behind the main dashboard. Widgets stay solid so they stay readable.</p>
     <div class="dashboard-bg-controls stack stack--dense">

@@ -21,7 +21,7 @@
       <li class="stack stack--tight">
         <p class="text-muted">
           #{{ e.id }}
-          · {{ e.timestamp }}
+          · {{ e.timestamp|display_dt('%Y-%m-%d %H:%M:%S', '') }}
           {% if e.source_id %}· source #{{ e.source_id }}{% endif %}
         </p>
         <pre class="code-block">{{ e.value | tojson(indent=2) }}</pre>

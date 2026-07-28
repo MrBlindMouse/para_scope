@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{% block page_title %}Configuration{% endblock %} – Para-Scope{% endblock %}
+{% block body_class %}config-page{% endblock %}
 {% block header_actions %}
   <a href="/" class="btn btn--icon" aria-label="Go to dashboard" title="Go to dashboard">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -46,4 +47,5 @@
     {% block config_content %}{% endblock %}
   </div>
 </div>
+<script src="/static/js/dialogs.js"></script>
 {% endblock %}

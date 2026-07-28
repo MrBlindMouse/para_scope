@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import json
@@ -30,7 +29,7 @@ from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
 from app.themes import (
     THEME_OPTIONS, FONT_OPTIONS, FONT_SIZE_OPTIONS,
-    get_theme, get_font, get_font_size, update_style,
+    get_theme, get_font, get_font_size, get_display_timezone, update_style,
     get_dashboard_bg_filename, get_dashboard_bg_opacity, dashboard_bg_path,
     clamp_opacity,
 )
@@ -38,6 +37,10 @@ from app.themes import (
 from app import webctx as ctx
 
 router = APIRouter()
+
+
+def _iso_utc(dt: datetime) -> str:
+    return (dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)).isoformat()
 
 # route: /config/style
 @router.get("/config/style")
@@ -52,6 +55,7 @@ async def config_style(request: Request, db: Session = Depends(get_db)):
             "current_theme": get_theme(db),
             "current_font": get_font(db),
             "current_font_size": get_font_size(db),
+            "current_display_timezone": get_display_timezone(db),
             "current_dashboard_bg": bool(get_dashboard_bg_filename(db)),
             "current_dashboard_bg_opacity": get_dashboard_bg_opacity(db),
             "success": success,
@@ -67,6 +71,7 @@ async def save_style(request: Request, db: Session = Depends(get_db)):
     theme = (form.get("theme") or "").strip()
     font = (form.get("font") or "").strip()
     font_size = (form.get("font_size") or "").strip()
+    display_timezone = (form.get("display_timezone") or "").strip()
     opacity_raw = form.get("dashboard_bg_opacity")
     # Slider posts 0–100; also accept 0–1
     if opacity_raw is not None and str(opacity_raw).strip() != "":
@@ -93,6 +98,7 @@ async def save_style(request: Request, db: Session = Depends(get_db)):
         theme=theme,
         font=font,
         font_size=font_size,
+        display_timezone=display_timezone,
         dashboard_bg_opacity=opacity,
         clear_dashboard_bg=clear_bg,
         dashboard_bg_bytes=bg_bytes,
@@ -317,8 +323,14 @@ async def events_live_rows(request: Request, db: Session = Depends(get_db)):
         return HTMLResponse("")
 
     rows = []
+    display_timezone = get_display_timezone(db)
     for item in entries:
-        rows.append(ctx.templates.env.get_template("components/event_row.html").render(item=item))
+        rows.append(
+            ctx.templates.env.get_template("components/event_row.html").render(
+                item=item,
+                display_timezone=display_timezone,
+            )
+        )
     return HTMLResponse("".join(rows))
 
 
@@ -371,7 +383,7 @@ async def metrics_page(request: Request, db: Session = Depends(get_db)):
         points = query.order_by(MetricPoint.timestamp).all()
         series_list.append({
             "name": metric_name,
-            "points": [{"ts": p.timestamp.isoformat(), "v": p.value} for p in points],
+            "points": [{"ts": _iso_utc(p.timestamp), "v": p.value} for p in points],
         })
 
     return ctx.templates.TemplateResponse(
@@ -409,7 +421,7 @@ async def metrics_api(request: Request, db: Session = Depends(get_db)):
         points = query.order_by(MetricPoint.timestamp).all()
         series.append({
             "name": metric_name,
-            "points": [{"ts": p.timestamp.isoformat(), "v": p.value} for p in points],
+            "points": [{"ts": _iso_utc(p.timestamp), "v": p.value} for p in points],
         })
     return {"series": series}
 
@@ -443,9 +455,10 @@ async def system_page(request: Request, db: Session = Depends(get_db)):
     webhook_accepted = db.query(AuditLog).filter(
         AuditLog.action == "webhook.accepted"
     ).count()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
     webhook_accepted_last_hour = db.query(AuditLog).filter(
         AuditLog.action == "webhook.accepted",
-        AuditLog.timestamp >= func.now() - timedelta(hours=1),
+        AuditLog.timestamp >= cutoff,
     ).count()
 
     schedules = db.query(PollingSchedule).all()
@@ -454,35 +467,25 @@ async def system_page(request: Request, db: Session = Depends(get_db)):
         schedule_info.append({
             "name": s.name,
             "source_id": s.source_id,
-            "last_run": s.last_run_at.strftime("%Y-%m-%d %H:%M") if s.last_run_at else "never",
-            "next_run": s.next_run_at.strftime("%Y-%m-%d %H:%M") if s.next_run_at else "-",
+            "last_run": s.last_run_at,
+            "next_run": s.next_run_at,
             "enabled": s.enabled,
             "success_count": s.success_count or 0,
             "failure_count": s.failure_count or 0,
             "last_error": s.last_error or "",
         })
 
+    from app.widgets import source_age_status
+
     source_health = []
     all_sources = db.query(Source).all()
     now = datetime.now(timezone.utc)
     for src in all_sources:
         last_seen = src.last_seen_at
-        status_text = "healthy"
-        if last_seen:
-            try:
-                age_hours = (now - last_seen.replace(tzinfo=timezone.utc) if last_seen.tzinfo is None else now - last_seen).total_seconds() / 3600
-                if age_hours > 24:
-                    status_text = "stale"
-                elif age_hours > 1:
-                    status_text = "recent"
-            except Exception:
-                status_text = "unknown"
-        else:
-            status_text = "never"
         source_health.append({
             "id": src.id, "name": src.name, "slug": src.slug,
-            "enabled": src.enabled, "last_seen": last_seen.strftime("%Y-%m-%d %H:%M") if last_seen else "never",
-            "status": status_text,
+            "enabled": src.enabled, "last_seen": last_seen,
+            "status": source_age_status(last_seen, now=now),
         })
 
     return ctx.templates.TemplateResponse(

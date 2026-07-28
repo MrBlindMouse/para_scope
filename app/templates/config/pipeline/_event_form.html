@@ -1,15 +1,18 @@
-{% set is_edit = event is defined and event %}
+{% set is_edit = is_edit if is_edit is defined else (event is defined and event and event.id) %}
 <form method="post"
       action="{% if is_edit %}/config/pipeline/event/{{ event.id }}{% else %}/config/pipeline/source/{{ source.id }}/events{% endif %}"
       class="stack dialog__form"
       hx-post="{% if is_edit %}/config/pipeline/event/{{ event.id }}{% else %}/config/pipeline/source/{{ source.id }}/events{% endif %}"
-      hx-target="#source-chain-{{ source.id }}"
-      hx-swap="outerHTML">
+      hx-target="#pipeline-dialog"
+      hx-swap="innerHTML">
   {% include 'components/csrf.html' %}
   <header class="dialog__header flex items-center gap">
     <h2 class="dialog__title">{% if is_edit %}Edit Event{% else %}Add Event{% endif %} — {{ source.name }}</h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
+  {% if error %}
+    <p class="alert alert--danger" role="alert">{{ error }}</p>
+  {% endif %}
 
   {% if source.source_type == "poll" %}
   <p class="text-muted">
@@ -37,7 +40,7 @@
       >?</button>
     </span>
     <input name="name" type="text" class="input"
-           value="{{ event.name if is_edit else '' }}"
+           value="{{ event.name if event is defined and event else '' }}"
            placeholder="{% if source.source_type == 'poll' %}always{% else %}status.changed{% endif %}"
            required autofocus>
   </label>
@@ -49,7 +52,7 @@
               data-tip="Optional note for you. Shown on the pipeline; senders don’t see it.">?</button>
     </span>
     <textarea name="description" rows="2" class="input"
-              placeholder="{% if source.source_type == 'poll' %}Poll completed successfully{% else %}Fired when status changes{% endif %}">{% if is_edit %}{{ event.description }}{% endif %}</textarea>
+              placeholder="{% if source.source_type == 'poll' %}Poll completed successfully{% else %}Fired when status changes{% endif %}">{{ event.description if event is defined and event else '' }}</textarea>
   </label>
   <div class="flex items-center gap">
     <button type="submit" class="btn btn--primary">{% if is_edit %}Save Event{% else %}Create Event{% endif %}</button>

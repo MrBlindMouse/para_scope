@@ -120,6 +120,14 @@
       handlerType.value = preferredVisible || firstVisible || handlerType.value;
     }
 
+    function syncCategoryHelp() {
+      if (!pollCategory) return;
+      var selected = pollCategory.value;
+      form.querySelectorAll("[data-poll-category-help]").forEach(function (row) {
+        row.hidden = row.getAttribute("data-poll-category-help") !== selected;
+      });
+    }
+
     function syncAuthFields() {
       if (!handlerType) return;
       var panel = form.querySelector(
@@ -194,6 +202,7 @@
     if (pollCategory) {
       pollCategory.addEventListener("change", function () {
         syncHandlerOptions();
+        syncCategoryHelp();
         syncHandlerPanels();
       });
     }
@@ -209,6 +218,7 @@
       webhookProvider.addEventListener("change", syncWebhookProviderPanels);
     }
     syncHandlerOptions();
+    syncCategoryHelp();
     syncHandlerPanels();
     syncWebhookProviderPanels();
     toggleSourceType();

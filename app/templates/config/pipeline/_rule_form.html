@@ -1,16 +1,19 @@
-{% set is_edit = rule is defined and rule %}
+{% set is_edit = is_edit if is_edit is defined else (rule is defined and rule and rule.id) %}
 {% set selected_ids = rule.event_type_ids if is_edit else (selected_event_type_ids or []) %}
 <form method="post"
       action="{% if is_edit %}/config/pipeline/rule/{{ rule.id }}{% else %}/config/pipeline/source/{{ source.id }}/rules{% endif %}"
       class="stack dialog__form"
       hx-post="{% if is_edit %}/config/pipeline/rule/{{ rule.id }}{% else %}/config/pipeline/source/{{ source.id }}/rules{% endif %}"
-      hx-target="#source-chain-{{ source.id }}"
-      hx-swap="outerHTML">
+      hx-target="#pipeline-dialog"
+      hx-swap="innerHTML">
   {% include 'components/csrf.html' %}
   <header class="dialog__header flex items-center gap">
     <h2 class="dialog__title">{% if is_edit %}Edit Rule{% else %}Add Rule{% endif %} — {{ source.name }}</h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
+  {% if error %}
+    <p class="alert alert--danger" role="alert">{{ error }}</p>
+  {% endif %}
   <p class="text-muted">
     Create the rule first, then add actions on the rule in the chain.
   </p>
@@ -37,7 +40,7 @@
               data-tip="Lower numbers run first when several rules match. All matching rules still run.">?</button>
     </span>
     <input name="order_index" type="number" min="0"
-           value="{{ rule.order_index if is_edit else 0 }}" class="input">
+           value="{{ rule.order_index if rule is defined and rule else 0 }}" class="input">
   </label>
   {% if is_edit %}
   <label class="flex items-center gap">

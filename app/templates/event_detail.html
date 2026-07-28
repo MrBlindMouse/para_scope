@@ -9,7 +9,7 @@
   <div class="card__body">
     <table class="table table--flush">
       <tr><th class="table__key">ID</th><td>{{ event.id }}</td></tr>
-      <tr><th>Timestamp</th><td>{{ event.timestamp.strftime('%Y-%m-%d %H:%M:%S') if event.timestamp else '-' }}</td></tr>
+      <tr><th>Timestamp</th><td>{{ event.timestamp|display_dt('%Y-%m-%d %H:%M:%S', '-') }}</td></tr>
       <tr><th>Status</th><td>
         {% if event.status == 'processed' %}
         <span class="badge badge--success">{{ event.status }}</span>

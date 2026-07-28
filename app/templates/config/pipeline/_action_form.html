@@ -1,4 +1,4 @@
-{% set is_edit = action is defined and action %}
+{% set is_edit = is_edit if is_edit is defined else (action is defined and action and action.id) %}
 {% set cfg = (action.config if is_edit else {}) or {} %}
 {% set selected_field_id = cfg.get('field_id') %}
 {% set selected_field = none %}
@@ -11,8 +11,8 @@
       action="{% if is_edit %}/config/pipeline/action/{{ action.id }}{% else %}/config/pipeline/source/{{ source.id }}/actions{% endif %}"
       class="stack dialog__form"
       hx-post="{% if is_edit %}/config/pipeline/action/{{ action.id }}{% else %}/config/pipeline/source/{{ source.id }}/actions{% endif %}"
-      hx-target="#source-chain-{{ source.id }}"
-      hx-swap="outerHTML"
+      hx-target="#pipeline-dialog"
+      hx-swap="innerHTML"
       id="action-form">
   {% include 'components/csrf.html' %}
   {% if not is_edit %}
@@ -25,6 +25,9 @@
     </h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
+  {% if error %}
+    <p class="alert alert--danger" role="alert">{{ error }}</p>
+  {% endif %}
 
   <label class="stack">
     <span class="field-label">
@@ -136,6 +139,25 @@
           <option value="true" {% if cfg.get('value') is true %}selected{% endif %}>On</option>
           <option value="false" {% if cfg.get('value') is not true %}selected{% endif %}>Off</option>
         </select>
+      </label>
+    </div>
+
+    <div id="fp-data" class="stack fp-params" hidden>
+      <label class="stack">
+        Value source
+        <select name="data_mode" class="input" id="data-mode">
+          <option value="event" {% if 'value_key' not in cfg %}selected{% endif %}>Entire event</option>
+          <option value="key" {% if cfg.get('value_key') %}selected{% endif %}>Object from event</option>
+        </select>
+      </label>
+      <label class="stack" id="data-key-wrap" hidden>
+        <span class="field-label">
+          Object from event *
+          <button type="button" class="field-tip" tabindex="0"
+                  data-tip="Path or JSON object shape. Result must be a JSON object. field = current stored value.">?</button>
+        </span>
+        <textarea name="value_key" class="input" id="data-value-key" rows="4"
+                  placeholder='payload&#10;or {"celsius":"temp","sensor":"payload.sensor"}'>{{ cfg.get('value_key') or '' }}</textarea>
       </label>
     </div>
   </div>
@@ -461,7 +483,8 @@
     logbook: document.getElementById("fp-logbook"),
     value: document.getElementById("fp-value"),
     text: document.getElementById("fp-text"),
-    toggle: document.getElementById("fp-toggle")
+    toggle: document.getElementById("fp-toggle"),
+    data: document.getElementById("fp-data")
   };
   var authMode = document.getElementById("auth-mode");
   var bearerCustomWrap = document.getElementById("bearer-auth-custom-wrap");
@@ -494,6 +517,7 @@
     syncLogbookMode();
     syncToggleMode();
     syncValueOp();
+    syncDataMode();
   }
 
   function syncLogbookMode() {
@@ -520,6 +544,13 @@
     if (!op || !delta) return;
     delta.hidden = op.value === "reset";
     setDisabledIn(delta, op.value === "reset");
+  }
+  function syncDataMode() {
+    var mode = document.getElementById("data-mode");
+    var keyW = document.getElementById("data-key-wrap");
+    if (!mode || !keyW) return;
+    keyW.hidden = mode.value !== "key";
+    setDisabledIn(keyW, mode.value !== "key");
   }
   function setDisabledIn(el, disabled) {
     if (!el) return;
@@ -690,6 +721,8 @@
   if (tm) tm.addEventListener("change", syncToggleMode);
   var vo = document.getElementById("value-op");
   if (vo) vo.addEventListener("change", syncValueOp);
+  var dm = document.getElementById("data-mode");
+  if (dm) dm.addEventListener("change", syncDataMode);
   if (authMode) authMode.addEventListener("change", syncAuth);
   if (signingMode) signingMode.addEventListener("change", syncSigning);
   var bm = document.getElementById("http-body-mode");

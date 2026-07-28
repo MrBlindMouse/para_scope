@@ -423,7 +423,7 @@ def test_notify_gotify_and_discord(db_session_factory):
     assert d["body"]["content"].startswith("**Hi**")
 
 
-def test_field_push_skips_unchanged_text_and_logbook(db_session_factory):
+def test_field_push_skips_unchanged_text_but_appends_logbook(db_session_factory):
     from app.actions import run_registered_action
     from app.models import ActionInstance, Event, Field, FieldLogEntry, Source
 
@@ -462,7 +462,7 @@ def test_field_push_skips_unchanged_text_and_logbook(db_session_factory):
         run_registered_action(db, event, a_log)
         db.refresh(text)
         assert text.state["value"] == "ok"
-        assert db.query(FieldLogEntry).filter(FieldLogEntry.field_id == log.id).count() == 1
+        assert db.query(FieldLogEntry).filter(FieldLogEntry.field_id == log.id).count() == 2
 
         # Change → applies
         event.normalized_data = {"status": "down"}
@@ -471,7 +471,7 @@ def test_field_push_skips_unchanged_text_and_logbook(db_session_factory):
         run_registered_action(db, event, a_log)
         db.refresh(text)
         assert text.state["value"] == "down"
-        assert db.query(FieldLogEntry).filter(FieldLogEntry.field_id == log.id).count() == 2
+        assert db.query(FieldLogEntry).filter(FieldLogEntry.field_id == log.id).count() == 3
     finally:
         db.close()
 

@@ -29,7 +29,7 @@
   <tbody>
     {% for item in items %}
     <tr>
-      <td>{{ item.timestamp.strftime('%Y-%m-%d %H:%M:%S') if item.timestamp else '' }}</td>
+      <td>{{ item.timestamp|display_dt('%Y-%m-%d %H:%M:%S', '') }}</td>
       <td>{{ item.user_id or '-' }}</td>
       <td><code>{{ item.action }}</code></td>
       <td>{{ item.resource_type }}#{{ item.resource_id or '-' }}</td>

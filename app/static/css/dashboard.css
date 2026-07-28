@@ -125,11 +125,184 @@
     background: var(--color-surface);
   }
 
+  .widget-clock {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.45rem;
+    min-block-size: 100%;
+  }
+
+  .widget-clock__label {
+    font-size: 0.8rem;
+    color: var(--color-ink-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .widget-clock__time {
+    font-size: clamp(1.8rem, 5vw, 3rem);
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .widget-clock__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.75rem;
+    color: var(--color-ink-muted);
+    font-size: 0.85rem;
+  }
+
+  .widget-clock--mono .widget-clock__time,
+  .widget-clock--mono .widget-clock__row-time {
+    font-family: ui-monospace, monospace;
+  }
+
+  .widget-clock--callout {
+    padding: 0.9rem;
+    border-inline-start: 3px solid var(--color-link);
+    background: var(--color-surface);
+    border-radius: var(--radius-md, 0.35rem);
+  }
+
+  .widget-clock__face {
+    position: relative;
+    inline-size: min(11rem, 100%);
+    aspect-ratio: 1;
+    margin-inline: auto;
+    border-radius: 50%;
+    border: 2px solid var(--color-border);
+    background: var(--color-surface);
+  }
+
+  .widget-clock__face::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: repeating-conic-gradient(
+      from -1.5deg,
+      var(--color-ink-muted) 0deg 3deg,
+      transparent 3deg 30deg
+    );
+    -webkit-mask: radial-gradient(circle, transparent 62%, #000 63%);
+    mask: radial-gradient(circle, transparent 62%, #000 63%);
+    pointer-events: none;
+  }
+
+  .widget-clock--ring .widget-clock__face {
+    box-shadow: inset 0 0 0 0.55rem color-mix(in oklch, var(--color-link) 12%, transparent);
+  }
+
+  /* Hands grow upward from the hub; 0deg = 12 o'clock. */
+  .widget-clock__hand {
+    position: absolute;
+    left: 50%;
+    bottom: 50%;
+    width: 0.2rem;
+    margin-left: -0.1rem;
+    transform-origin: center bottom;
+    border-radius: 999px;
+    background: var(--color-ink);
+    z-index: 1;
+  }
+
+  .widget-clock__hand--hour {
+    width: 0.28rem;
+    height: 28%;
+    margin-left: -0.14rem;
+  }
+
+  .widget-clock__hand--minute {
+    width: 0.2rem;
+    height: 38%;
+    margin-left: -0.1rem;
+  }
+
+  .widget-clock__hand--second {
+    width: 0.12rem;
+    height: 42%;
+    margin-left: -0.06rem;
+    background: var(--color-link);
+    z-index: 2;
+  }
+
+  .widget-clock__hub {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.7rem;
+    height: 0.7rem;
+    margin: -0.35rem 0 0 -0.35rem;
+    border-radius: 50%;
+    background: var(--color-ink);
+    z-index: 3;
+  }
+
+  .widget-clock--compact {
+    gap: 0.2rem;
+  }
+
+  .widget-clock--compact .widget-clock__time {
+    font-size: clamp(1.25rem, 3vw, 1.8rem);
+  }
+
+  .widget-clock__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding-block: 0.2rem;
+    border-block-end: 1px solid var(--color-border);
+  }
+
+  .widget-clock__row:last-child {
+    border-block-end: 0;
+  }
+
+  .widget-clock__row-head,
+  .widget-clock__row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-inline-size: 0;
+  }
+
+  .widget-clock__row-main {
+    text-align: end;
+  }
+
+  .widget-clock__row-time {
+    font-size: 1.2rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
   .widget-entry-card {
     padding: 0.5rem 0.75rem;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-lg, 0.5rem);
     font-size: 0.875rem;
+  }
+
+  .dashboard-widget-editor__body {
+    margin-block-start: 0.85rem;
+  }
+
+  .dashboard-widget-editor__toggle {
+    padding-inline: 0.55rem;
+  }
+
+  .dashboard-widget-editor__icon {
+    display: inline-block;
+    transform: rotate(90deg);
+    transition: transform 0.15s ease;
+  }
+
+  .dashboard-widget-editor__toggle[aria-expanded="true"] .dashboard-widget-editor__icon {
+    transform: rotate(0deg);
   }
 
   .widget-timeline {

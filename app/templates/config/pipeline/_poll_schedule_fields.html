@@ -83,21 +83,33 @@
     Poll category
     <button type="button" class="field-tip" tabindex="0"
             aria-label="About poll category"
-            data-tip="Choose what kind of thing Para-Scope should check. Categories narrow the available poll subtypes.">?</button>
+            data-tip="Choose the kind of thing you want to check first. Categories narrow the subtype list and explain the expected target shape.">?</button>
   </span>
   <select name="poll_category" class="input" id="poll-category">
     {% for category in poller_categories %}
       <option value="{{ category.slug }}" {% if category.slug == selected_category %}selected{% endif %}>{{ category.label }}</option>
     {% endfor %}
   </select>
+  <span class="text-muted">Pick the broad target first: HTTP endpoint, host, network path, filesystem, local app, or an external service.</span>
 </label>
+
+<div class="stack">
+  {% for category in poller_categories %}
+    <p class="text-muted poll-category-help"
+       data-poll-category-help="{{ category.slug }}"
+       {% if category.slug != selected_category %}hidden{% endif %}>
+      <strong>{{ category.label }}</strong>:
+      {{ category.help_text }}
+    </p>
+  {% endfor %}
+</div>
 
 <label class="stack">
   <span class="field-label">
     Poll subtype
     <button type="button" class="field-tip" tabindex="0"
             aria-label="About poll subtype"
-            data-tip="The subtype decides which handler runs and which settings are shown below.">?</button>
+            data-tip="The subtype is the exact poller implementation. Pick the concrete check you want to run inside the selected category.">?</button>
   </span>
   <select name="handler_type" class="input" id="handler-type">
     {% for spec in poller_specs %}
@@ -108,6 +120,7 @@
       </option>
     {% endfor %}
   </select>
+  <span class="text-muted">Choose the concrete check next. The fields below change to match that subtype.</span>
 </label>
 
 {% for spec in poller_specs %}

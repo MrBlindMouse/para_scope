@@ -233,28 +233,36 @@ def test_poller_registry_exposes_categories_and_specs():
     poller_types = get_poller_types()
     assert "http_get" in poller_types
     assert "system_snapshot" in poller_types
-    assert "public_http_status" in poller_types
+    assert "public_http_status" not in poller_types
 
     spec = get_poller_spec("log_pattern_watch")
     assert spec is not None
     assert spec["category"] == "application"
     assert any(field["name"] == "patterns" for field in spec["fields"])
+    assert get_poller_spec("public_http_status") is None
 
     categories = [item["slug"] for item in get_poller_categories()]
     assert categories == [
         "url", "system", "connectivity", "storage", "application", "external",
     ]
+    category_meta = {item["slug"]: item for item in get_poller_categories()}
+    assert category_meta["url"]["label"] == "HTTP / APIs"
+    assert "simple URL status checks" in category_meta["url"]["help_text"]
+    assert category_meta["external"]["label"] == "External Services"
 
     # Registration order within category — not alphabetical by label.
     by_cat = {}
     for item in get_poller_specs():
         by_cat.setdefault(item["category"], []).append(item["handler_type"])
-    assert by_cat["url"][0] == "http_get"
+    assert by_cat["url"] == [
+        "http_get", "http_post", "http_put", "http_delete",
+    ]
     assert by_cat["system"][0] == "system_snapshot"
     assert by_cat["connectivity"] == [
         "tcp_connect", "icmp_ping", "dns_resolve", "cert_expiry",
     ]
     assert by_cat["storage"] == ["disk_free_space", "backup_age"]
+    assert by_cat["external"] == ["rss_atom_change", "imap_unread", "domain_expiry"]
 
 
 def test_parse_poller_form_http_schedule():
@@ -265,6 +273,8 @@ def test_parse_poller_form_http_schedule():
         "handler_url": "https://example.com/data",
         "event_type": "status.ok",
         "json_path": "payload.items",
+        "request_method": "HEAD",
+        "expected_status": "204",
         "headers": '{"X-Test": "1"}',
         "query": '{"page": 1}',
         "auth_header": "Authorization",
@@ -279,7 +289,9 @@ def test_parse_poller_form_http_schedule():
     assert values["timeout_seconds"] == 20
     assert values["retry_count"] == 2
     assert values["handler_params"]["event_type"] == "status.ok"
+    assert values["handler_params"]["expected_status"] == 204
     assert values["handler_params"]["headers"] == {"X-Test": "1"}
+    assert values["handler_params"]["method"] == "HEAD"
     assert values["handler_params"]["query"] == {"page": 1}
     assert "body" not in values["handler_params"]
 
@@ -296,6 +308,9 @@ def test_http_field_advanced_and_auth_metadata():
     assert by_name["retry_count"]["default"] == 2
     assert by_name["timeout_seconds"]["advanced"] is False
     assert by_name["event_type"]["advanced"] is True
+    assert by_name["request_method"]["param_key"] == "method"
+    assert by_name["request_method"]["options"] == [("GET", "GET"), ("HEAD", "HEAD")]
+    assert by_name["expected_status"]["parse_as"] == "int"
     assert by_name["auth_mode"]["advanced"] is True
     assert by_name["auth_prefix"]["show_for_auth"] == ["bearer", "oauth_client_credentials"]
     assert by_name["token_url"]["show_for_auth"] == ["oauth_client_credentials"]
@@ -368,15 +383,15 @@ def test_log_pattern_watch_poll(db, source, tmp_path):
     assert result["data"]["matches"]["ERROR"] == 1
 
 
-def test_public_http_status_poll(db, source):
-    from app.pollers import public_http_status_poll
+def test_http_poll_supports_head_and_expected_status(db, source):
+    from app.pollers import http_poll
 
     schedule = _make_schedule(
         db,
         source,
-        handler_type="public_http_status",
+        handler_type="http_get",
         handler_url="https://example.com/health",
-        handler_params={"method": "GET", "expected_status": 200},
+        handler_params={"method": "HEAD", "expected_status": 200},
     )
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -389,11 +404,13 @@ def test_public_http_status_poll(db, source):
     mock_client.request.return_value = mock_response
 
     with patch("app.pollers.httpx.Client", return_value=mock_client):
-        result = public_http_status_poll(schedule, db)
+        result = http_poll(schedule, db)
 
     assert result["ok"] is True
-    assert result["data"]["status_code"] == 200
-    assert result["data"]["url"] == "https://example.com/health"
+    assert result["status_code"] == 200
+    assert result["data"] == "ok"
+    call_kwargs = mock_client.request.call_args.kwargs
+    assert call_kwargs["method"] == "HEAD"
 
 
 # ── run_schedule ────────────────────────────────────────────────────────────

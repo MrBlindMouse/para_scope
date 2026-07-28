@@ -12,7 +12,7 @@
       <li class="widget-timeline__item">
         <span class="widget-timeline__dot" aria-hidden="true"></span>
         <div>
-          <span class="text-muted">{{ e.timestamp }}</span>
+          <span class="text-muted">{{ e.timestamp|display_dt('%Y-%m-%d %H:%M:%S', '') }}</span>
           {% if e.text is defined and e.text is not none %}
           <div class="widget-kv">{{ e.text }}</div>
           {% else %}
@@ -26,7 +26,7 @@
     <div class="stack stack--tight">
       {% for e in wdata.entries %}
       <div class="widget-entry-card">
-        <span class="text-muted">{{ e.timestamp }}</span>
+        <span class="text-muted">{{ e.timestamp|display_dt('%Y-%m-%d %H:%M:%S', '') }}</span>
         {% if e.text is defined and e.text is not none %}
         <div class="widget-kv">{{ e.text }}</div>
         {% else %}
@@ -39,7 +39,7 @@
     <ul class="stack stack--tight widget-list">
       {% for e in wdata.entries %}
       <li class="widget-list__item">
-        <span class="text-muted">{{ e.timestamp }}</span>
+        <span class="text-muted">{{ e.timestamp|display_dt('%Y-%m-%d %H:%M:%S', '') }}</span>
         {% if e.text is defined and e.text is not none %}
         <div class="widget-kv">{{ e.text }}</div>
         {% else %}

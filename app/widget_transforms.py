@@ -5,6 +5,7 @@ import ast
 import json
 import operator
 import re
+from datetime import timezone
 
 from app.fields import get_by_path
 
@@ -150,6 +151,8 @@ def series_from_points(points, *, value_path: str | None = None, transform: list
         v = extract_number(payload, value_path, transform)
         if v is None:
             continue
+        if getattr(ts, "tzinfo", None) is None:
+            ts = ts.replace(tzinfo=timezone.utc)
         iso = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
         series.append({"ts": iso, "v": v})
     return series

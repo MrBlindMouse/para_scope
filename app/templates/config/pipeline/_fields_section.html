@@ -28,41 +28,50 @@
             · {{ (f.state or {}).get('value', '') | truncate(40) }}
           {% elif f.field_type == 'toggle' %}
             · {{ 'on' if (f.state or {}).get('value') else 'off' }}
+          {% elif f.field_type == 'data' %}
+            · {{ (f.state or {}) | tojson }}
           {% endif %}
         </span>
       </div>
-      {% if f.field_type == 'logbook' %}
-      <button type="button"
-              class="btn btn--sm"
-              hx-get="/config/pipeline/field/{{ f.id }}/partials/recent-entries"
-              hx-target="#pipeline-dialog"
-              hx-swap="innerHTML">
-        Recent
-      </button>
-      <form method="post" action="/config/pipeline/field/{{ f.id }}/clear"
-            hx-post="/config/pipeline/field/{{ f.id }}/clear"
-            hx-target="#pipeline-fields"
-            hx-swap="outerHTML"
-            hx-confirm="Clear all entries in {{ f.name }}?">
-        {% include 'components/csrf.html' %}
-        <button type="submit" class="btn btn--sm">Clear</button>
-      </form>
-      {% endif %}
-      <button type="button"
-              class="btn btn--sm"
-              hx-get="/config/pipeline/partials/field-form?field_id={{ f.id }}"
-              hx-target="#pipeline-dialog"
-              hx-swap="innerHTML">
-        Edit
-      </button>
-      <form method="post" action="/config/pipeline/field/{{ f.id }}/delete"
-            hx-post="/config/pipeline/field/{{ f.id }}/delete"
-            hx-target="#pipeline-fields"
-            hx-swap="outerHTML"
-            hx-confirm="Delete field {{ f.name }}?">
-        {% include 'components/csrf.html' %}
-        <button type="submit" class="btn btn--sm btn--negative">Delete</button>
-      </form>
+      <details class="pipeline-action-menu">
+        <summary class="btn btn--sm pipeline-action-menu__trigger">Actions</summary>
+        <div class="pipeline-action-menu__panel stack stack--tight">
+          {% if f.field_type == 'logbook' %}
+          <button type="button"
+                  class="btn btn--sm pipeline-action-menu__item"
+                  hx-get="/config/pipeline/field/{{ f.id }}/partials/recent-entries"
+                  hx-target="#pipeline-dialog"
+                  hx-swap="innerHTML">
+            Recent
+          </button>
+          <form method="post" action="/config/pipeline/field/{{ f.id }}/clear"
+                class="pipeline-action-menu__form"
+                hx-post="/config/pipeline/field/{{ f.id }}/clear"
+                hx-target="#pipeline-fields"
+                hx-swap="outerHTML"
+                hx-confirm="Clear all entries in {{ f.name }}?">
+            {% include 'components/csrf.html' %}
+            <button type="submit" class="btn btn--sm pipeline-action-menu__item">Clear</button>
+          </form>
+          {% endif %}
+          <button type="button"
+                  class="btn btn--sm pipeline-action-menu__item"
+                  hx-get="/config/pipeline/partials/field-form?field_id={{ f.id }}"
+                  hx-target="#pipeline-dialog"
+                  hx-swap="innerHTML">
+            Edit
+          </button>
+          <form method="post" action="/config/pipeline/field/{{ f.id }}/delete"
+                class="pipeline-action-menu__form pipeline-action-menu__form--danger"
+                hx-post="/config/pipeline/field/{{ f.id }}/delete"
+                hx-target="#pipeline-fields"
+                hx-swap="outerHTML"
+                hx-confirm="Delete field {{ f.name }}?">
+            {% include 'components/csrf.html' %}
+            <button type="submit" class="btn btn--sm btn--negative pipeline-action-menu__item">Delete</button>
+          </form>
+        </div>
+      </details>
     </li>
     {% endfor %}
   </ul>

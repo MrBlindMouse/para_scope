@@ -2,20 +2,23 @@
       action="/config/pipeline/sources"
       class="stack dialog__form"
       hx-post="/config/pipeline/sources"
-      hx-target="this"
-      hx-swap="none">
+      hx-target="#pipeline-dialog"
+      hx-swap="innerHTML">
   {% include 'components/csrf.html' %}
   <header class="dialog__header flex items-center gap">
     <h2 class="dialog__title">Add Source</h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
+  {% if error %}
+    <p class="alert alert--danger" role="alert">{{ error }}</p>
+  {% endif %}
   <label class="stack">
     Name *
-    <input name="name" type="text" class="input" placeholder="Warehouse sensors" required autofocus>
+    <input name="name" type="text" class="input" placeholder="Warehouse sensors" value="{{ source.name or '' }}" required autofocus>
   </label>
   <label class="stack">
     Description
-    <textarea name="description" rows="2" class="input"></textarea>
+    <textarea name="description" rows="2" class="input">{{ source.description or '' }}</textarea>
   </label>
   <label class="stack">
     <span class="field-label">
@@ -25,16 +28,18 @@
               data-tip="Webhook: others send events to you. Poll: Para-Scope runs one typed poller on a schedule.">?</button>
     </span>
     <select name="source_type" class="input" id="source-type">
-      <option value="webhook">Webhook</option>
-      <option value="poll">Poll</option>
+      <option value="webhook" {% if source.source_type != 'poll' %}selected{% endif %}>Webhook</option>
+      <option value="poll" {% if source.source_type == 'poll' %}selected{% endif %}>Poll</option>
     </select>
   </label>
 
-  {% with webhook_provider='generic_hmac', webhook_secret=None, source_config={}, hide_webhook_fields=False %}
+  {% set webhook_provider = (source.config or {}).get('webhook_provider') or 'generic_hmac' %}
+  {% with webhook_provider=webhook_provider, webhook_secret=None, source_config=source.config or {}, hide_webhook_fields=(source.source_type == 'poll') %}
     {% include 'config/pipeline/_webhook_provider_fields.html' %}
   {% endwith %}
 
-  <fieldset class="stack" id="schedule-fields" style="display:none">
+  {% set sched_type = schedule.schedule_type.value if schedule and schedule.schedule_type.value is defined else (schedule.schedule_type if schedule else 'interval') %}
+  <fieldset class="stack" id="schedule-fields" {% if source.source_type != 'poll' %}style="display:none"{% endif %}>
     <legend>Initial schedule</legend>
     <label class="stack">
       <span class="field-label">
@@ -44,17 +49,18 @@
                 data-tip="Interval: every N seconds. Cron: a schedule like 0 * * * * (every hour).">?</button>
       </span>
       <select name="schedule_type" class="input" id="sched-type">
-        <option value="interval">Interval</option>
-        <option value="cron">Cron Expression</option>
+        <option value="interval" {% if sched_type != 'cron' %}selected{% endif %}>Interval</option>
+        <option value="cron" {% if sched_type == 'cron' %}selected{% endif %}>Cron Expression</option>
       </select>
     </label>
-    <div id="interval-fields" class="stack">
+    <div id="interval-fields" class="stack" {% if sched_type == 'cron' %}style="display:none"{% endif %}>
       <label class="stack">
         Interval (seconds) *
-        <input name="interval_seconds" type="number" min="1" class="input" placeholder="3600">
+        <input name="interval_seconds" type="number" min="1" class="input" placeholder="3600"
+               value="{{ schedule.interval_seconds if schedule and schedule.interval_seconds else '' }}">
       </label>
     </div>
-    <div id="cron-fields" class="stack" style="display:none">
+    <div id="cron-fields" class="stack" {% if sched_type != 'cron' %}style="display:none"{% endif %}>
       <label class="stack">
         <span class="field-label">
           Cron Expression *
@@ -62,7 +68,8 @@
                   aria-label="About cron expression"
                   data-tip="Five fields: minute hour day month weekday. Example: 0 * * * * = every hour.">?</button>
         </span>
-        <input name="cron_expression" type="text" class="input" placeholder="0 * * * *">
+        <input name="cron_expression" type="text" class="input" placeholder="0 * * * *"
+               value="{{ schedule.cron_expression if schedule else '' }}">
       </label>
     </div>
     {% include 'config/pipeline/_poll_schedule_fields.html' %}

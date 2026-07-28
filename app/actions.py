@@ -14,6 +14,7 @@ from urllib.parse import urljoin
 import httpx
 
 from app.fields import (
+    coerce_data_value,
     coerce_logbook_value,
     resolve_numeric,
     with_current_field,
@@ -123,13 +124,6 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
             raw = nd
 
         value = coerce_logbook_value(raw)
-        if latest is not None and _values_equal(value, latest.value):
-            logger.debug(
-                "field_push logbook skip unchanged field=%s event_id=%s",
-                field.name, event.id,
-            )
-            return
-
         entry = FieldLogEntry(
             field_id=field.id,
             value=value,
@@ -226,6 +220,23 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
         else:
             raise ValueError("Toggle action needs Fixed or Switch")
         field.state = state
+        db.commit()
+        return
+
+    if field.field_type == "data":
+        field = db.query(Field).filter(Field.id == field.id).with_for_update().one()
+        state = dict(field.state or {})
+        ctx = with_current_field(nd, state)
+        raw = resolve_value_from_event(str(config["value_key"]), ctx) if config.get("value_key") else nd
+        new_value = coerce_data_value(raw)
+        if new_value == state:
+            logger.debug(
+                "field_push data skip unchanged field=%s event_id=%s",
+                field.name, event.id,
+            )
+            db.commit()  # release FOR UPDATE
+            return
+        field.state = new_value
         db.commit()
         return
 

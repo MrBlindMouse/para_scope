@@ -7,13 +7,16 @@
       action="/config/source/{{ source.id }}/edit"
       class="stack dialog__form"
       hx-post="/config/source/{{ source.id }}/edit"
-      hx-target="#source-chain-{{ source.id }}"
-      hx-swap="outerHTML">
+      hx-target="#pipeline-dialog"
+      hx-swap="innerHTML">
   {% include 'components/csrf.html' %}
   <header class="dialog__header flex items-center gap">
     <h2 class="dialog__title">Edit Source</h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
+  {% if error %}
+    <p class="alert alert--danger" role="alert">{{ error }}</p>
+  {% endif %}
   <label class="stack">
     Name *
     <input name="name" type="text" class="input" value="{{ source.name }}" required autofocus>
@@ -34,7 +37,9 @@
       <option value="poll" {% if st == 'poll' %}selected{% endif %}>Poll</option>
     </select>
   </label>
-  <p class="text-muted">Webhook path: <code>/webhook/{{ source.slug }}</code></p>
+  {% if st == 'webhook' %}
+    <p class="text-muted">Webhook path: <code>/webhook/{{ source.slug }}</code></p>
+  {% endif %}
 
   {% set webhook_provider = (source.config or {}).get('webhook_provider') or 'generic_hmac' %}
   {% with webhook_provider=webhook_provider, webhook_secret=webhook_secret, source_config=source.config or {}, hide_webhook_fields=(st != 'webhook') %}

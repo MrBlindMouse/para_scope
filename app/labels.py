@@ -16,19 +16,20 @@ FIELD_TYPE_LABELS = {
     "value": "Value",
     "text": "Text",
     "toggle": "Toggle",
+    "data": "Data",
 }
 
 POLL_CATEGORY_LABELS = {
-    "url": "URL / HTTP",
-    "system": "System",
-    "connectivity": "Connectivity / Reachability",
-    "storage": "Storage / Filesystem",
-    "application": "Application / Domain",
-    "external": "External",
+    "url": "HTTP / APIs",
+    "system": "Host / OS",
+    "connectivity": "Network / DNS / TLS",
+    "storage": "Files / Backups",
+    "application": "Local Apps / Data",
+    "external": "External Services",
 }
 
 POLLER_LABELS = {
-    "http_get": "GET",
+    "http_get": "GET / HEAD",
     "http_post": "POST",
     "http_put": "PUT",
     "http_delete": "DELETE",
@@ -43,7 +44,6 @@ POLLER_LABELS = {
     "backup_age": "Backup age",
     "git_status": "Git status",
     "rss_atom_change": "RSS / Atom change",
-    "public_http_status": "Public endpoint status",
     "database_health": "Database health",
     "log_pattern_watch": "Log pattern watch",
     "home_assistant_snapshot": "Home Assistant snapshot",

@@ -55,7 +55,7 @@
             {% else %}<span class="text-muted">{{ s.status }}</span>{% endif %}
           {% else %}<span class="text-muted">disabled</span>{% endif %}
         </td>
-        <td>{{ s.last_seen }}</td>
+        <td>{{ s.last_seen|display_dt('%Y-%m-%d %H:%M', 'never') }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -84,8 +84,8 @@
       {% for s in schedules %}
       <tr>
         <td>{{ s.name }}</td>
-        <td>{{ s.last_run }}</td>
-        <td>{{ s.next_run }}</td>
+        <td>{{ s.last_run|display_dt('%Y-%m-%d %H:%M', 'never') }}</td>
+        <td>{{ s.next_run|display_dt('%Y-%m-%d %H:%M', '-') }}</td>
         <td>{{ s.success_count }} / {{ s.failure_count }}</td>
         <td>
           {% if not s.enabled %}

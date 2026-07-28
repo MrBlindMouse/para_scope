@@ -25,6 +25,10 @@
     align-self: start;
   }
 
+  .config-page .config-nav {
+    top: calc(var(--config-page-header-offset) + var(--block-space));
+  }
+
   .config-nav__link {
     display: flex;
     align-items: center;

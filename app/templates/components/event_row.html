@@ -1,6 +1,6 @@
 <tr>
   <td><a href="/event/{{ item.id }}">{{ item.id }}</a></td>
-  <td>{{ item.timestamp.strftime('%Y-%m-%d %H:%M') if item.timestamp else '' }}</td>
+  <td>{{ item.timestamp|display_dt('%Y-%m-%d %H:%M', '') }}</td>
   <td>{{ item.source.name if item.source else '-' }}</td>
   <td>{{ item.event_type.name if item.event_type else '-' }}</td>
   <td>

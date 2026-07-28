@@ -65,7 +65,16 @@
   function formatTs(ts) {
     try {
       var dt = new Date(ts);
-      return isNaN(dt.getTime()) ? ts : dt.toLocaleString();
+      if (isNaN(dt.getTime())) return ts;
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: document.documentElement.getAttribute("data-display-timezone") || "UTC",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(dt);
     } catch (e) {
       return ts;
     }

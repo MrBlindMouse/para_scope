@@ -1,8 +1,9 @@
-"""Global display appearance: theme, font, text size, and dashboard background."""
+"""Global display appearance: theme, font, text size, timezone, and background."""
 from __future__ import annotations
 
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
@@ -132,6 +133,7 @@ DASHBOARD_BG_TYPES = {
     "image/gif": ".gif",
 }
 DEFAULT_DASHBOARD_BG_OPACITY = 0.35
+DEFAULT_DISPLAY_TIMEZONE = "UTC"
 
 
 def uploads_dir() -> Path:
@@ -147,6 +149,7 @@ def get_app_settings(db: Session) -> AppSettings:
             theme="system",
             font="system",
             font_size="md",
+            display_timezone=DEFAULT_DISPLAY_TIMEZONE,
             dashboard_bg_opacity=DEFAULT_DASHBOARD_BG_OPACITY,
         )
         db.add(row)
@@ -168,6 +171,22 @@ def get_font(db: Session) -> str:
 def get_font_size(db: Session) -> str:
     size = getattr(get_app_settings(db), "font_size", None) or "md"
     return size if size in FONT_SIZES else "md"
+
+
+def normalize_display_timezone(value: str | None) -> str:
+    raw = (value or "").strip() or DEFAULT_DISPLAY_TIMEZONE
+    try:
+        return ZoneInfo(raw).key
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("Please enter a valid IANA timezone, like Africa/Johannesburg.") from exc
+
+
+def get_display_timezone(db: Session) -> str:
+    raw = getattr(get_app_settings(db), "display_timezone", None)
+    try:
+        return normalize_display_timezone(raw)
+    except ValueError:
+        return DEFAULT_DISPLAY_TIMEZONE
 
 
 def clamp_opacity(value) -> float:
@@ -210,6 +229,7 @@ def appearance_context(db: Session) -> dict:
         "theme": get_theme(db),
         "font": get_font(db),
         "font_size": get_font_size(db),
+        "display_timezone": get_display_timezone(db),
         "dashboard_bg": bool(bg),
         "dashboard_bg_opacity": get_dashboard_bg_opacity(db),
     }
@@ -268,6 +288,7 @@ def update_style(
     theme: str,
     font: str,
     font_size: str,
+    display_timezone: str,
     *,
     dashboard_bg_opacity: float | None = None,
     clear_dashboard_bg: bool = False,
@@ -281,11 +302,16 @@ def update_style(
         return None, "Please choose a valid font."
     if font_size not in FONT_SIZES:
         return None, "Please choose a valid text size."
+    try:
+        timezone_name = normalize_display_timezone(display_timezone)
+    except ValueError as exc:
+        return None, str(exc)
 
     settings = get_app_settings(db)
     settings.theme = theme
     settings.font = font
     settings.font_size = font_size
+    settings.display_timezone = timezone_name
 
     if dashboard_bg_opacity is not None:
         settings.dashboard_bg_opacity = clamp_opacity(dashboard_bg_opacity)
@@ -302,6 +328,7 @@ def update_style(
         "theme": theme,
         "font": font,
         "font_size": font_size,
+        "display_timezone": timezone_name,
         "dashboard_bg": bool(get_dashboard_bg_filename(db)),
         "dashboard_bg_opacity": get_dashboard_bg_opacity(db),
     }, None

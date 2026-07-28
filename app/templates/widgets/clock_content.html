@@ -1,0 +1,72 @@
+{% set disp = display or wdata.display or "digital" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "plain" %}
+{% set clock = (wdata.clock if wdata and wdata.clock is defined else {}) or {} %}
+{% set show_timezone = wdata.show_timezone if wdata and wdata.show_timezone is defined else true %}
+{% if wdata and wdata.error %}
+<p class="text-muted">{{ wdata.error }}</p>
+{% elif disp == "world_clock" %}
+  {% set rows = wdata.world_clocks if wdata and wdata.world_clocks is defined else [] %}
+  {% if rows %}
+  <div class="widget-clock widget-clock--world_clock widget-clock--{{ style }}"
+       data-clock-widget
+       data-clock-display="world_clock"
+       data-hour-format="{{ wdata.hour_format or '24' }}"
+       data-show-seconds="{{ '1' if wdata.show_seconds else '0' }}"
+       data-show-date="{{ '1' if wdata.show_date else '0' }}"
+       data-show-timezone="{{ '1' if show_timezone else '0' }}">
+    <div class="stack stack--tight">
+      {% for item in rows %}
+      <div class="widget-clock__row" data-clock-row data-timezone="{{ item.timezone }}">
+        <div class="widget-clock__row-head">
+          <strong class="widget-clock__row-label">{{ item.label }}</strong>
+          {% if show_timezone %}
+          <span class="text-muted text-xs" data-clock-offset>{{ item.offset_text }}</span>
+          {% endif %}
+        </div>
+        <div class="widget-clock__row-main">
+          <span class="widget-clock__row-time" data-clock-time>{{ item.time_text }}</span>
+          {% if wdata.show_date %}
+          <span class="widget-clock__row-date text-muted" data-clock-date>{{ item.date_text }}</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <p class="text-muted">Add at least one timezone.</p>
+  {% endif %}
+{% else %}
+  <div class="widget-clock widget-clock--{{ disp }} widget-clock--{{ style }}"
+       data-clock-widget
+       data-clock-display="{{ disp }}"
+       data-timezone-mode="{{ wdata.timezone_mode or 'app' }}"
+       data-timezone="{{ wdata.timezone or 'UTC' }}"
+       data-server-timezone="{{ wdata.server_timezone or 'UTC' }}"
+       data-hour-format="{{ wdata.hour_format or '24' }}"
+       data-show-seconds="{{ '1' if wdata.show_seconds else '0' }}"
+       data-show-date="{{ '1' if wdata.show_date else '0' }}"
+       data-show-timezone="{{ '1' if show_timezone else '0' }}">
+    {% if show_timezone %}
+    <div class="widget-clock__label" data-clock-label>{{ clock.label }}</div>
+    {% endif %}
+    {% if disp == "analog" %}
+    <div class="widget-clock__face">
+      <span class="widget-clock__hand widget-clock__hand--hour" data-clock-hour style="transform: rotate({{ clock.hour_angle or 0 }}deg)"></span>
+      <span class="widget-clock__hand widget-clock__hand--minute" data-clock-minute style="transform: rotate({{ clock.minute_angle or 0 }}deg)"></span>
+      {% if wdata.show_seconds %}
+      <span class="widget-clock__hand widget-clock__hand--second" data-clock-second style="transform: rotate({{ clock.second_angle or 0 }}deg)"></span>
+      {% endif %}
+      <span class="widget-clock__hub"></span>
+    </div>
+    {% else %}
+    <div class="widget-clock__time" data-clock-time>{{ clock.time_text }}</div>
+    {% endif %}
+    {% if wdata.show_date or show_timezone %}
+    <div class="widget-clock__meta">
+      {% if wdata.show_date %}<span data-clock-date>{{ clock.date_text }}</span>{% endif %}
+      {% if show_timezone %}<span data-clock-offset>{{ clock.offset_text }}</span>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+{% endif %}

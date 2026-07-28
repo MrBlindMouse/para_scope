@@ -7,7 +7,7 @@
     <p class="text-muted">
       #{{ event.id }}
       · {{ event.status or "pending" }}
-      · {{ event.timestamp }}
+      · {{ event.timestamp|display_dt('%Y-%m-%d %H:%M:%S', '') }}
     </p>
     <pre class="input" style="white-space: pre-wrap; overflow: auto; max-height: 24rem; margin: 0;">{{ event.normalized_data | tojson(indent=2) }}</pre>
   {% else %}

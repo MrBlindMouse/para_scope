@@ -186,16 +186,16 @@ class Event(Base):
 # ── Field (global storage sink for log / metric actions) ────────────────────
 
 class Field(Base):
-    """Named global storage target: logbook, value, text, or toggle."""
+    """Named global storage target: logbook, value, text, toggle, or data."""
     __tablename__ = "fields"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), unique=True, nullable=False)
     slug = Column(String(100), unique=True, nullable=False, index=True)
-    field_type = Column(String(30), nullable=False)  # logbook | value | text | toggle
+    field_type = Column(String(30), nullable=False)  # logbook | value | text | toggle | data
     # logbook: {max_entries}; others: {}
     config = Column(JSON, default=dict)
-    # value: {"value": float}; text: {"value": str}; toggle: {"value": bool}
+    # value: {"value": float}; text: {"value": str}; toggle: {"value": bool}; data: object
     state = Column(JSON, default=dict)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -272,6 +272,7 @@ class AppSettings(Base):
     theme = Column(String(50), nullable=False, default="system")
     font = Column(String(50), nullable=False, default="system")
     font_size = Column(String(20), nullable=False, default="md")
+    display_timezone = Column(String(100), nullable=False, default="UTC")
     dashboard_bg_filename = Column(String(100), nullable=True)
     dashboard_bg_opacity = Column(Float, nullable=False, default=0.35)
 

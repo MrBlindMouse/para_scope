@@ -190,9 +190,11 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
         widget_type, db, widget_config=config, display=display,
     ) or {}
     try:
+        from app.themes import appearance_context
         html = ctx.templates.env.get_template(f"widgets/{widget_type}_content.html").render(
             wdata=wdata, request=request, widget_id=canvas_id,
             widget_config=config, display=display or wdata.get("display"),
+            **appearance_context(db),
         )
     except Exception:
         return HTMLResponse('<p class="text-muted">Unknown widget</p>')
