@@ -12,7 +12,7 @@
        data-chart-display="{{ disp }}"
        data-chart-style="{{ style }}"
        data-labels='{{ wdata.labels | tojson }}'
-       data-values='{{ wdata.values | tojson }}'
+       data-values='{{ wdata["values"] | tojson }}'
        data-unit="{{ wdata.unit or '' }}"
        data-show-legend="{{ '0' if (widget_config or {}).get('show_legend') == false else '1' }}"
        {% if wdata.max is defined %}data-max="{{ wdata.max }}"{% endif %}

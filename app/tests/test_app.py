@@ -2681,6 +2681,41 @@ class TestWidgetTransforms:
         finally:
             db.close()
 
+    def test_chart_widget_dashboard_render_serializes_values(self, authenticated_client):
+        """Jinja wdata.values must use item access — dict.values is a method."""
+        from app.database import get_db
+        from app.models import DashboardLayout, Field
+        import json as _json
+
+        db = next(get_db())
+        try:
+            db.add(Field(
+                name="Hits", slug="hits-render", field_type="value",
+                config={}, state={"value": 42},
+            ))
+            widgets = [{
+                "id": "w_chart",
+                "type": "chart",
+                "display": "pie",
+                "title": "Pie",
+                "config": {
+                    "sources": [{"field_slug": "hits-render", "label": "Hits"}],
+                },
+            }]
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            if not layout:
+                layout = DashboardLayout(layout_config=_json.dumps({"widgets": widgets}))
+                db.add(layout)
+            else:
+                layout.layout_config = _json.dumps({"widgets": widgets})
+            db.commit()
+        finally:
+            db.close()
+
+        resp = authenticated_client.get("/")
+        assert resp.status_code == 200
+        assert 'data-values=\'[42.0]\'' in resp.text or 'data-values="[42.0]"' in resp.text
+
     def test_chart_max_literal_and_field(self, authenticated_client):
         from app.database import get_db
         from app.models import Field
