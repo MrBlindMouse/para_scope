@@ -42,12 +42,18 @@
   <div class="card__header"><h2>Source Health</h2></div>
   {% if source_health %}
   <table class="table">
-    <thead><tr><th>Name</th><th>Webhook path</th><th>Status</th><th>Last Seen</th></tr></thead>
+    <thead><tr><th>Name</th><th>Ingress</th><th>Status</th><th>Last Seen</th></tr></thead>
     <tbody>
     {% for s in source_health %}
       <tr>
         <td>{{ s.name }}</td>
-        <td><code>/webhook/{{ s.slug }}</code></td>
+        <td>
+          {% if s.source_type == 'poll' %}
+            Poll
+          {% else %}
+            <code>/webhook/{{ s.slug }}</code>
+          {% endif %}
+        </td>
         <td>
           {% if s.enabled %}
             {% if s.status == 'healthy' %}<span class="text-success">healthy</span>

@@ -1860,6 +1860,69 @@ class TestDashboardLayout:
         assert "data-clock-offset" not in resp.text
         assert "widget-clock__label" not in resp.text
 
+    def test_world_clock_row_layout_saved_and_rendered(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        widgets = [{
+            "type": "clock",
+            "display": "world_clock",
+            "title": "Row Markets",
+            "config": {
+                "style": "list",
+                "layout": "row",
+                "show_seconds": False,
+                "show_date": False,
+                "hour_format": "24",
+                "world_clocks": [
+                    {"label": "UTC", "timezone": "UTC"},
+                    {"label": "London", "timezone": "Europe/London"},
+                ],
+            },
+        }]
+        save = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert save.status_code == 303
+
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            saved = json.loads(layout.layout_config)["widgets"][0]
+            wid = saved["id"]
+            assert saved["config"]["layout"] == "row"
+        finally:
+            db.close()
+
+        resp = authenticated_client.get(f"/widgets/clock?id={wid}")
+        assert resp.status_code == 200
+        assert "widget-clock--layout-row" in resp.text
+        assert 'data-clock-layout="row"' in resp.text
+
+    def test_invalid_clock_layout_rejected(self, authenticated_client):
+        widgets = [{
+            "type": "clock",
+            "display": "world_clock",
+            "title": "Bad Layout",
+            "config": {
+                "style": "list",
+                "layout": "diagonal",
+                "world_clocks": [
+                    {"label": "UTC", "timezone": "UTC"},
+                ],
+            },
+        }]
+        resp = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        follow = authenticated_client.get(resp.headers["location"])
+        assert b"layout" in follow.content
+
 
 class TestStyleConfig:
     def test_get_style(self, authenticated_client):
@@ -2343,6 +2406,90 @@ class TestWidgetTransforms:
             )
             assert table["rows"][0]["field_type"] == "data"
             assert table["rows"][0]["value"] == {"payload": {"id": 7}, "status": "ok"}
+        finally:
+            db.close()
+
+    def test_chart_and_series_from_data_field(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data, validate_widget_bindings
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="Sensor Pack", slug="sensor_pack", field_type="data",
+                config={},
+                state={
+                    "rate": 12.5,
+                    "temps": [1.0, 2.0, 3.0, 4.0],
+                    "samples": [
+                        {"ms": 100, "ts": "2026-01-01T00:00:00+00:00"},
+                        {"ms": 200, "ts": "2026-01-01T00:01:00+00:00"},
+                        {"ms": 300, "ts": "2026-01-01T00:02:00+00:00"},
+                    ],
+                },
+            )
+            db.add(field)
+            db.commit()
+
+            chart = fetch_widget_data("chart", db, display="pie", widget_config={
+                "sources": [{
+                    "field_slug": "sensor_pack.rate",
+                    "label": "Rate",
+                    "transform": [{"op": "mul", "by": 2}],
+                }],
+            })
+            assert chart["labels"] == ["Rate"]
+            assert chart["values"] == [25.0]
+
+            series_nums = fetch_widget_data("series", db, display="line", widget_config={
+                "sources": [{"field_slug": "sensor_pack.temps"}],
+                "range_mode": "entries",
+                "range_entries": 3,
+            })
+            assert not series_nums.get("error"), series_nums
+            pts = series_nums["series"][0]["points"]
+            assert [p["v"] for p in pts] == [2.0, 3.0, 4.0]
+
+            series_map = fetch_widget_data("series", db, display="line", widget_config={
+                "sources": [{"field_slug": "sensor_pack.samples.*.ms"}],
+                "range_mode": "entries",
+                "range_entries": 10,
+            })
+            assert not series_map.get("error"), series_map
+            mapped = series_map["series"][0]["points"]
+            assert [p["v"] for p in mapped] == [100.0, 200.0, 300.0]
+            assert mapped[0]["ts"].startswith("2026-01-01")
+
+            ok = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "pie",
+                "config": {
+                    "style": "pie",
+                    "sources": [{"field_slug": "sensor_pack.rate", "label": "Rate"}],
+                },
+            }])
+            assert ok is None
+
+            ok_series = validate_widget_bindings(db, [{
+                "type": "series",
+                "display": "line",
+                "config": {
+                    "style": "basic",
+                    "sources": [{"field_slug": "sensor_pack.temps"}],
+                },
+            }])
+            assert ok_series is None
+
+            bare = validate_widget_bindings(db, [{
+                "type": "chart",
+                "display": "pie",
+                "config": {
+                    "style": "pie",
+                    "sources": [{"field_slug": "sensor_pack", "label": "Pack"}],
+                },
+            }])
+            assert bare and "path" in bare.lower()
         finally:
             db.close()
 
@@ -3160,6 +3307,23 @@ class TestSystemPage:
         idx = resp.text.index("Webhooks received")
         snippet = resp.text[idx:idx + 280]
         assert 'stat__value">1</div>' in snippet
+
+    def test_system_source_health_ingress_by_type(self, authenticated_client):
+        _, hook_slug = _create_source(
+            authenticated_client, name="Sys Hook", source_type="webhook"
+        )
+        _, poll_slug = _create_source(
+            authenticated_client, name="Sys Poll", source_type="poll"
+        )
+        resp = authenticated_client.get("/system")
+        assert resp.status_code == 200
+        assert "Ingress" in resp.text
+        assert f"/webhook/{hook_slug}" in resp.text
+        assert f"/webhook/{poll_slug}" not in resp.text
+        health_idx = resp.text.index("Source Health")
+        health = resp.text[health_idx:health_idx + 1200]
+        assert "Sys Poll" in health
+        assert "Poll" in health
 
     def test_system_pending_notice(self, authenticated_client):
         from app.database import get_db
@@ -6042,6 +6206,7 @@ class TestFields:
         page = authenticated_client.get("/config/pipeline")
         assert f"/config/pipeline/field/{fid}/partials/recent-entries" in page.text
         assert f"/config/pipeline/field/{fid}/clear" in page.text
+        assert "7/50" in page.text
 
         resp = authenticated_client.get(
             f"/config/pipeline/field/{fid}/partials/recent-entries?limit=5"

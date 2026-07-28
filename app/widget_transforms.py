@@ -5,7 +5,7 @@ import ast
 import json
 import operator
 import re
-from datetime import timezone
+from datetime import datetime, timezone, timedelta
 
 from app.fields import get_by_path
 
@@ -156,6 +156,114 @@ def series_from_points(points, *, value_path: str | None = None, transform: list
         iso = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
         series.append({"ts": iso, "v": v})
     return series
+
+
+def _ts_from_array_item(item, index: int):
+    """Prefer item.ts / item.timestamp; else synthetic UTC from index."""
+    if isinstance(item, dict):
+        for key in ("ts", "timestamp", "t"):
+            raw = item.get(key)
+            if raw is None:
+                continue
+            if hasattr(raw, "isoformat"):
+                return raw
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                # seconds vs ms heuristic
+                sec = float(raw)
+                if sec > 1e12:
+                    sec = sec / 1000.0
+                return datetime.fromtimestamp(sec, tz=timezone.utc)
+            if isinstance(raw, str) and raw.strip():
+                try:
+                    return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                except ValueError:
+                    pass
+    return datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=index)
+
+
+def series_from_json_array(
+    state,
+    value_path: str,
+    *,
+    transform: list | None = None,
+    range_mode: str = "entries",
+    range_entries: int = 50,
+    cutoff=None,
+):
+    """Expand a Data-field JSON array path into [{ts, v}] points.
+
+    - ``samples.*.ms`` maps over ``samples`` extracting ``ms``
+    - ``temps`` (array of numbers) uses each element as the value
+    - ``samples`` (array of objects) extracts ``value`` / ``v`` when present
+    """
+    path = (value_path or "").strip()
+    if not path:
+        return [], "Append a path"
+
+    parts = path.split(".")
+    item_path = None
+    arr = None
+    if "*" in parts:
+        i = parts.index("*")
+        list_path = ".".join(parts[:i])
+        item_path = ".".join(parts[i + 1:]) or None
+        arr = get_by_path(state, list_path) if list_path else state
+    else:
+        resolved = get_by_path(state, path)
+        if isinstance(resolved, list):
+            arr = resolved
+        else:
+            v = extract_number(state, path, transform)
+            if v is None:
+                return [], "No numeric data"
+            now = datetime.now(timezone.utc)
+            return [{"ts": now.isoformat(), "v": v}], None
+
+    if not isinstance(arr, list):
+        return [], "Path must point to an array"
+
+    pairs = []
+    for idx, item in enumerate(arr):
+        ts = _ts_from_array_item(item, idx)
+        if item_path:
+            pairs.append((ts, item))
+        elif isinstance(item, dict):
+            pairs.append((ts, item))
+        else:
+            pairs.append((ts, {"value": item}))
+
+    extract_path = item_path
+    if extract_path is None:
+        # Prefer explicit value/v keys on objects; bare numbers wrapped as value
+        extract_path = "value"
+        if pairs and isinstance(pairs[0][1], dict):
+            sample = pairs[0][1]
+            if "value" not in sample and "v" in sample:
+                extract_path = "v"
+
+    series = series_from_points(pairs, value_path=extract_path, transform=transform)
+
+    if range_mode == "entries":
+        if range_entries > 0 and len(series) > range_entries:
+            series = series[-range_entries:]
+        return series, None
+
+    if cutoff is not None:
+        filtered = []
+        for pt in series:
+            try:
+                ts = datetime.fromisoformat(pt["ts"].replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            # Keep points with real timestamps inside the window; drop pure synthetic epoch-index
+            # points that fall before cutoff (index-based 1970… usually filtered out).
+            if ts >= cutoff:
+                filtered.append(pt)
+        return filtered, None
+
+    return series, None
 
 
 def _eval_ast(node, data: dict):

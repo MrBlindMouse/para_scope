@@ -12,6 +12,7 @@ from app.widget_transforms import (
     extract_number,
     render_data_template,
     resolve_tone_rules,
+    series_from_json_array,
     series_from_points,
 )
 
@@ -178,13 +179,13 @@ def style_extra_keys(display: str, style: str) -> tuple:
 # Field binding rules: kind-level, with optional per-display overrides
 _BINDING_SERIES = {
     "cardinality": "multi",
-    "field_types": ("logbook",),
+    "field_types": ("logbook", "data"),
     "config_key": "sources",
     "required": True,
 }
 _BINDING_CHART = {
     "cardinality": "multi",
-    "field_types": ("value", "text", "logbook"),
+    "field_types": ("value", "text", "logbook", "data"),
     "config_key": "sources",
     "required": True,
 }
@@ -322,6 +323,7 @@ BOARD_CELL_FIELD_TYPES = {
 
 CLOCK_TIMEZONE_MODES = ("app", "browser", "utc", "custom")
 CLOCK_HOUR_FORMATS = ("12", "24")
+CLOCK_LAYOUTS = ("column", "row")
 CLOCK_WORLD_CLOCK_LIMIT = 8
 
 
@@ -503,9 +505,8 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
                     return f"{label}: that field wasn’t found"
                 if allowed is not None and field.field_type not in allowed:
                     return f"{label}: “{field.name}” isn’t the right field type"
-                if kind == "series":
-                    if not path:
-                        return f"{label}: append a path (e.g. {slug}.response_time_ms)"
+                if field.field_type in ("logbook", "data") and not path:
+                    return f"{label}: append a path (e.g. {slug}.response_time_ms)"
             continue
 
         if key == "cells":
@@ -813,6 +814,11 @@ def _clock_hour_format(config: dict | None) -> str:
     return raw if raw in CLOCK_HOUR_FORMATS else "24"
 
 
+def _clock_layout(config: dict | None) -> str:
+    raw = (config.get("layout") or "").strip().lower() if isinstance(config, dict) else ""
+    return raw if raw in CLOCK_LAYOUTS else "column"
+
+
 def _clock_world_clocks(config: dict | None) -> list[dict]:
     rows = config.get("world_clocks") if isinstance(config, dict) else None
     if not isinstance(rows, list):
@@ -910,6 +916,11 @@ def _validate_clock_widget(label: str, display: str, config: dict | None) -> str
         raw = cfg.get(key)
         if raw is not None and not isinstance(raw, (bool, int, str)):
             return f"{key.replace('_', ' ')} must be on or off"
+    raw_layout = (cfg.get("layout") or "").strip().lower()
+    if raw_layout and raw_layout not in CLOCK_LAYOUTS:
+        return "that layout isn’t available"
+    if raw_layout and display != "world_clock":
+        return "row/column layout only applies to world clocks"
     world_clocks = _clock_world_clocks(cfg)
     if display == "world_clock":
         if not world_clocks:
@@ -980,7 +991,21 @@ def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries
         series = series_from_points(pairs, value_path=value_path, transform=transform)
         return name, series, None
 
-    return name, [], "series requires a logbook Field"
+    if field.field_type == "data":
+        if not value_path:
+            return name, [], "Append a path (e.g. field.samples.*.ms)"
+        state = field.state if isinstance(field.state, dict) else {}
+        series, err = series_from_json_array(
+            state,
+            value_path,
+            transform=transform,
+            range_mode=range_mode,
+            range_entries=range_entries,
+            cutoff=cutoff,
+        )
+        return name, series, err
+
+    return name, [], "series requires a logbook or Data Field"
 
 
 def _series_data(db, config, display="line", source_id=None, fields_snap=None):
@@ -1043,6 +1068,8 @@ def _latest_logbook_entry_value(db, field, source_id=None):
 def _latest_chart_source_payload(db, field, *, source_id=None):
     if field.field_type == "logbook":
         return _latest_logbook_entry_value(db, field, source_id=source_id)
+    if field.field_type == "data":
+        return field.state if isinstance(field.state, dict) else {}
     state = field.state or {}
     return state.get("value", 0 if field.field_type == "value" else "")
 
@@ -1055,7 +1082,7 @@ def _chart_source_value(db, src, source_id=None):
         return None
     if not label:
         label = field.name
-    if field.field_type not in ("value", "text", "logbook"):
+    if field.field_type not in ("value", "text", "logbook", "data"):
         return None
     transform = src.get("transform") if isinstance(src.get("transform"), list) else []
     _, value_path = split_slug_path(_config_field_slug(src))
@@ -1151,6 +1178,7 @@ def _clock_data(db, config, display="digital", source_id=None, fields_snap=None)
     show_date = _bool_config(cfg, "show_date", default=display in ("compact", "world_clock"))
     show_timezone = _bool_config(cfg, "show_timezone", default=True)
     hour_format = _clock_hour_format(cfg)
+    layout = _clock_layout(cfg) if display == "world_clock" else "column"
     primary_timezone = resolved_timezone or "UTC"
     primary_label = "Browser time" if mode == "browser" else _clock_label("", primary_timezone, "UTC")
     primary = _clock_face_payload(
@@ -1185,6 +1213,7 @@ def _clock_data(db, config, display="digital", source_id=None, fields_snap=None)
         "show_date": show_date,
         "show_timezone": show_timezone,
         "hour_format": hour_format,
+        "layout": layout,
         "clock": primary,
         "world_clocks": world_rows,
     }

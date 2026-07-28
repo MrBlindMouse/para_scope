@@ -21,15 +21,13 @@
         <span class="text-muted">
           · {{ f.field_type | field_type_label }}
           {% if f.field_type == 'logbook' %}
-            · max {{ (f.config or {}).get('max_entries', 100) }}
+            · {{ logbook_counts.get(f.id, 0) }}/{{ (f.config or {}).get('max_entries', 100) }}
           {% elif f.field_type == 'value' %}
             · {{ (f.state or {}).get('value', 0) }}
           {% elif f.field_type == 'text' %}
             · {{ (f.state or {}).get('value', '') | truncate(40) }}
           {% elif f.field_type == 'toggle' %}
             · {{ 'on' if (f.state or {}).get('value') else 'off' }}
-          {% elif f.field_type == 'data' %}
-            · {{ (f.state or {}) | tojson }}
           {% endif %}
         </span>
       </div>

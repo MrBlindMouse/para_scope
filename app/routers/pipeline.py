@@ -438,7 +438,8 @@ def _delete_schedule_secrets(db: Session, schedule_id: int) -> None:
 async def config_pipeline(request: Request, db: Session = Depends(get_db)):
     success, error = ctx.get_message_params(request)
     sources = db.query(Source).order_by(Source.created_at, Source.id).all()
-    fields = db.query(Field).order_by(Field.created_at, Field.id).all()
+    field_ctx = ctx._fields_list_context(db)
+    fields = field_ctx["fields"]
     fields_by_id = {f.id: f for f in fields}
     chains = []
     for source in sources:
@@ -477,6 +478,7 @@ async def config_pipeline(request: Request, db: Session = Depends(get_db)):
             "active": "pipeline",
             "chains": chains,
             "fields": fields,
+            "logbook_counts": field_ctx["logbook_counts"],
             "success": success,
             "error": error,
         }

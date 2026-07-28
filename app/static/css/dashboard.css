@@ -38,6 +38,11 @@
     margin: 0;
   }
 
+  .dashboard-grid .card__header {
+    justify-content: center;
+    text-align: center;
+  }
+
   .dashboard-grid .card__body {
     flex: 1;
     min-block-size: 0;
@@ -128,9 +133,11 @@
   .widget-clock {
     display: flex;
     flex-direction: column;
+    align-items: center;
     justify-content: center;
     gap: 0.45rem;
     min-block-size: 100%;
+    text-align: center;
   }
 
   .widget-clock__label {
@@ -150,6 +157,7 @@
   .widget-clock__meta {
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     gap: 0.35rem 0.75rem;
     color: var(--color-ink-muted);
     font-size: 0.85rem;
@@ -249,6 +257,15 @@
     font-size: clamp(1.25rem, 3vw, 1.8rem);
   }
 
+  .widget-clock__list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    inline-size: 100%;
+    margin: 0;
+    padding: 0;
+  }
+
   .widget-clock__row {
     display: flex;
     align-items: baseline;
@@ -278,6 +295,34 @@
     font-size: 1.2rem;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+  }
+
+  .widget-clock--layout-row .widget-clock__list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem 1.25rem;
+  }
+
+  .widget-clock--layout-row .widget-clock__row {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    inline-size: auto;
+    min-inline-size: 6.5rem;
+    padding: 0.35rem 0.5rem;
+    border-block-end: 0;
+  }
+
+  .widget-clock--layout-row .widget-clock__row-head,
+  .widget-clock--layout-row .widget-clock__row-main {
+    align-items: center;
+    text-align: center;
+  }
+
+  .widget-clock--layout-row .widget-clock__row-main {
+    text-align: center;
   }
 
   .widget-entry-card {

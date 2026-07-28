@@ -2,19 +2,21 @@
 {% set style = (widget_config.style if widget_config else None) or wdata.style or "plain" %}
 {% set clock = (wdata.clock if wdata and wdata.clock is defined else {}) or {} %}
 {% set show_timezone = wdata.show_timezone if wdata and wdata.show_timezone is defined else true %}
+{% set layout = wdata.layout if wdata and wdata.layout is defined else "column" %}
 {% if wdata and wdata.error %}
 <p class="text-muted">{{ wdata.error }}</p>
 {% elif disp == "world_clock" %}
   {% set rows = wdata.world_clocks if wdata and wdata.world_clocks is defined else [] %}
   {% if rows %}
-  <div class="widget-clock widget-clock--world_clock widget-clock--{{ style }}"
+  <div class="widget-clock widget-clock--world_clock widget-clock--{{ style }}{% if layout == 'row' %} widget-clock--layout-row{% endif %}"
        data-clock-widget
        data-clock-display="world_clock"
+       data-clock-layout="{{ layout }}"
        data-hour-format="{{ wdata.hour_format or '24' }}"
        data-show-seconds="{{ '1' if wdata.show_seconds else '0' }}"
        data-show-date="{{ '1' if wdata.show_date else '0' }}"
        data-show-timezone="{{ '1' if show_timezone else '0' }}">
-    <div class="stack stack--tight">
+    <div class="widget-clock__list">
       {% for item in rows %}
       <div class="widget-clock__row" data-clock-row data-timezone="{{ item.timezone }}">
         <div class="widget-clock__row-head">

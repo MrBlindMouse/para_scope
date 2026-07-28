@@ -484,6 +484,7 @@ async def system_page(request: Request, db: Session = Depends(get_db)):
         last_seen = src.last_seen_at
         source_health.append({
             "id": src.id, "name": src.name, "slug": src.slug,
+            "source_type": src.source_type or "webhook",
             "enabled": src.enabled, "last_seen": last_seen,
             "status": source_age_status(last_seen, now=now),
         })

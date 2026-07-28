@@ -210,10 +210,25 @@ def _unique_field_slug(db: Session, name: str, exclude_id: int | None = None) ->
         n += 1
 
 
-def _fields_section_template(request: Request, db: Session):
+def _fields_list_context(db: Session) -> dict:
+    """Fields for the pipeline Fields section, plus logbook entry counts."""
     fields = db.query(Field).order_by(Field.created_at, Field.id).all()
+    logbook_ids = [f.id for f in fields if f.field_type == "logbook"]
+    logbook_counts: dict[int, int] = {}
+    if logbook_ids:
+        rows = (
+            db.query(FieldLogEntry.field_id, func.count(FieldLogEntry.id))
+            .filter(FieldLogEntry.field_id.in_(logbook_ids))
+            .group_by(FieldLogEntry.field_id)
+            .all()
+        )
+        logbook_counts = {fid: n for fid, n in rows}
+    return {"fields": fields, "logbook_counts": logbook_counts}
+
+
+def _fields_section_template(request: Request, db: Session):
     return templates.TemplateResponse(
-        request, "config/pipeline/_fields_section.html", {"fields": fields}
+        request, "config/pipeline/_fields_section.html", _fields_list_context(db)
     )
 
 

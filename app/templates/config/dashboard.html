@@ -110,6 +110,7 @@
       show_seconds: disp !== "compact",
       show_date: disp === "compact" || disp === "world_clock",
       show_timezone: true,
+      layout: "column",
       world_clocks: [
         {label: "UTC", timezone: "UTC"},
         {label: "Johannesburg", timezone: "Africa/Johannesburg"}
@@ -128,6 +129,7 @@
     if (out.timezone_mode === "custom") out.timezone = (out.timezone || "").trim();
     else delete out.timezone;
     if (disp === "world_clock") {
+      out.layout = out.layout === "row" ? "row" : "column";
       var clocks = Array.isArray(out.world_clocks) ? out.world_clocks.map(function (row) {
         return {
           label: ((row && row.label) || "").trim(),
@@ -139,6 +141,7 @@
       out.world_clocks = clocks.length ? clocks : defs.world_clocks.slice();
     } else {
       delete out.world_clocks;
+      delete out.layout;
     }
     if (!out.style) out.style = defaultStyle("clock", disp);
     return out;
@@ -453,8 +456,12 @@
       inner = '<div class="widget-clock widget-clock--compact widget-clock--' + style + '">' +
         '<div class="widget-clock__time">14:37</div><div class="widget-clock__meta">UTC · Tue 28 Jul</div></div>';
     } else if (disp === "world_clock") {
-      inner = '<div class="widget-clock widget-clock--world_clock widget-clock--' + style + ' stack stack--tight widget-preview__mini">' +
-        '<div class="widget-clock__row"><strong>UTC</strong><span>14:37</span></div><div class="widget-clock__row"><strong>Tokyo</strong><span>23:37</span></div></div>';
+      inner = '<div class="widget-clock widget-clock--world_clock widget-clock--' + style +
+        (extra.layout === "row" ? " widget-clock--layout-row" : "") +
+        ' widget-preview__mini"><div class="widget-clock__list">' +
+        '<div class="widget-clock__row"><div class="widget-clock__row-head"><strong>UTC</strong></div><div class="widget-clock__row-main"><span class="widget-clock__row-time">14:37</span></div></div>' +
+        '<div class="widget-clock__row"><div class="widget-clock__row-head"><strong>Tokyo</strong></div><div class="widget-clock__row-main"><span class="widget-clock__row-time">23:37</span></div></div>' +
+        "</div></div>";
     } else if (disp === "logbook_list") {
       if (style === "timeline") {
         inner = '<ul class="widget-timeline widget-preview__mini">' +
@@ -662,6 +669,8 @@
           escapeAttr(cfg.timezone || "") + '" spellcheck="false"></label>';
       }
     } else {
+      html += '<label class="flex items-center gap"><input type="checkbox" data-cfg="layout" value="row"' +
+        (cfg.layout === "row" ? " checked" : "") + '> Arrange in a row</label>';
       html += worldClockRowsHtml(cfg.world_clocks);
     }
     return html;
@@ -740,7 +749,7 @@
       html += boardConfigHtml(cfg, tone);
       html += previewHtml(w.type, "board", cfg.style || "led", tone);
     } else {
-      html += previewHtml(w.type, disp, style, tone, { horizontal: !!cfg.horizontal });
+      html += previewHtml(w.type, disp, style, tone, { horizontal: !!cfg.horizontal, layout: cfg.layout });
     }
 
     if (w.type === "series") {
@@ -1185,6 +1194,8 @@
         config.show_timezone = tzDetailEl ? !!tzDetailEl.checked : true;
         config.hour_format = config.hour_format === "12" ? "12" : "24";
         if (entry.display === "world_clock") {
+          var layoutEl = card.querySelector('[data-cfg="layout"]');
+          config.layout = layoutEl && layoutEl.checked ? "row" : "column";
           config.world_clocks = readWorldClocks(card);
           delete config.timezone_mode;
           delete config.timezone;
@@ -1196,6 +1207,7 @@
             delete config.timezone;
           }
           delete config.world_clocks;
+          delete config.layout;
         }
         delete config.tone;
         delete config.tone_rules;
@@ -1274,7 +1286,7 @@
   listEl.addEventListener("change", function (e) {
     var el = e.target;
     var cfgKey = el && el.getAttribute("data-cfg");
-    if (cfgKey === "display" || cfgKey === "range_mode" || cfgKey === "style" || cfgKey === "tone" || cfgKey === "cell_kind" || cfgKey === "horizontal" || cfgKey === "timezone_mode") {
+    if (cfgKey === "display" || cfgKey === "range_mode" || cfgKey === "style" || cfgKey === "tone" || cfgKey === "cell_kind" || cfgKey === "horizontal" || cfgKey === "timezone_mode" || cfgKey === "layout") {
       var card = el.closest(".card");
       if (!card) return;
       var widgets = readFromDom();
@@ -1326,6 +1338,10 @@
         if (cfgKey === "timezone_mode") {
           widgets[i].config = widgets[i].config || {};
           widgets[i].config.timezone_mode = el.value;
+        }
+        if (cfgKey === "layout") {
+          widgets[i].config = widgets[i].config || {};
+          widgets[i].config.layout = el.checked ? "row" : "column";
         }
         if (cfgKey === "range_mode") {
           widgets[i].config = widgets[i].config || {};
