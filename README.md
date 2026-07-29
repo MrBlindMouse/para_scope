@@ -14,6 +14,8 @@ In-app detail: **Help** at `/help` after login.
 
 [Landing Page](https://para-scope.bmd-studios.com)
 
+![Para-Scope live dashboard](docs/dashboard.png)
+
 ## Capabilities
 
 ### Dashboard widgets
