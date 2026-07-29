@@ -90,47 +90,8 @@ def _subst_path_tokens(text: str, data: dict) -> str | None:
     return out
 
 
-def apply_ops(value, ops: list | None):
-    """Apply ordered transform ops to a numeric value. Returns None on failure."""
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return None
-    for step in ops or []:
-        if not isinstance(step, dict):
-            continue
-        op = (step.get("op") or "").strip().lower()
-        if op == "abs":
-            v = abs(v)
-            continue
-        if op == "round":
-            try:
-                digits = int(step.get("digits", 0))
-            except (TypeError, ValueError):
-                digits = 0
-            v = round(v, digits)
-            continue
-        try:
-            by = float(step.get("by", 0))
-        except (TypeError, ValueError):
-            return None
-        if op == "mul":
-            v = v * by
-        elif op == "div":
-            if by == 0:
-                return None
-            v = v / by
-        elif op == "add":
-            v = v + by
-        elif op == "sub":
-            v = v - by
-        else:
-            continue
-    return v
-
-
-def extract_number(data, value_path: str | None, ops: list | None = None):
-    """Resolve a number from data (literal path or whole value) then apply ops.
+def extract_number(data, value_path: str | None):
+    """Resolve a number from data (literal path or whole value).
 
     Path ``value`` on a bare scalar (non-dict/list) uses the payload itself —
     same synthetic wrapper convention as Key/text logbook templates.
@@ -141,14 +102,17 @@ def extract_number(data, value_path: str | None, ops: list | None = None):
             raw = data
     else:
         raw = data
-    return apply_ops(raw, ops)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
-def series_from_points(points, *, value_path: str | None = None, transform: list | None = None):
+def series_from_points(points, *, value_path: str | None = None):
     """Build [{ts, v}] from iterable of (timestamp, value_payload) pairs."""
     series = []
     for ts, payload in points:
-        v = extract_number(payload, value_path, transform)
+        v = extract_number(payload, value_path)
         if v is None:
             continue
         if getattr(ts, "tzinfo", None) is None:
@@ -185,7 +149,6 @@ def series_from_json_array(
     state,
     value_path: str,
     *,
-    transform: list | None = None,
     range_mode: str = "entries",
     range_entries: int = 50,
     cutoff=None,
@@ -213,7 +176,7 @@ def series_from_json_array(
         if isinstance(resolved, list):
             arr = resolved
         else:
-            v = extract_number(state, path, transform)
+            v = extract_number(state, path)
             if v is None:
                 return [], "No numeric data"
             now = datetime.now(timezone.utc)
@@ -241,7 +204,7 @@ def series_from_json_array(
             if "value" not in sample and "v" in sample:
                 extract_path = "v"
 
-    series = series_from_points(pairs, value_path=extract_path, transform=transform)
+    series = series_from_points(pairs, value_path=extract_path)
 
     if range_mode == "entries":
         if range_entries > 0 and len(series) > range_entries:
@@ -273,9 +236,6 @@ def _eval_ast(node, data: dict):
         if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
             return float(node.value)
         raise ValueError("bad constant")
-    # Python 3.7 compat: Num (removed in 3.14 but fine on 3.11)
-    if isinstance(node, ast.Num):  # type: ignore[attr-defined]
-        return float(node.n)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARYOPS:
         return _UNARYOPS[type(node.op)](_eval_ast(node.operand, data))
     if isinstance(node, ast.BinOp) and type(node.op) in _BINOPS:

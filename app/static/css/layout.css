@@ -131,18 +131,6 @@
     font-size: 1.8em;
   }
 
-  .stat--xl .stat__value {
-    font-size: 2em;
-  }
-
-  .stat__value--positive { color: var(--color-positive); }
-  .stat__value--negative { color: var(--color-negative); }
-
-  .stat__unit {
-    font-size: 0.5em;
-    font-weight: 500;
-  }
-
   .stat__hint {
     font-size: 0.75em;
     margin-block-start: 0.25em;

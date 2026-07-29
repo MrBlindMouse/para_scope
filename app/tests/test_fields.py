@@ -89,19 +89,20 @@ def test_resolve_bool_fixed():
     assert resolve_bool({"value": "off"}) is False
 
 
-def test_render_template_uses_get_by_path():
-    from app.webpush_util import render_template
+def test_render_data_template():
+    from app.widget_transforms import render_data_template
 
-    assert render_template("t={{_poll.response_time_ms}}", {"_poll": {"response_time_ms": 12}}) == "t=12"
-    assert render_template("x={{missing.path}}", {"a": 1}) == "x="
-
-
-def test_render_template_star_path():
-    from app.webpush_util import render_template
+    nd = {"status": "ok", "rate": 20, "_poll": {"response_time_ms": 12}}
+    assert render_data_template("x={{ status }}", nd) == "x=ok"
+    assert render_data_template("{{ 1/rate }}", nd) == "0.05"
+    assert render_data_template("ok {{ status }} {{ rate * 2 }}", nd) == "ok ok 40"
+    assert render_data_template("{{ missing }}", nd) == ""
+    assert render_data_template("t={{_poll.response_time_ms}}", nd) == "t=12"
+    assert render_data_template("x={{missing.path}}", {"a": 1}) == "x="
 
     data = {"data": [{"price": 3}, {"price": 9}]}
-    assert render_template("p={{data.*.price}}", data) == "p=3"
-    assert render_template("p={{data.0.price}}", data) == "p=3"
+    assert render_data_template("p={{data.*.price}}", data) == "p=3"
+    assert render_data_template("p={{data.0.price}}", data) == "p=3"
 
 
 def test_resolve_path_or_expr():
@@ -114,16 +115,6 @@ def test_resolve_path_or_expr():
     assert resolve_path_or_expr("1/rate", nd) == 0.05
     assert resolve_path_or_expr("missing", nd) is None
     assert resolve_path_or_expr("1/0", nd) is None
-
-
-def test_render_data_template():
-    from app.widget_transforms import render_data_template
-
-    nd = {"status": "ok", "rate": 20}
-    assert render_data_template("x={{ status }}", nd) == "x=ok"
-    assert render_data_template("{{ 1/rate }}", nd) == "0.05"
-    assert render_data_template("ok {{ status }} {{ rate * 2 }}", nd) == "ok ok 40"
-    assert render_data_template("{{ missing }}", nd) == ""
 
 
 def test_eval_expr_richer_maths():

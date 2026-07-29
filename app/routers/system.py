@@ -1,32 +1,27 @@
 """Auto-split route module — handlers registered on shared app via include."""
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, status
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
-import json
-import hashlib
-import hmac as hmac_mod
-import time
-import uuid
-import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
-    ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
-    PushSubscription, Field, FieldLogEntry,
+    User,
+    Source,
+    EventTypeRecord,
+    PollingSchedule,
+    Secret,
+    Event,
+    AuditLog,
+    MetricPoint,
 )
 from app.security import (
-    verify_password, hash_password, encrypt_secret, decrypt_secret,
-    create_session_token, verify_session_token, generate_csrf_token,
-    SESSION_MAX_AGE_SECONDS,
+    hash_password,
+    encrypt_secret,
 )
-from app.pipeline import evaluate_and_dispatch
-from app.scheduler import add_or_update_job, remove_job, job_count
-from app.ingest import ingest_event
+from app.scheduler import job_count
 from app.themes import (
     THEME_OPTIONS, FONT_OPTIONS, FONT_SIZE_OPTIONS,
     get_theme, get_font, get_font_size, get_display_timezone, update_style,
@@ -151,7 +146,6 @@ async def config_users(request: Request, db: Session = Depends(get_db)):
     )
 
 
-
 # route: /config/users
 @router.post("/config/users")
 async def create_user(request: Request, db: Session = Depends(get_db)):
@@ -213,7 +207,6 @@ async def create_secret(request: Request, db: Session = Depends(get_db)):
     db.commit()
     ctx._audit_log(db, request, "secret.create", resource_type="secret", resource_id=secret.id)
     return ctx._pipeline_redirect(success="Secret created")
-
 
 
 # route: /config/secret/{secret_id}/delete
@@ -300,7 +293,6 @@ async def list_events(request: Request, db: Session = Depends(get_db)):
     )
 
 
-
 # route: /events/rows
 @router.get("/events/rows")
 async def events_live_rows(request: Request, db: Session = Depends(get_db)):
@@ -332,7 +324,6 @@ async def events_live_rows(request: Request, db: Session = Depends(get_db)):
             )
         )
     return HTMLResponse("".join(rows))
-
 
 
 # route: /event/{event_id}
@@ -395,7 +386,6 @@ async def metrics_page(request: Request, db: Session = Depends(get_db)):
             "metric_names": metric_names, "series_list": series_list,
         }
     )
-
 
 
 # route: /metrics/api

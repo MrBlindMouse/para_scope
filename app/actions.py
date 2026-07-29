@@ -84,20 +84,6 @@ def _require_field(db, field_id, expected_types: tuple[str, ...] | None = None) 
     return field
 
 
-def _values_equal(a, b) -> bool:
-    """Compare field values for skip-if-unchanged (JSON-stable for dict/list)."""
-    if a is b:
-        return True
-    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
-        return float(a) == float(b)
-    try:
-        return json.dumps(a, sort_keys=True, default=str) == json.dumps(
-            b, sort_keys=True, default=str
-        )
-    except (TypeError, ValueError):
-        return a == b
-
-
 def _action_field_push(db, event: Event, action: ActionInstance) -> None:
     config = action.config or {}
     field = _require_field(db, config.get("field_id"))

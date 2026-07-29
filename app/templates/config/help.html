@@ -19,6 +19,7 @@
         <li><a href="#actions">Actions</a></li>
         <li><a href="#webhooks">Webhooks</a></li>
         <li><a href="#polling">Polling</a></li>
+        <li><a href="#example-apis">Example public APIs</a></li>
         <li><a href="#web-push">Browser notifications</a></li>
         <li><a href="#secrets">Secrets</a></li>
       </ul>
@@ -39,6 +40,10 @@
       <p class="text-muted">
         Typical setup: add a source, define event types, create a rule for those types,
         then add actions on the rule. Confirm results on <a href="/events">Events</a>.
+      </p>
+      <p class="text-muted">
+        Source types today are webhook and poll.
+        <strong>Dashboard actions</strong> (authenticated dashboard controls that emit pipeline events) are planned — not available yet.
       </p>
     </div>
   </section>
@@ -227,6 +232,9 @@
           </tr>
         </tbody>
       </table>
+      <p class="text-muted">
+        Planned: <strong>Trigger poll</strong> — when a rule fires, run a chosen poll source once (same path as Run now). Not available yet.
+      </p>
 
       <h3 id="logbook-value-source">Logbook value source</h3>
       <p>
@@ -262,6 +270,7 @@
           Maths: <code>temp * 1.8 + 32</code> or <code>1 / value.*.rate</code> —
           ops <code>+ - * / %</code>, functions <code>abs</code>, <code>round</code>, <code>min</code>, <code>max</code>.
           In maths, <code>*</code> is the list row matched by the rule’s conditions (same as path-only).
+          Planned: more helpers such as <code>trunc</code> (not available yet).
         </li>
         <li>JSON shape (string leaves = path, maths, or literal text):</li>
       </ul>
@@ -430,6 +439,7 @@
       <p>
         <strong>Poll</strong> sources run one poll subtype on a schedule (interval or cron) and feed the same pipeline.
         Create or edit the source, choose a category, then choose the subtype and fill in its typed fields.
+        Planned: a <strong>never</strong> (trigger-only) schedule mode with no automatic tick — only Run now or a Trigger poll action. Not available yet.
       </p>
       <p class="text-muted">
         Think of the category as the target shape and the subtype as the exact implementation.
@@ -533,6 +543,60 @@
         Poll-specific secrets are stored encrypted.
         Some pollers also depend on host commands being present, and their failures will show up as poll errors.
       </p>
+
+      <h3 id="example-apis">Example public APIs</h3>
+      <p>
+        Handy no-key (or free-tier) HTTP GET targets for trying an <code>http_get</code> poll and optional JSON path.
+        Respect each provider’s terms and rate limits. Para-Scope is not affiliated with these services.
+      </p>
+      <table class="table">
+        <thead>
+          <tr><th>Source</th><th>Example URL</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="https://open-meteo.com/" rel="noopener noreferrer" target="_blank">Open-Meteo</a></td>
+            <td><code>https://api.open-meteo.com/v1/forecast?latitude=52.52&amp;longitude=13.41&amp;current=temperature_2m,wind_speed_10m</code></td>
+            <td>Weather forecast JSON; no key; CC BY 4.0. Path hint: <code>current.temperature_2m</code>.</td>
+          </tr>
+          <tr>
+            <td><a href="https://wttr.in/" rel="noopener noreferrer" target="_blank">wttr.in</a></td>
+            <td><code>https://wttr.in/London?format=j1</code></td>
+            <td>City weather as JSON (<code>format=j1</code>, not the ASCII page). Path hint: <code>current_condition.0.temp_C</code>.</td>
+          </tr>
+          <tr>
+            <td><a href="https://frankfurter.dev/" rel="noopener noreferrer" target="_blank">Frankfurter</a></td>
+            <td><code>https://api.frankfurter.dev/v2/rates?base=USD&amp;quotes=EUR,GBP</code></td>
+            <td>FX rates; no key. Narrow <code>quotes</code> to keep responses small.</td>
+          </tr>
+          <tr>
+            <td><a href="https://www.coingecko.com/en/api" rel="noopener noreferrer" target="_blank">CoinGecko</a></td>
+            <td><code>https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&amp;vs_currencies=usd</code></td>
+            <td>Crypto prices; keyless public API, IP rate-limited. Path hint: <code>bitcoin.usd</code>.</td>
+          </tr>
+          <tr>
+            <td><a href="http://ip-api.com" rel="noopener noreferrer" target="_blank">ip-api</a></td>
+            <td><code>http://ip-api.com/json/</code></td>
+            <td>IP geolocation. Free tier is HTTP-only, non-commercial, 45 req/min. Path hint: <code>city</code> / <code>country</code>.</td>
+          </tr>
+          <tr>
+            <td><a href="http://api.open-notify.org" rel="noopener noreferrer" target="_blank">Open Notify</a></td>
+            <td><code>http://api.open-notify.org/iss-now.json</code></td>
+            <td>ISS position (also <code>/astros.json</code> for people in space). Path hint: <code>iss_position.latitude</code>.</td>
+          </tr>
+          <tr>
+            <td><a href="https://api.adviceslip.com/" rel="noopener noreferrer" target="_blank">Advice Slip</a></td>
+            <td><code>https://api.adviceslip.com/advice</code></td>
+            <td>Random advice JSON; no key. Path hint: <code>slip.advice</code>.</td>
+          </tr>
+          <tr>
+            <td><a href="https://www.githubstatus.com/api/v2/" rel="noopener noreferrer" target="_blank">GitHub Status</a></td>
+            <td><code>https://www.githubstatus.com/api/v2/summary.json</code></td>
+            <td>Statuspage v2 summary. Path hint: <code>status.indicator</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+
       <p>
         Use <strong>Run now</strong> on a poll source to fire it immediately without waiting for the next interval or cron tick.
       </p>
@@ -542,6 +606,9 @@
       <details class="stack">
         <summary>Planned / future poll integrations</summary>
         <ul class="stack help__list">
+          <li>Never-run (trigger-only) schedule mode — no interval/cron; only Run now or Trigger poll</li>
+          <li>Trigger poll pipeline action — run a chosen poll source once when a rule fires</li>
+          <li>Dashboard actions source type — dashboard controls emit pipeline events</li>
           <li>Container / runtime checks such as Docker snapshots</li>
           <li>Fuller systemd snapshots beyond failed-unit summaries</li>
           <li>SMART, ZFS, and Btrfs health checks</li>

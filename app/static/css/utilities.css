@@ -3,7 +3,6 @@
 @layer utilities {
   .flex { display: flex; }
   .items-center { align-items: center; }
-  .items-start { align-items: flex-start; }
   .justify-between { justify-content: space-between; }
   .gap { gap: var(--inline-space, 1ch); }
   .flex-wrap { flex-wrap: wrap; }
@@ -11,24 +10,10 @@
   .self-start { align-self: start; }
   .justify-center { justify-content: center; }
   .pad { padding: var(--block-space) var(--inline-space); }
-  .pad-block { padding-block: var(--block-space); }
-  .pad-inline { padding-inline: var(--inline-space); }
   .mt { margin-block-start: var(--block-space); }
   .mb { margin-block-end: var(--block-space); }
-  .text-center { text-align: center; }
   .text-muted { color: var(--color-ink-muted); }
   .text-xs { font-size: 0.75em; }
   .text-success { color: var(--color-positive); }
   .text-danger { color: var(--color-negative); }
-  .visually-hidden {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border-width: 0;
-  }
 }

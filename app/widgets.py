@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import func as sql_func
 
 from app.widget_transforms import (
-    apply_ops,
     extract_number,
     render_data_template,
     resolve_tone_rules,
@@ -171,10 +170,6 @@ STYLE_CONFIG: dict[tuple[str, str], dict] = {
 def style_config_for(display: str, style: str) -> dict:
     """Return STYLE_CONFIG entry for display+style (empty dict if none)."""
     return dict(STYLE_CONFIG.get((display, style)) or {})
-
-
-def style_extra_keys(display: str, style: str) -> tuple:
-    return tuple(style_config_for(display, style).get("keys") or ())
 
 # Field binding rules: kind-level, with optional per-display overrides
 _BINDING_SERIES = {
@@ -712,11 +707,6 @@ def _config_field_slugs(config) -> list[str]:
     return []
 
 
-def _config_transform(config) -> list:
-    raw = config.get("transform")
-    return raw if isinstance(raw, list) else []
-
-
 def _board_cell_kind(config: dict) -> str:
     """Board cell type from config.cell_kind."""
     kind = (config.get("cell_kind") or "").strip()
@@ -742,11 +732,9 @@ def _board_cells(config: dict) -> list[dict]:
                 continue
         elif not slug:
             continue
-        t = c.get("transform")
         rules = c.get("tone_rules")
         out.append({
             "field_slug": slug,
-            "transform": t if isinstance(t, list) else [],
             "unit": (c.get("unit") or "").strip() if isinstance(c.get("unit"), str) else "",
             "template": template,
             "tone_rules": rules if isinstance(rules, list) else [],
@@ -958,7 +946,6 @@ def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries
     """Return (name, points[{ts,v}]) for one series source row."""
     from app.models import FieldLogEntry
 
-    transform = src.get("transform") if isinstance(src.get("transform"), list) else []
     label = (src.get("label") or "").strip()
 
     def _apply_range(query, ts_col, id_col):
@@ -988,7 +975,7 @@ def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries
             q = q.filter(FieldLogEntry.source_id == source_id)
         rows = _apply_range(q, FieldLogEntry.timestamp, FieldLogEntry.id)
         pairs = [(e.timestamp, e.value) for e in rows]
-        series = series_from_points(pairs, value_path=value_path, transform=transform)
+        series = series_from_points(pairs, value_path=value_path)
         return name, series, None
 
     if field.field_type == "data":
@@ -998,7 +985,6 @@ def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries
         series, err = series_from_json_array(
             state,
             value_path,
-            transform=transform,
             range_mode=range_mode,
             range_entries=range_entries,
             cutoff=cutoff,
@@ -1045,9 +1031,7 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
     if not series_out:
         return {**base, "error": errors[0] if errors else "No data yet"}
 
-    # Convenience: single-series name at top level (legacy tests / UI)
-    name = series_out[0]["name"] if len(series_out) == 1 else ""
-    out = {**base, "series": series_out, "name": name}
+    out = {**base, "series": series_out}
     if display == "column":
         out["horizontal"] = bool(config.get("horizontal"))
     return out
@@ -1084,21 +1068,21 @@ def _chart_source_value(db, src, source_id=None):
         label = field.name
     if field.field_type not in ("value", "text", "logbook", "data"):
         return None
-    transform = src.get("transform") if isinstance(src.get("transform"), list) else []
     _, value_path = split_slug_path(_config_field_slug(src))
     raw = _latest_chart_source_payload(db, field, source_id=source_id)
     if field.field_type == "value":
-        v = apply_ops(raw, transform) if transform else float(raw or 0)
-        return label, 0.0 if v is None else v
-    if field.field_type == "text":
-        v = apply_ops(raw, transform) if transform else None
-        if v is None:
-            try:
-                v = float(raw)
-            except (TypeError, ValueError):
-                v = 0.0
+        try:
+            v = float(raw or 0)
+        except (TypeError, ValueError):
+            v = 0.0
         return label, v
-    v = extract_number(raw, value_path, transform)
+    if field.field_type == "text":
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            v = 0.0
+        return label, v
+    v = extract_number(raw, value_path)
     return label, 0.0 if v is None else v
 
 
@@ -1224,19 +1208,14 @@ def _render_kv_template(template: str, data) -> str:
     return render_data_template(template, data if isinstance(data, dict) else {})
 
 
-def _kv_field_data(field, entry_value=None, transform=None) -> dict:
-    """Build template/tone data dict from a Field (+ optional legacy transform)."""
+def _kv_field_data(field, entry_value=None) -> dict:
+    """Build template/tone data dict from a Field."""
     if field.field_type == "logbook":
         data = entry_value if isinstance(entry_value, dict) else (
             {"value": entry_value} if entry_value is not None else {}
         )
     else:
         data = dict(field.state or {})
-    transform = transform if isinstance(transform, list) else []
-    if transform and "value" in data:
-        computed = apply_ops(data.get("value"), transform)
-        if computed is not None:
-            data = {**data, "value": computed}
     return data
 
 
@@ -1319,7 +1298,6 @@ def _display_board(db, config, fields_snap=None):
     items = []
 
     for cell in cells:
-        transform = cell.get("transform") or []
         unit = (cell.get("unit") or "").strip()
         template = (cell.get("template") or "").strip()
 
@@ -1349,7 +1327,7 @@ def _display_board(db, config, fields_snap=None):
                     .first()
                 )
                 entry_val = entry.value if entry else None
-            bound = _kv_field_data(field, entry_val, transform)
+            bound = _kv_field_data(field, entry_val)
         data = _merge_template_data(snap, bound)
         if not template:
             template = f"{{{{value}}}} {unit}".rstrip() if unit else "{{value}}"

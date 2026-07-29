@@ -16,7 +16,7 @@ os.environ["PARA_SCOPE_DATABASE_URL"] = f"sqlite:///{_tmp.name}"
 @pytest.fixture()
 def db():
     """Fresh in-memory-ish SQLite session with all tables."""
-    from app.database import Base, ensure_schema
+    from app.database import Base
     from app import models  # noqa: F401 — register models
 
     engine = create_engine(
@@ -25,7 +25,6 @@ def db():
     )
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    ensure_schema()
     Session = sessionmaker(bind=engine)
     session = Session()
     yield session

@@ -35,11 +35,6 @@
     }
   }
 
-  .btn--reversed {
-    --btn-background: var(--color-ink);
-    --btn-color: var(--color-canvas);
-  }
-
   .btn--negative {
     --btn-background: var(--color-negative);
     --btn-color: var(--color-canvas);

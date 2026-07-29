@@ -16,7 +16,6 @@ GRID_COLUMN_LIVE_MAX = 96
 # Layout mode threshold (viewport / window width px); at/below → full-width stacked list.
 GRID_STACK_BELOW = 768
 
-COL_FULL = GRID_COLUMNS
 DEFAULT_W = max(1, GRID_COLUMNS // 2)
 DEFAULT_H = 3
 TABLE_H = 4
@@ -85,7 +84,7 @@ def _clamp_geometry(item: dict) -> None:
     item["h"] = max(1, int(item["h"]))
 
 
-def migrate_widgets(widgets: list[dict]) -> tuple[list[dict], bool]:
+def normalize_widgets(widgets: list[dict]) -> tuple[list[dict], bool]:
     """Ensure each widget has id + x/y/w/h. Returns (widgets, changed)."""
     changed = False
     y = 0
@@ -174,7 +173,7 @@ def normalize_for_save(widgets: list[Any]) -> list[dict]:
             cfg = {k: v for k, v in cfg.items() if k not in ("tone", "tone_rules")}
         item = {
             "type": w["type"],
-            "title": w.get("title") or w.get("label") or w["type"],
+            "title": w.get("title") or w["type"],
             "show_title": bool(w["show_title"]) if "show_title" in w else True,
             "config": cfg,
         }
@@ -189,5 +188,5 @@ def normalize_for_save(widgets: list[Any]) -> list[dict]:
                 except (TypeError, ValueError):
                     pass
         cleaned.append(item)
-    migrated, _ = migrate_widgets(cleaned)
-    return migrated
+    normalized, _ = normalize_widgets(cleaned)
+    return normalized

@@ -14,13 +14,12 @@ _tmp.close()
 
 @pytest.fixture()
 def db():
-    from app.database import Base, ensure_schema
+    from app.database import Base
     from app import models  # noqa: F401
 
     engine = create_engine(f"sqlite:///{_tmp.name}", connect_args={"check_same_thread": False})
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    ensure_schema()
     Session = sessionmaker(bind=engine)
     session = Session()
     yield session

@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.database import engine, Base, ensure_schema
+from app.database import engine, Base
 from app.scheduler import start_scheduler, stop_scheduler
 from app.webctx import (
     AuthMiddleware, CsrfProtectMiddleware, templates, http_logger,
@@ -19,7 +19,6 @@ from app.webctx import (
 from app.routers import auth, dashboard, pipeline, system, webhook
 
 Base.metadata.create_all(bind=engine)
-ensure_schema()
 
 
 @asynccontextmanager

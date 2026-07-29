@@ -25,18 +25,18 @@ Single-process FastAPI app. No migrations, no Docker. Everything is DB-backed co
 | Shared HTTP | `app/webctx.py` — Jinja2 templates, CSRF/auth middleware helpers, form parsers |
 | Ingress | `app/ingest.py` — shared event persist + prune used by webhook and pollers |
 | Models | `app/models.py` — all SQLAlchemy models (create_all at startup) |
-| DB | `app/database.py` — SQLite engine, `PRAGMA foreign_keys=ON`, `ensure_schema()` |
+| DB | `app/database.py` — SQLite engine, `PRAGMA foreign_keys=ON`, `create_all` at startup |
 | Auth | `app/security.py` — bcrypt hash/verify; signed timed session via `session_username` cookie (itsdangerous URLSafeTimedSerializer) |
 | Pipeline | `app/pipeline.py` — rule matching + action dispatch (`evaluate_and_dispatch`) |
 | Polling | `app/scheduler.py` + `app/pollers.py` — APScheduler jobs + HTTP poller |
-| Widgets | `app/widgets.py` — dashboard widget registry; ApexCharts in `static/vendor/apexcharts/` + `widget-charts.js`; transforms in `widget_transforms.py` |
+| Widgets | `app/widgets.py` — dashboard widget registry; ApexCharts in `static/vendor/apexcharts/` + `widget-charts.js`; path/maths helpers in `widget_transforms.py` |
 | Fields | `app/fields.py` — shared logbook / value / text / toggle state |
 | Actions | `app/actions.py` — action type dispatch (field_push, http_forward, notify, web_push, local_script) |
 
 Config lives in the DB. Config nav: `/config/pipeline`, `/config/users`, `/config/dashboard`, `/config/style`.
 
 ## Gotchas
-- **No migrations** — `Base.metadata.create_all()` + `ensure_schema()` run at startup. Add new columns to the model *and* `_SCHEMA_PATCHES` in `database.py` so existing SQLite files get `ALTER TABLE`.
+- **No migrations** — schema is models + `Base.metadata.create_all()` at startup. Wipe `para_scope.db` / `.test_db.sqlite` when the model changes.
 - **SQLite foreign keys are OFF by default** — `database.py` enables them via pragma. Rely on it.
 - **Enum class names must not collide with model class names** — `ScheduleType` is the interval/cron enum for `PollingSchedule` (not to be confused with `EventTypeRecord`). Same table name (`event_types`) is fine; only the Python class name matters for relationships.
 - **Auth middleware checks `session_username` cookie** — it queries `User` by username and verifies the itsdangerous signature. Any change to the User model or session mechanism needs a corresponding middleware update.
@@ -47,8 +47,7 @@ Config lives in the DB. Config nav: `/config/pipeline`, `/config/users`, `/confi
 
 ## Adding a new model
 1. Define the class in `app/models.py` with `Base` inheritance.
-2. Add any new column to `_SCHEMA_PATCHES` in `database.py`.
-3. Restart — tables are created automatically.
+2. Restart (or wipe the DB file if the schema changed) — tables are created automatically.
 
 ## CSS (STYLE.md)
 Vanilla CSS, 37signals/Fizzy system. No build step. Files: `app/static/css/`.

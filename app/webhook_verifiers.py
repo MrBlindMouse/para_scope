@@ -99,7 +99,6 @@ class WebhookAuthError(Exception):
 
 
 def _resolve_webhook_provider(source) -> str:
-    # Back-compat: old sources didn't set any provider.
     provider = (source.config or {}).get("webhook_provider")
     if isinstance(provider, str) and provider.strip():
         return provider.strip()

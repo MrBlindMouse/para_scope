@@ -631,7 +631,7 @@ def test_sqlite_wal_pragma():
 def db_session_factory(tmp_path, monkeypatch):
     """Session factory bound to a temp SQLite file with schema."""
     from sqlalchemy import create_engine
-    from app.database import Base, ensure_schema
+    from app.database import Base
     from app import models  # noqa: F401
 
     db_path = tmp_path / "phase4.db"
@@ -640,7 +640,6 @@ def db_session_factory(tmp_path, monkeypatch):
         connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(bind=engine)
-    # ensure_schema uses the app engine — patch lightly by applying patches here
     Session = sessionmaker(bind=engine)
 
     def factory():

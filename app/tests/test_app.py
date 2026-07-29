@@ -71,11 +71,10 @@ def _clean_db(request):
     main_mod._LOGIN_RATE_LIMIT.clear()
     main_mod._WEBHOOK_REPLAY_CACHE.clear()
     main_mod._WEBHOOK_RATE_LIMIT.clear()
-    from app.database import engine as _engine, Base as _Base, ensure_schema
+    from app.database import engine as _engine, Base as _Base
     # Don't unlink DB_PATH while the engine has open connections (SQLite I/O errors).
     _Base.metadata.drop_all(bind=_engine)
     _Base.metadata.create_all(bind=_engine)
-    ensure_schema()
     yield
     _Base.metadata.drop_all(bind=_engine)
 
@@ -477,7 +476,7 @@ class TestSourcesCRUD:
         assert 'class="pipeline-action-menu"' in resp.text
         assert '/static/js/disclosures.js' in resp.text
 
-    def test_sources_render_collapsed_in_creation_order(self, authenticated_client):
+    def test_sources_render_collapsed_newest_first(self, authenticated_client):
         first_id, _ = _create_source(authenticated_client, name="Zulu Source")
         second_id, _ = _create_source(authenticated_client, name="Alpha Source")
 
@@ -487,7 +486,7 @@ class TestSourcesCRUD:
         assert 'class="btn btn--sm pipeline-disclosure-toggle"' in resp.text
         assert 'data-disclosure-key="source-chain-' in resp.text
         assert 'aria-controls="source-chain-body-' in resp.text
-        assert resp.text.index(f'id="source-chain-{first_id}"') < resp.text.index(f'id="source-chain-{second_id}"')
+        assert resp.text.index(f'id="source-chain-{second_id}"') < resp.text.index(f'id="source-chain-{first_id}"')
 
     def test_edit_source_partial(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Edit Partial", slug="edit-partial")
@@ -1489,6 +1488,10 @@ class TestHelp:
         assert "config-nav__link--active" in resp.text
         assert 'id="fields"' in resp.text
         assert "Logbook" in resp.text
+        assert 'id="example-apis"' in resp.text
+        assert "api.open-meteo.com" in resp.text
+        assert "Trigger poll" in resp.text
+        assert "Dashboard actions" in resp.text
 
     def test_help_requires_auth(self, client):
         client.cookies.clear()
@@ -2141,9 +2144,9 @@ class TestDashboardGridLayout:
         assert "checkDynamicColumn" not in js
 
     def test_migrate_and_merge_keep_ultrawide_geometry(self):
-        from app.dashboard_layout import GRID_COLUMN_LIVE_MAX, merge_geometry, migrate_widgets
+        from app.dashboard_layout import GRID_COLUMN_LIVE_MAX, merge_geometry, normalize_widgets
 
-        widgets, _ = migrate_widgets([
+        widgets, _ = normalize_widgets([
             {"id": "w_right", "type": "system", "display": "metric_summary", "x": 40, "y": 0, "w": 4, "h": 2},
         ])
         assert widgets[0]["x"] == 40
@@ -2158,7 +2161,7 @@ class TestDashboardGridLayout:
         assert merged[0]["y"] == 1
         assert merged[0]["h"] == 3
 
-        too_wide, _ = migrate_widgets([
+        too_wide, _ = normalize_widgets([
             {"id": "w_over", "type": "system", "display": "metric_summary", "x": 90, "y": 0, "w": 20, "h": 2},
         ])
         assert too_wide[0]["w"] == 20
@@ -2227,21 +2230,18 @@ class TestDashboardGridLayout:
 
 
 class TestWidgetTransforms:
-    def test_apply_ops_div(self):
-        from app.widget_transforms import apply_ops, extract_number, series_from_points
-        assert apply_ops(273.5, [{"op": "div", "by": 1000}]) == 0.2735
+    def test_extract_number_and_series(self):
+        from app.widget_transforms import extract_number, series_from_points
         assert extract_number(
             {"_poll": {"response_time_ms": 500}},
             "_poll.response_time_ms",
-            [{"op": "div", "by": 1000}],
-        ) == 0.5
+        ) == 500.0
         ts = datetime.now(timezone.utc)
         series = series_from_points(
             [(ts, {"_poll": {"response_time_ms": 1000}})],
             value_path="_poll.response_time_ms",
-            transform=[{"op": "div", "by": 1000}],
         )
-        assert series == [{"ts": ts.isoformat(), "v": 1.0}]
+        assert series == [{"ts": ts.isoformat(), "v": 1000.0}]
         # Bare scalar logbook entry + path "value" (template convention)
         assert extract_number(0.05, "value") == 0.05
         assert extract_number({"value": 0.05}, "value") == 0.05
@@ -2436,11 +2436,10 @@ class TestWidgetTransforms:
                 "sources": [{
                     "field_slug": "sensor_pack.rate",
                     "label": "Rate",
-                    "transform": [{"op": "mul", "by": 2}],
                 }],
             })
             assert chart["labels"] == ["Rate"]
-            assert chart["values"] == [25.0]
+            assert chart["values"] == [12.5]
 
             series_nums = fetch_widget_data("series", db, display="line", widget_config={
                 "sources": [{"field_slug": "sensor_pack.temps"}],
@@ -2584,7 +2583,6 @@ class TestWidgetTransforms:
             data = fetch_widget_data("series", db, display="line", widget_config={
                 "sources": [{
                     "field_slug": "speed_log._poll.response_time_ms",
-                    "transform": [{"op": "div", "by": 1000}],
                 }],
                 "unit": "s",
                 "range_hours": 24,
@@ -2593,8 +2591,8 @@ class TestWidgetTransforms:
             assert len(data["series"]) == 1
             pts = data["series"][0]["points"]
             assert len(pts) == 2
-            assert pts[0]["v"] == 0.25
-            assert pts[1]["v"] == 0.5
+            assert pts[0]["v"] == 250.0
+            assert pts[1]["v"] == 500.0
 
             ldata = fetch_widget_data("display", db, display="logbook_list", widget_config={
                 "template": "rt {{ speed_log._poll.response_time_ms }}",
@@ -2646,13 +2644,12 @@ class TestWidgetTransforms:
                     {
                         "field_slug": "chart_speed_log._poll.response_time_ms",
                         "label": "Latency",
-                        "transform": [{"op": "div", "by": 1000}],
                     },
                     {"field_slug": "chart_usd_prices.value", "label": "USD"},
                 ],
             })
             assert data["labels"] == ["Latency", "USD"]
-            assert data["values"] == [0.5, 0.05]
+            assert data["values"] == [500.0, 0.05]
         finally:
             db.close()
 
@@ -2690,7 +2687,7 @@ class TestWidgetTransforms:
         db = next(get_db())
         try:
             db.add(Field(
-                name="Hits", slug="hits-render", field_type="value",
+                name="Hits Render", slug="hits-render", field_type="value",
                 config={}, state={"value": 42},
             ))
             widgets = [{
@@ -3074,7 +3071,7 @@ class TestWidgetTransforms:
             assert toggles["items"][0]["style"] == "led"
             assert toggles["tone"] == "neutral"
 
-            # Per-cell transforms + per-field tone rules on kv board
+            # Per-cell tone rules on kv board (maths live in templates, not transform ops)
             stats = fetch_widget_data(
                 "display", db, display="board",
                 widget_config={
@@ -3085,7 +3082,6 @@ class TestWidgetTransforms:
                         {
                             "field_slug": "board_hits",
                             "template": "{{value}} k",
-                            "transform": [{"op": "div", "by": 1000}],
                             "tone_rules": [
                                 {"expr": "value", "op": "gt", "compare": "0", "tone": "positive"},
                             ],
@@ -3093,7 +3089,6 @@ class TestWidgetTransforms:
                         {
                             "field_slug": "board_lag",
                             "template": "{{value}} ms",
-                            "transform": [{"op": "mul", "by": 2}],
                             "tone_rules": [
                                 {"expr": "value", "op": "lt", "compare": "0", "tone": "negative"},
                                 {"expr": "value", "op": "gt", "compare": "0", "tone": "neutral"},
@@ -3103,8 +3098,8 @@ class TestWidgetTransforms:
                 },
             )
             assert len(stats["items"]) == 2
-            assert stats["items"][0]["text"].startswith("1") and "k" in stats["items"][0]["text"]
-            assert "100" in stats["items"][1]["text"] and "ms" in stats["items"][1]["text"]
+            assert stats["items"][0]["text"].startswith("1000") and "k" in stats["items"][0]["text"]
+            assert "50" in stats["items"][1]["text"] and "ms" in stats["items"][1]["text"]
             assert stats["items"][0]["tone"] == "positive"
             assert stats["items"][1]["tone"] == "neutral"
             assert "tone" not in stats
@@ -5681,7 +5676,7 @@ class TestMetricGraphRange:
                     "range_hours": 24,
                 },
             )
-            assert data["name"] == "Latency By Slug"
+            assert data["series"][0]["name"] == "Latency By Slug"
             assert len(data["series"]) == 1
             assert data["series"][0]["points"][0]["v"] == 2.0
         finally:

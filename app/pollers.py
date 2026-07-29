@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import create_engine, text

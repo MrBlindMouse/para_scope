@@ -1,48 +1,47 @@
 import logging
 import os
 
-import hashlib
 import hmac as hmac_mod
 import json
 import time
-import uuid
 from collections import OrderedDict
-from contextlib import asynccontextmanager
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, parse_qs
 from zoneinfo import ZoneInfo
-from fastapi import BackgroundTasks, FastAPI, Request, Depends, Form, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.exception_handlers import (
-    http_exception_handler,
-    request_validation_exception_handler,
-)
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from fastapi import Request, status
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
-from sqlalchemy import func, text
+from sqlalchemy import func
 from sqlalchemy.orm import Session
-from pathlib import Path
 
-from app.database import engine, Base, get_db, ensure_schema
+from app.database import get_db
 from app.models import (
-    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
-    ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
-    PushSubscription, Field, FieldLogEntry,
+    User,
+    Source,
+    EventTypeRecord,
+    ScheduleType,
+    ActionInstance,
+    Rule,
+    Secret,
+    DashboardLayout,
+    Event,
+    AuditLog,
+    Field,
+    FieldLogEntry,
 )
 from fastapi.templating import Jinja2Templates
 from app.security import (
-    verify_password, hash_password, encrypt_secret, decrypt_secret,
-    create_session_token, verify_session_token, generate_csrf_token,
+    encrypt_secret,
+    create_session_token,
+    verify_session_token,
+    generate_csrf_token,
     SESSION_MAX_AGE_SECONDS,
 )
 from jinja2 import pass_context
 from app.pipeline import evaluate_and_dispatch
 from app.dashboard_layout import parse_layout_config
-from app.scheduler import start_scheduler, stop_scheduler, add_or_update_job, remove_job, job_count
 from app.pollers import parse_poller_form
 
 # ponytail: simple in-memory rate limiter for login (IP-based, 10 req/minute)
@@ -798,7 +797,6 @@ def display_dt(context, value, fmt: str = "%Y-%m-%d %H:%M", empty: str = ""):
 templates.env.filters["display_dt"] = display_dt
 
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def flash_url(path: str, success: str | None = None, error: str | None = None) -> str:
@@ -863,8 +861,6 @@ def _set_session_cookies(response, request: Request, username: str):
     return response
 
 
-
-
 def _parse_rule_form(form, *, for_update: bool = False):
     """Parse rule fields. Returns (kwargs, error) or (None, error)."""
     conditions_str = (form.get("conditions") or "{}").strip()
@@ -890,8 +886,6 @@ def _parse_rule_form(form, *, for_update: bool = False):
     return data, None
 
 
-
-
 def _cleanup_replay_cache(cutoff: float):
     """Remove entries older than cutoff from the LRU replay cache."""
     while _WEBHOOK_REPLAY_CACHE and next(iter(_WEBHOOK_REPLAY_CACHE.values())) < cutoff:
@@ -899,8 +893,6 @@ def _cleanup_replay_cache(cutoff: float):
     # ponytail: bounded size — evict oldest when over limit
     while len(_WEBHOOK_REPLAY_CACHE) > _WEBHOOK_REPLAY_MAX:
         _WEBHOOK_REPLAY_CACHE.popitem(last=False)
-
-
 
 
 def _process_webhook_event(event_id: int) -> None:

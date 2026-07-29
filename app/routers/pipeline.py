@@ -1,33 +1,29 @@
 """Auto-split route module — handlers registered on shared app via include."""
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
-from pathlib import Path
 from types import SimpleNamespace
 import json
-import hashlib
-import hmac as hmac_mod
-import time
-import uuid
-import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
-    ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
-    PushSubscription, Field, FieldLogEntry,
+    Source,
+    EventTypeRecord,
+    PollingSchedule,
+    ActionInstance,
+    Rule,
+    Secret,
+    Event,
+    MetricPoint,
+    Field,
+    FieldLogEntry,
 )
 from app.security import (
-    verify_password, hash_password, encrypt_secret, decrypt_secret,
-    create_session_token, verify_session_token, generate_csrf_token,
-    SESSION_MAX_AGE_SECONDS,
+    encrypt_secret,
 )
-from app.pipeline import evaluate_and_dispatch
-from app.scheduler import add_or_update_job, remove_job, job_count
-from app.ingest import ingest_event
+from app.scheduler import add_or_update_job, remove_job
 from app.pollers import (
     get_poller_categories, get_poller_category, get_poller_specs, run_schedule,
 )
@@ -437,7 +433,7 @@ def _delete_schedule_secrets(db: Session, schedule_id: int) -> None:
 @router.get("/config/pipeline")
 async def config_pipeline(request: Request, db: Session = Depends(get_db)):
     success, error = ctx.get_message_params(request)
-    sources = db.query(Source).order_by(Source.created_at, Source.id).all()
+    sources = db.query(Source).order_by(Source.created_at.desc(), Source.id.desc()).all()
     field_ctx = ctx._fields_list_context(db)
     fields = field_ctx["fields"]
     fields_by_id = {f.id: f for f in fields}
@@ -485,7 +481,6 @@ async def config_pipeline(request: Request, db: Session = Depends(get_db)):
     )
 
 
-
 # route: /config/pipeline/partials/field-form
 @router.get("/config/pipeline/partials/field-form")
 async def pipeline_field_form(request: Request, db: Session = Depends(get_db)):
@@ -504,7 +499,6 @@ async def pipeline_field_form(request: Request, db: Session = Depends(get_db)):
         "config/pipeline/_field_form.html",
         _build_field_dialog_context(field=field),
     )
-
 
 
 # route: /config/pipeline/fields
@@ -550,7 +544,6 @@ async def pipeline_create_field(request: Request, db: Session = Depends(get_db))
             retarget="#pipeline-fields",
         )
     return ctx._pipeline_redirect(success=f"Field '{field.name}' created")
-
 
 
 # route: /config/pipeline/field/{field_id}
@@ -603,7 +596,6 @@ async def pipeline_update_field(request: Request, field_id: int, db: Session = D
     return ctx._pipeline_redirect(success=f"Field '{field.name}' updated")
 
 
-
 # route: /config/pipeline/field/{field_id}/delete
 @router.post("/config/pipeline/field/{field_id}/delete")
 async def pipeline_delete_field(request: Request, field_id: int, db: Session = Depends(get_db)):
@@ -633,7 +625,6 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
     if ctx._is_htmx(request):
         return ctx._fields_section_template(request, db)
     return ctx._pipeline_redirect(success=f"Field '{name}' deleted")
-
 
 
 # route: /config/pipeline/field/{field_id}/partials/recent-entries
@@ -669,7 +660,6 @@ async def pipeline_recent_logbook(request: Request, field_id: int, db: Session =
     )
 
 
-
 # route: /config/pipeline/field/{field_id}/clear
 @router.post("/config/pipeline/field/{field_id}/clear")
 async def pipeline_clear_logbook(request: Request, field_id: int, db: Session = Depends(get_db)):
@@ -698,13 +688,11 @@ async def pipeline_clear_logbook(request: Request, field_id: int, db: Session = 
     return ctx._pipeline_redirect(success=f"Cleared {deleted} entries from '{field.name}'")
 
 
-
 # route: /config/pipeline/partials/source-form
 @router.get("/config/pipeline/partials/source-form")
 async def pipeline_source_form(request: Request):
     context = _build_source_dialog_context()
     return ctx.templates.TemplateResponse(request, "config/pipeline/_source_form.html", context)
-
 
 
 # route: /config/pipeline/sources
@@ -832,7 +820,6 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     return ctx._pipeline_redirect(success=f"Source '{name}' created")
 
 
-
 # route: /config/pipeline/source/{source_id}/partials/event-form
 @router.get("/config/pipeline/source/{source_id}/partials/event-form")
 async def pipeline_event_form(request: Request, source_id: int, db: Session = Depends(get_db)):
@@ -858,7 +845,6 @@ async def pipeline_event_form(request: Request, source_id: int, db: Session = De
         "config/pipeline/_event_form.html",
         _build_event_dialog_context(source=source, event=event),
     )
-
 
 
 # route: /config/pipeline/source/{source_id}/partials/recent-events
@@ -899,7 +885,6 @@ async def pipeline_recent_events(request: Request, source_id: int, db: Session =
     )
 
 
-
 # route: /config/pipeline/source/{source_id}/partials/latest-event
 @router.get("/config/pipeline/source/{source_id}/partials/latest-event")
 async def pipeline_latest_event(request: Request, source_id: int, db: Session = Depends(get_db)):
@@ -936,7 +921,6 @@ async def pipeline_latest_event(request: Request, source_id: int, db: Session = 
     )
 
 
-
 # route: /config/pipeline/source/{source_id}/events
 @router.post("/config/pipeline/source/{source_id}/events")
 async def pipeline_create_event(request: Request, source_id: int, db: Session = Depends(get_db)):
@@ -971,7 +955,6 @@ async def pipeline_create_event(request: Request, source_id: int, db: Session = 
     return ctx._pipeline_redirect(success=f"Event '{name}' created")
 
 
-
 # route: /config/pipeline/event/{et_id}
 @router.post("/config/pipeline/event/{et_id}")
 async def pipeline_update_event(request: Request, et_id: int, db: Session = Depends(get_db)):
@@ -1002,7 +985,6 @@ async def pipeline_update_event(request: Request, et_id: int, db: Session = Depe
             retarget=f"#source-chain-{source.id}",
         )
     return ctx._pipeline_redirect(success=f"Event '{name}' updated")
-
 
 
 # route: /config/pipeline/source/{source_id}/partials/rule-form
@@ -1078,7 +1060,6 @@ def _validate_rule_refs(db, source_id: int, event_type_ids: list, action_ids: li
     return None
 
 
-
 # route: /config/pipeline/source/{source_id}/rules
 @router.post("/config/pipeline/source/{source_id}/rules")
 async def pipeline_create_rule(request: Request, source_id: int, db: Session = Depends(get_db)):
@@ -1147,7 +1128,6 @@ async def pipeline_create_rule(request: Request, source_id: int, db: Session = D
     return ctx._pipeline_redirect(success="Rule created")
 
 
-
 # route: /config/pipeline/rule/{rule_id}
 @router.post("/config/pipeline/rule/{rule_id}")
 async def pipeline_update_rule(request: Request, rule_id: int, db: Session = Depends(get_db)):
@@ -1214,7 +1194,6 @@ async def pipeline_update_rule(request: Request, rule_id: int, db: Session = Dep
     return ctx._pipeline_redirect(success="Rule updated")
 
 
-
 # route: /config/pipeline/source/{source_id}/partials/action-form
 @router.get("/config/pipeline/source/{source_id}/partials/action-form")
 async def pipeline_action_form(request: Request, source_id: int, db: Session = Depends(get_db)):
@@ -1267,7 +1246,6 @@ async def pipeline_action_form(request: Request, source_id: int, db: Session = D
             rule=rule,
         ),
     )
-
 
 
 # route: /config/pipeline/source/{source_id}/actions
@@ -1386,7 +1364,6 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
     return ctx._pipeline_redirect(success="Action created")
 
 
-
 # route: /config/pipeline/action/{action_id}
 @router.post("/config/pipeline/action/{action_id}")
 async def pipeline_update_action(request: Request, action_id: int, db: Session = Depends(get_db)):
@@ -1497,7 +1474,6 @@ async def pipeline_source_edit_form(request: Request, source_id: int, db: Sessio
         webhook_secret=webhook_secret,
     )
     return ctx.templates.TemplateResponse(request, "config/pipeline/_source_edit_form.html", context)
-
 
 
 # route: /config/source/{source_id}/edit
@@ -1687,7 +1663,6 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
     return ctx._pipeline_redirect(success=f"Source '{name}' updated")
 
 
-
 # route: /config/source/{source_id}/delete
 @router.post("/config/source/{source_id}/delete")
 async def delete_source(request: Request, source_id: int, db: Session = Depends(get_db)):
@@ -1736,7 +1711,6 @@ async def delete_source(request: Request, source_id: int, db: Session = Depends(
     if ctx._is_htmx(request):
         return HTMLResponse("")
     return ctx._pipeline_redirect(success=f"Source '{name}' deleted")
-
 
 
 # route: /config/source/{source_id}/toggle
@@ -1902,7 +1876,6 @@ async def delete_action(request: Request, action_id: int, db: Session = Depends(
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
     return ctx._pipeline_redirect(success="Action deleted")
-
 
 
 # route: /config/rule/{rule_id}/delete

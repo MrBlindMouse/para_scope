@@ -1,30 +1,20 @@
 """Auto-split route module — handlers registered on shared app via include."""
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
 from pathlib import Path
 from datetime import datetime, timezone
 import json
 import time
 import uuid
-import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
-    ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
-    PushSubscription, Field, FieldLogEntry,
+    Source,
+    EventTypeRecord,
 )
-from app.security import (
-    verify_password, hash_password, encrypt_secret, decrypt_secret,
-    create_session_token, verify_session_token, generate_csrf_token,
-    SESSION_MAX_AGE_SECONDS,
-)
-from app.pipeline import evaluate_and_dispatch
-from app.scheduler import add_or_update_job, remove_job, job_count
 from app.ingest import ingest_event
 
 from app import webctx as ctx
@@ -50,7 +40,6 @@ async def service_worker():
         media_type="application/javascript",
         headers={"Service-Worker-Allowed": "/"},
     )
-
 
 
 # route: /webhook/{source_slug}

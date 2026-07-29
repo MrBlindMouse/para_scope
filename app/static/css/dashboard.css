@@ -91,11 +91,6 @@
     display: none;
   }
 
-  .widget-meta {
-    font-size: 0.85em;
-    margin: 0 0 0.5rem;
-  }
-
   .widget-list {
     list-style: none;
     margin: 0;
@@ -410,18 +405,8 @@
     overflow-wrap: anywhere;
   }
 
-  .widget-board__kv {
-    font-size: 0.9rem;
-    text-align: end;
-  }
-
   .widget-board__row--kv {
     justify-content: flex-start;
-  }
-
-  .widget-board__row--kv .widget-board__kv {
-    text-align: start;
-    inline-size: 100%;
   }
 
   .widget-toggle--text_color .widget-toggle__text {
@@ -676,7 +661,6 @@
   }
 
   /* Dashboard editor form density */
-  .form-field--xs { max-inline-size: 5rem; }
   .form-field--sm { max-inline-size: 8rem; }
   .form-field--md { max-inline-size: 10rem; }
   .form-field--lg { max-inline-size: 16rem; }

@@ -1,39 +1,24 @@
 """Auto-split route module — handlers registered on shared app via include."""
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
-from pathlib import Path
 import json
-import hashlib
-import hmac as hmac_mod
-import time
-import uuid
-import logging
 
 from app.database import get_db
 from app.models import (
-    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
-    ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
-    PushSubscription, Field, FieldLogEntry,
+    DashboardLayout,
+    PushSubscription,
+    Field,
 )
-from app.security import (
-    verify_password, hash_password, encrypt_secret, decrypt_secret,
-    create_session_token, verify_session_token, generate_csrf_token,
-    SESSION_MAX_AGE_SECONDS,
-)
-from app.pipeline import evaluate_and_dispatch
 from app.widgets import fetch_widget_data, get_widget_types, validate_widget_bindings
 from app.dashboard_layout import (
     GRID_CELL_HEIGHT, GRID_COLUMN_LIVE_MAX, GRID_COLUMN_WIDTH, GRID_COLUMNS,
     GRID_MARGIN, GRID_STACK_BELOW,
     find_widget, grid_stack_column_css, layout_json, merge_geometry,
-    migrate_widgets, normalize_for_save, parse_layout_config,
+    normalize_for_save, normalize_widgets, parse_layout_config,
 )
-from app.scheduler import add_or_update_job, remove_job, job_count
-from app.ingest import ingest_event
 
 from app import webctx as ctx
 
@@ -50,7 +35,6 @@ async def push_vapid_public_key():
             status_code=503,
         )
     return {"public_key": cfg["public_key"]}
-
 
 
 # route: /api/push/subscribe
@@ -81,7 +65,6 @@ async def push_subscribe(request: Request, db: Session = Depends(get_db)):
         ))
     db.commit()
     return {"ok": True}
-
 
 
 # route: /api/push/subscribe
@@ -124,12 +107,11 @@ def _load_widgets(db: Session) -> list[dict]:
     if not layout:
         return []
     widgets = parse_layout_config(layout.layout_config)["widgets"]
-    widgets, changed = migrate_widgets(widgets)
+    widgets, changed = normalize_widgets(widgets)
     if changed:
         layout.layout_config = layout_json(widgets)
         db.commit()
     return widgets
-
 
 
 # route: /
@@ -163,7 +145,6 @@ async def root(request: Request, db: Session = Depends(get_db)):
             "grid_column_css": grid_stack_column_css(GRID_COLUMN_LIVE_MAX),
         },
     )
-
 
 
 # route: /widgets/{widget_type}
@@ -201,7 +182,6 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
     return HTMLResponse(html)
 
 
-
 # route: /api/dashboard/layout
 @router.post("/api/dashboard/layout")
 async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
@@ -221,7 +201,7 @@ async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
     if not layout:
         return JSONResponse({"error": "No layout"}, status_code=404)
     widgets = parse_layout_config(layout.layout_config)["widgets"]
-    widgets, _ = migrate_widgets(widgets)
+    widgets, _ = normalize_widgets(widgets)
     widgets = merge_geometry(widgets, updates)
     layout.layout_config = layout_json(widgets)
     db.commit()
@@ -259,7 +239,7 @@ async def api_dashboard_notes(request: Request, db: Session = Depends(get_db)):
     if not layout:
         return JSONResponse({"error": "No layout"}, status_code=404)
     widgets = parse_layout_config(layout.layout_config)["widgets"]
-    widgets, _ = migrate_widgets(widgets)
+    widgets, _ = normalize_widgets(widgets)
     widget = find_widget(widgets, widget_id=wid)
     if not widget or widget.get("type") != "notes":
         return JSONResponse({"error": "Notes widget not found"}, status_code=404)
@@ -297,7 +277,6 @@ async def config_dashboard(request: Request, db: Session = Depends(get_db)):
          "fields": db.query(Field).order_by(Field.name).all(),
          "success": success, "error": error}
     )
-
 
 
 # route: /config/dashboard

@@ -1,31 +1,23 @@
 """Auto-split route module — handlers registered on shared app via include."""
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,
+    Request,
+    status,
+)
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
-from pathlib import Path
-import json
-import hashlib
-import hmac as hmac_mod
-import time
-import uuid
-import logging
+from sqlalchemy import text
 
 from app.database import get_db
-from app.models import (
-    User, Source, EventTypeRecord, PollingSchedule, ScheduleType,
-    ActionInstance, Rule, Secret, DashboardLayout, Event, AuditLog, MetricPoint,
-    PushSubscription, Field, FieldLogEntry,
-)
+from app.models import User
 from app.security import (
-    verify_password, hash_password, encrypt_secret, decrypt_secret,
-    create_session_token, verify_session_token, generate_csrf_token,
-    SESSION_MAX_AGE_SECONDS,
+    verify_password,
+    hash_password,
 )
-from app.pipeline import evaluate_and_dispatch
-from app.ingest import ingest_event
 
 from app import webctx as ctx
 
@@ -38,7 +30,6 @@ async def setup_page(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
     error = request.query_params.get("error")
     return ctx.templates.TemplateResponse(request, "setup.html", {"error": error or None})
-
 
 
 # route: /setup
@@ -86,7 +77,6 @@ async def setup_post(
         )
 
 
-
 # route: /login
 @router.get("/login")
 async def login_page(request: Request, db: Session = Depends(get_db)):
@@ -97,7 +87,6 @@ async def login_page(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
     error = request.query_params.get("error")
     return ctx.templates.TemplateResponse(request, "login.html", {"error": error or None})
-
 
 
 # route: /login
@@ -128,7 +117,6 @@ async def login_post(
         )
     ctx._audit_log(db, request, "login_success", user_id=user.id)
     return response
-
 
 
 # route: /logout

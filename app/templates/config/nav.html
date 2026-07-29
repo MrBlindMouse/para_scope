@@ -47,5 +47,7 @@
     {% block config_content %}{% endblock %}
   </div>
 </div>
+{# Outside #config-panel so hx-boost does not re-bind body listeners. #}
+<script src="/static/js/disclosures.js"></script>
 <script src="/static/js/dialogs.js"></script>
 {% endblock %}

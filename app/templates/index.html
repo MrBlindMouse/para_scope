@@ -57,7 +57,7 @@
         <div class="card" data-widget="{{ widget.type }}" data-widget-id="{{ wid }}" id="widget-{{ wid }}">
           {% if widget.get('show_title', true) %}
           <div class="card__header">
-            <h2>{{ widget.get('title', widget.get('label', widget.type | title)) }}</h2>
+            <h2>{{ widget.get('title', widget.type | title) }}</h2>
           </div>
           {% endif %}
           <div class="card__body"

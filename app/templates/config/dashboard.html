@@ -5,7 +5,7 @@
 
 {% include 'components/alerts.html' %}
 
-<p class="mt">Add a widget, choose how it looks, then save. Use the Fields button on a widget to see slugs for templates (<code>{{ '{{ slug.value }}' }}</code> for scalar fields, <code>{{ '{{ slug.key }}' }}</code> for data fields). Everyone on this server shares this layout.</p>
+<p class="mt">Set up and Manage widgets</p>
 
 <form method="post" action="/config/dashboard" id="dashboard-form" class="stack">
   {% include 'components/csrf.html' %}
@@ -46,7 +46,6 @@
 <link rel="stylesheet" href="/static/vendor/apexcharts/apexcharts.css">
 <script src="/static/vendor/apexcharts/apexcharts.min.js"></script>
 <script src="/static/js/widget-charts.js"></script>
-<script src="/static/js/disclosures.js"></script>
 
 <script>
 (function () {
@@ -103,6 +102,42 @@
     return !!value;
   }
 
+  function reorderButtonsHtml(prefix, i, total) {
+    return '<button type="button" class="btn" data-action="' + prefix + '-up"' +
+      (i === 0 ? " disabled" : "") + ">Up</button>" +
+      '<button type="button" class="btn" data-action="' + prefix + '-down"' +
+      (i === total - 1 ? " disabled" : "") + ">Down</button>";
+  }
+
+  function refreshReorderButtons(wrap, rowSel, prefix) {
+    if (!wrap) return;
+    var rows = Array.prototype.slice.call(wrap.querySelectorAll(":scope > " + rowSel));
+    rows.forEach(function (r, ri) {
+      var upBtn = r.querySelector('[data-action="' + prefix + '-up"]');
+      var downBtn = r.querySelector('[data-action="' + prefix + '-down"]');
+      if (upBtn) upBtn.disabled = ri === 0;
+      if (downBtn) downBtn.disabled = ri === rows.length - 1;
+    });
+  }
+
+  function moveReorderRow(btn, rowSel, prefix, dir) {
+    var row = btn.closest(rowSel);
+    if (!row) return false;
+    var wrap = row.parentElement;
+    var rows = Array.prototype.slice.call(wrap.querySelectorAll(":scope > " + rowSel));
+    var idx = rows.indexOf(row);
+    if (dir === "up" && idx > 0) {
+      wrap.insertBefore(row, rows[idx - 1]);
+    } else if (dir === "down" && idx < rows.length - 1) {
+      wrap.insertBefore(rows[idx + 1], row);
+    } else {
+      return false;
+    }
+    refreshReorderButtons(wrap, rowSel, prefix);
+    syncJson();
+    return true;
+  }
+
   function clockDefaultsForDisplay(disp) {
     return {
       timezone_mode: "app",
@@ -154,7 +189,6 @@
   }
 
   var FIELD_TYPE_LABELS = {logbook: "Logbook", value: "Value", text: "Text", toggle: "Toggle", data: "Data"};
-  var XFORM_LABELS = {mul: "×", div: "÷", add: "+", sub: "−", abs: "Absolute", round: "Round"};
   var TONE_RULE_OPS = [
     ["gt", ">"], ["lt", "<"], ["gte", "≥"], ["lte", "≤"], ["eq", "="], ["neq", "≠"]
   ];
@@ -231,7 +265,7 @@
   function normalize(raw) {
     if (!Array.isArray(raw)) return [];
     return raw.filter(function (w) { return w && w.type; }).map(function (w) {
-      var title = w.title || w.label || kindTitle(w.type);
+      var title = w.title || kindTitle(w.type);
       var disp = w.display || defaultDisplay(w.type);
       var cfg = w.config && typeof w.config === "object" ? Object.assign({}, w.config) : {};
       if (w.type === "clock") {
@@ -289,28 +323,6 @@
     });
   }
 
-  function transformStepsHtml(steps) {
-    steps = Array.isArray(steps) ? steps : [];
-    if (!steps.length) steps = [{op: "div", by: ""}];
-    var html = '<div class="stack stack--tight" data-transform-list>';
-    steps.forEach(function (s) {
-      var op = (s && s.op) || "div";
-      var by = s && s.by != null ? s.by : (s && s.digits != null ? s.digits : "");
-      html += '<div class="flex items-center gap flex-wrap" data-transform-row>' +
-        '<select class="input form-field--sm" data-xform-op>' +
-          ["mul","div","add","sub","abs","round"].map(function (o) {
-            return '<option value="' + o + '"' + (o === op ? " selected" : "") + ">" + (XFORM_LABELS[o] || o) + "</option>";
-          }).join("") +
-        "</select>" +
-        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="Amount or decimal places" value="' +
-          escapeAttr(by) + '">' +
-        '<button type="button" class="btn" data-action="xform-remove">−</button>' +
-      "</div>";
-    });
-    html += '<button type="button" class="btn self-start" data-action="xform-add">Add calculation</button></div>';
-    return html;
-  }
-
   function displaySelectHtml(type, selected) {
     var kind = KIND_BY_TYPE[type];
     if (!kind) return "";
@@ -362,7 +374,7 @@
     var html = '<div class="stack stack--dense" data-tone-rules>' +
       '<span class="text-muted">Background rules (first match wins). Use field paths and maths, e.g. <code>1/value</code>. ' +
       '<code>=</code> / <code>≠</code> also accept strings, e.g. <code>service.status</code> / <code>ok</code>.</span>';
-    rules.forEach(function (r) {
+    rules.forEach(function (r, i) {
       var expr = (r && r.expr) || "value";
       var op = (r && r.op) || "gt";
       var compare = (r && r.compare != null) ? r.compare : "0";
@@ -382,6 +394,7 @@
             return '<option value="' + o[0] + '"' + (o[0] === tone ? " selected" : "") + ">" + o[1] + "</option>";
           }).join("") +
         "</select>" +
+        reorderButtonsHtml("tone-rule", i, rules.length) +
         '<button type="button" class="btn" data-action="tone-rule-remove">−</button>' +
       "</div>";
     });
@@ -560,12 +573,13 @@
     sources = Array.isArray(sources) ? sources : [];
     if (!sources.length) sources = [{field_slug: "", label: ""}];
     var html = '<div class="stack stack--dense" data-series-sources><span class="text-muted">Series</span>';
-    sources.forEach(function (s) {
+    sources.forEach(function (s, i) {
       html += '<div class="card card--compact" data-series-source>' +
         '<div class="card__body stack">' +
           '<div class="flex items-center gap flex-wrap">' +
             slugInputHtml('data-ssrc="field_slug"', (s.field_slug || "").trim(), "Field",
               "my-log.value or my-log._poll.response_time_ms") +
+            reorderButtonsHtml("series-src", i, sources.length) +
             '<button type="button" class="btn self-end" data-action="series-src-remove">Remove</button>' +
           "</div>" +
           '<label class="stack form-field--lg">Label' +
@@ -588,13 +602,14 @@
     var single = maxSrc != null && maxSrc <= 1;
     var html = '<div class="stack stack--dense" data-chart-sources><span class="text-muted">' +
       (single ? "Source" : "Sources") + "</span>";
-    sources.forEach(function (s) {
+    sources.forEach(function (s, i) {
       html += '<div class="card card--compact" data-chart-source>' +
         '<div class="card__body stack">' +
           '<div class="flex items-center gap flex-wrap">' +
             slugInputHtml('data-src="field_slug"', (s.field_slug || "").trim(), "Field",
               "counter-or-value-slug") +
             (single ? "" :
+              reorderButtonsHtml("src", i, sources.length) +
               '<button type="button" class="btn self-end" data-action="src-remove">Remove</button>') +
           "</div>" +
           '<label class="stack form-field--lg">Label' +
@@ -617,8 +632,7 @@
       html += '<div class="flex items-center gap flex-wrap" data-link-row>' +
         '<input type="text" class="input form-field--md" data-link="label" placeholder="Label" value="' + escapeAttr(it.label || "") + '">' +
         '<input type="url" class="input form-field--grow" data-link="url" placeholder="https://…" value="' + escapeAttr(it.url || "") + '">' +
-        '<button type="button" class="btn" data-action="link-up"' + (i === 0 ? " disabled" : "") + ">Up</button>" +
-        '<button type="button" class="btn" data-action="link-down"' + (i === items.length - 1 ? " disabled" : "") + ">Down</button>" +
+        reorderButtonsHtml("link", i, items.length) +
         '<button type="button" class="btn" data-action="link-remove">−</button>' +
       "</div>";
     });
@@ -634,8 +648,7 @@
       html += '<div class="flex items-center gap flex-wrap" data-world-clock-row>' +
         '<input type="text" class="input form-field--md" data-world-clock="label" placeholder="Label" value="' + escapeAttr(it.label || "") + '">' +
         '<input type="text" class="input form-field--grow" data-world-clock="timezone" placeholder="Europe/Stockholm" value="' + escapeAttr(it.timezone || "") + '" spellcheck="false">' +
-        '<button type="button" class="btn" data-action="world-clock-up"' + (i === 0 ? " disabled" : "") + '>Up</button>' +
-        '<button type="button" class="btn" data-action="world-clock-down"' + (i === items.length - 1 ? " disabled" : "") + '>Down</button>' +
+        reorderButtonsHtml("world-clock", i, items.length) +
         '<button type="button" class="btn" data-action="world-clock-remove">−</button>' +
       '</div>';
     });
@@ -682,18 +695,22 @@
       cells = cellKind === "kv_text" ? [{template: ""}] : [{field_slug: ""}];
     }
     var html = '<div class="stack stack--dense" data-board-cells><span class="text-muted">Entries</span>';
-    cells.forEach(function (c) {
+    cells.forEach(function (c, i) {
       html += '<div class="card card--compact" data-board-cell>' +
         '<div class="card__body stack">';
       if (cellKind === "toggle") {
         html += '<div class="flex items-center gap flex-wrap">' +
           slugInputHtml('data-bcell="field_slug"', (c.field_slug || "").trim()) +
+          reorderButtonsHtml("board-cell", i, cells.length) +
           '<button type="button" class="btn self-end" data-action="board-cell-remove">Remove</button>' +
           "</div>";
       } else {
         html += '<div class="flex items-center gap flex-wrap justify-between">' +
           '<span class="text-muted text-xs">Template entry</span>' +
-          '<button type="button" class="btn" data-action="board-cell-remove">Remove</button>' +
+          '<span class="flex items-center gap">' +
+            reorderButtonsHtml("board-cell", i, cells.length) +
+            '<button type="button" class="btn" data-action="board-cell-remove">Remove</button>' +
+          "</span>" +
           "</div>";
         html += '<label class="stack">Template' +
           '<textarea class="input" data-bcell="template" rows="2" placeholder="{{ '{{ rate.value }}' }}">' +
@@ -902,8 +919,6 @@
                 '<span aria-hidden="true" class="dashboard-widget-editor__icon">▸</span>' +
               "</button>" +
               '<button type="button" class="btn" data-action="fields-help">Fields</button>' +
-              '<button type="button" class="btn" data-action="up"' + (i === 0 ? " disabled" : "") + ">Up</button>" +
-              '<button type="button" class="btn" data-action="down"' + (i === widgets.length - 1 ? " disabled" : "") + ">Down</button>" +
               '<button type="button" class="btn" data-action="remove">Remove</button>' +
             "</div>" +
           "</div>" +
@@ -927,33 +942,6 @@
     }
   }
 
-  function readTransforms(listEl) {
-    var steps = [];
-    if (!listEl) return steps;
-    listEl.querySelectorAll(":scope > [data-transform-row]").forEach(function (row) {
-      var op = (row.querySelector("[data-xform-op]") || {}).value || "div";
-      var byEl = row.querySelector("[data-xform-by]");
-      var byRaw = byEl ? byEl.value : "";
-      var step = {op: op};
-      if (op === "abs") { steps.push(step); return; }
-      if (byRaw === "" || byRaw == null) return;
-      var n = parseFloat(byRaw);
-      if (isNaN(n)) return;
-      if (op === "round") step.digits = Math.round(n);
-      else step.by = n;
-      steps.push(step);
-    });
-    return steps;
-  }
-
-  function cardTransformList(card) {
-    var found = null;
-    card.querySelectorAll("[data-transform-list]").forEach(function (list) {
-      if (!list.closest("[data-board-cell]")) found = list;
-    });
-    return found;
-  }
-
   function readBoardCells(card) {
     var cells = [];
     card.querySelectorAll("[data-board-cell]").forEach(function (box) {
@@ -964,8 +952,6 @@
         if (raw === "" || raw == null) return;
         cell[key] = (typeof raw === "string") ? raw.trim() : raw;
       });
-      var steps = readTransforms(box.querySelector("[data-transform-list]"));
-      if (steps.length) cell.transform = steps;
       var cellRules = readToneRules(box.querySelector("[data-tone-rules]"));
       if (cellRules.length) cell.tone_rules = cellRules;
       cells.push(cell);
@@ -1277,9 +1263,9 @@
           ? normalizeClockConfig({style: defaultStyle(type, disp)}, disp)
         : {style: defaultStyle(type, disp), tone: defaultTone(type, disp)}
     };
-    widgets.push(newWidget);
+    widgets.unshift(newWidget);
     var expandedKeys = currentExpandedKeys();
-    expandedKeys[widgetEditorKey(newWidget, widgets.length - 1)] = true;
+    expandedKeys[widgetEditorKey(newWidget, 0)] = true;
     setWidgets(widgets, expandedKeys);
   });
 
@@ -1364,30 +1350,6 @@
       return;
     }
 
-    if (action === "xform-add") {
-      var list = btn.closest("[data-transform-list]");
-      if (!list) return;
-      var row = document.createElement("div");
-      row.className = "flex items-center gap flex-wrap";
-      row.setAttribute("data-transform-row", "");
-      row.innerHTML =
-        '<select class="input form-field--sm" data-xform-op>' +
-          ["mul","div","add","sub","abs","round"].map(function (o) {
-            return '<option value="' + o + '"' + (o === "div" ? " selected" : "") + ">" + (XFORM_LABELS[o] || o) + "</option>";
-          }).join("") +
-        "</select>" +
-        '<input type="number" class="input form-field--sm" data-xform-by step="any" placeholder="Amount or decimal places" value="">' +
-        '<button type="button" class="btn" data-action="xform-remove">−</button>';
-      list.insertBefore(row, btn);
-      syncJson();
-      return;
-    }
-    if (action === "xform-remove") {
-      var r = btn.closest("[data-transform-row]");
-      if (r) r.remove();
-      syncJson();
-      return;
-    }
     if (action === "tone-rule-add") {
       var trList = btn.closest("[data-tone-rules]");
       if (!trList) return;
@@ -1407,15 +1369,24 @@
             return '<option value="' + o[0] + '"' + (o[0] === "positive" ? " selected" : "") + ">" + o[1] + "</option>";
           }).join("") +
         "</select>" +
+        reorderButtonsHtml("tone-rule", 0, 1) +
         '<button type="button" class="btn" data-action="tone-rule-remove">−</button>';
       trList.insertBefore(row, btn);
+      refreshReorderButtons(trList, "[data-tone-rule-row]", "tone-rule");
       syncJson();
       return;
     }
     if (action === "tone-rule-remove") {
       var trRow = btn.closest("[data-tone-rule-row]");
-      if (trRow) trRow.remove();
+      if (!trRow) return;
+      var trWrap = trRow.parentElement;
+      trRow.remove();
+      refreshReorderButtons(trWrap, "[data-tone-rule-row]", "tone-rule");
       syncJson();
+      return;
+    }
+    if (action === "tone-rule-up" || action === "tone-rule-down") {
+      moveReorderRow(btn, "[data-tone-rule-row]", "tone-rule", action === "tone-rule-up" ? "up" : "down");
       return;
     }
     if (action === "src-add") {
@@ -1437,8 +1408,15 @@
     }
     if (action === "src-remove") {
       var srcCard = btn.closest("[data-chart-source]");
-      if (srcCard) srcCard.remove();
+      if (!srcCard) return;
+      var srcWrap = srcCard.parentElement;
+      srcCard.remove();
+      refreshReorderButtons(srcWrap, "[data-chart-source]", "src");
       syncJson();
+      return;
+    }
+    if (action === "src-up" || action === "src-down") {
+      moveReorderRow(btn, "[data-chart-source]", "src", action === "src-up" ? "up" : "down");
       return;
     }
     if (action === "series-src-add") {
@@ -1454,8 +1432,15 @@
     }
     if (action === "series-src-remove") {
       var ssrc = btn.closest("[data-series-source]");
-      if (ssrc) ssrc.remove();
+      if (!ssrc) return;
+      var ssrcWrap = ssrc.parentElement;
+      ssrc.remove();
+      refreshReorderButtons(ssrcWrap, "[data-series-source]", "series-src");
       syncJson();
+      return;
+    }
+    if (action === "series-src-up" || action === "series-src-down") {
+      moveReorderRow(btn, "[data-series-source]", "series-src", action === "series-src-up" ? "up" : "down");
       return;
     }
     if (action === "board-cell-add") {
@@ -1475,8 +1460,15 @@
     }
     if (action === "board-cell-remove") {
       var bcell = btn.closest("[data-board-cell]");
-      if (bcell) bcell.remove();
+      if (!bcell) return;
+      var bcellWrap = bcell.parentElement;
+      bcell.remove();
+      refreshReorderButtons(bcellWrap, "[data-board-cell]", "board-cell");
       syncJson();
+      return;
+    }
+    if (action === "board-cell-up" || action === "board-cell-down") {
+      moveReorderRow(btn, "[data-board-cell]", "board-cell", action === "board-cell-up" ? "up" : "down");
       return;
     }
     if (action === "link-add") {
@@ -1495,37 +1487,12 @@
       if (!lr) return;
       var lrWrap = lr.parentElement;
       lr.remove();
-      var remain = Array.prototype.slice.call(lrWrap.querySelectorAll(":scope > [data-link-row]"));
-      remain.forEach(function (r, ri) {
-        var upBtn = r.querySelector('[data-action="link-up"]');
-        var downBtn = r.querySelector('[data-action="link-down"]');
-        if (upBtn) upBtn.disabled = ri === 0;
-        if (downBtn) downBtn.disabled = ri === remain.length - 1;
-      });
+      refreshReorderButtons(lrWrap, "[data-link-row]", "link");
       syncJson();
       return;
     }
     if (action === "link-up" || action === "link-down") {
-      var linkRow = btn.closest("[data-link-row]");
-      if (!linkRow) return;
-      var linkWrap = linkRow.parentElement;
-      var linkRows = Array.prototype.slice.call(linkWrap.querySelectorAll(":scope > [data-link-row]"));
-      var linkIdx = linkRows.indexOf(linkRow);
-      if (action === "link-up" && linkIdx > 0) {
-        linkWrap.insertBefore(linkRow, linkRows[linkIdx - 1]);
-      } else if (action === "link-down" && linkIdx < linkRows.length - 1) {
-        linkWrap.insertBefore(linkRows[linkIdx + 1], linkRow);
-      } else {
-        return;
-      }
-      linkRows = Array.prototype.slice.call(linkWrap.querySelectorAll(":scope > [data-link-row]"));
-      linkRows.forEach(function (r, ri) {
-        var upBtn = r.querySelector('[data-action="link-up"]');
-        var downBtn = r.querySelector('[data-action="link-down"]');
-        if (upBtn) upBtn.disabled = ri === 0;
-        if (downBtn) downBtn.disabled = ri === linkRows.length - 1;
-      });
-      syncJson();
+      moveReorderRow(btn, "[data-link-row]", "link", action === "link-up" ? "up" : "down");
       return;
     }
     if (action === "world-clock-add") {
@@ -1544,37 +1511,12 @@
       if (!wcRow) return;
       var wcWrap = wcRow.parentElement;
       wcRow.remove();
-      var wcRows = Array.prototype.slice.call(wcWrap.querySelectorAll(":scope > [data-world-clock-row]"));
-      wcRows.forEach(function (r, ri) {
-        var upBtn = r.querySelector('[data-action="world-clock-up"]');
-        var downBtn = r.querySelector('[data-action="world-clock-down"]');
-        if (upBtn) upBtn.disabled = ri === 0;
-        if (downBtn) downBtn.disabled = ri === wcRows.length - 1;
-      });
+      refreshReorderButtons(wcWrap, "[data-world-clock-row]", "world-clock");
       syncJson();
       return;
     }
     if (action === "world-clock-up" || action === "world-clock-down") {
-      var wcItem = btn.closest("[data-world-clock-row]");
-      if (!wcItem) return;
-      var wcContainer = wcItem.parentElement;
-      var wcItems = Array.prototype.slice.call(wcContainer.querySelectorAll(":scope > [data-world-clock-row]"));
-      var wcIdx = wcItems.indexOf(wcItem);
-      if (action === "world-clock-up" && wcIdx > 0) {
-        wcContainer.insertBefore(wcItem, wcItems[wcIdx - 1]);
-      } else if (action === "world-clock-down" && wcIdx < wcItems.length - 1) {
-        wcContainer.insertBefore(wcItems[wcIdx + 1], wcItem);
-      } else {
-        return;
-      }
-      wcItems = Array.prototype.slice.call(wcContainer.querySelectorAll(":scope > [data-world-clock-row]"));
-      wcItems.forEach(function (r, ri) {
-        var upBtn = r.querySelector('[data-action="world-clock-up"]');
-        var downBtn = r.querySelector('[data-action="world-clock-down"]');
-        if (upBtn) upBtn.disabled = ri === 0;
-        if (downBtn) downBtn.disabled = ri === wcItems.length - 1;
-      });
-      syncJson();
+      moveReorderRow(btn, "[data-world-clock-row]", "world-clock", action === "world-clock-up" ? "up" : "down");
       return;
     }
 
@@ -1584,16 +1526,8 @@
     var widgets = readFromDom();
     if (action === "remove") {
       widgets.splice(i, 1);
-    } else if (action === "up" && i > 0) {
-      var tmp = widgets[i - 1];
-      widgets[i - 1] = widgets[i];
-      widgets[i] = tmp;
-    } else if (action === "down" && i < widgets.length - 1) {
-      var tmp2 = widgets[i + 1];
-      widgets[i + 1] = widgets[i];
-      widgets[i] = tmp2;
+      setWidgets(widgets);
     }
-    setWidgets(widgets);
   });
 
   listEl.addEventListener("input", function () { syncJson(); });

@@ -1,6 +1,6 @@
 Version: 0.1  
 
-Date: 2026-07-17 (updated 2026-07-24 to match shipped codebase)  
+Date: 2026-07-17 (updated 2026-07-29: planned on-demand polling docs)  
 
 Status: Living design. **AGENTS.md** is the ops contract for agents; this document is vision plus an explicit shipped-vs-planned split below.
 
@@ -8,7 +8,7 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 
 **Shipped (matches the codebase today):**
 
-- Single-process FastAPI + SQLite (`create_all` + `ensure_schema` patches; no Alembic)
+- Single-process FastAPI + SQLite (`create_all` only; no Alembic / no schema patches)
 - Cookie sessions, CSRF, Fernet-encrypted secrets, login rate limit
 - Sources (webhook + poll), event types, one polling schedule per poll source, rules, actions (`field_push`, `http_forward`, `notify`, `web_push`, `local_script`)
 - Poll categories + typed poller subtypes for URL/HTTP, system, connectivity, storage, application, and external checks
@@ -32,6 +32,10 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 - Condition rate limits / time windows
 - Formal plugin/adapter packaging and “Writing a Source Adapter” guides
 - Phase-2 poll integrations: Docker/runtime snapshots, SMART health, ZFS/Btrfs pool health, MQTT broker checks, deeper queue integrations
+- Dashboard actions source type: authenticated dashboard controls emit pipeline events (manual / UI-triggered ingress)
+- Trigger poll pipeline action (`trigger_poll`): run a chosen poll source once when a rule fires (same path as Run now)
+- Never-run / trigger-only poll schedule mode: no APScheduler interval/cron tick; only Run now or Trigger poll
+- Expanded maths functions in field/action expressions (e.g. `trunc`, and further helpers beyond today’s `abs` / `round` / `min` / `max`)
 - Mandatory webhook secrets in production (operator guidance only today)
 - Multi-role auth (admin vs viewer)
 - Migrations (Alembic or equivalent)
@@ -43,6 +47,8 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 A self-hosted, single-process Python application that acts as a unified event hub and operational dashboard for personal or small-team infrastructure and projects.
 
 Users register **Sources**. Each source can emit events via verified webhooks or be actively polled on a configurable schedule. Incoming events are normalized, filtered by **Rules** (with conditions), and routed to one or more **Actions**. Shared **Fields** act as durable sinks (logbooks, values, text, toggles). A modular web dashboard provides status tiles, graphs, event logs, and configuration surfaces.
+
+A planned third source type — **dashboard actions** — will let authenticated dashboard controls emit named events into the same pipeline.
 
 The system prioritizes:
 
@@ -81,6 +87,8 @@ It is deliberately *not* a full observability platform (Prometheus/Grafana repla
 
 A registered origin of events. Examples: Flit PKM, trading bots, e-commerce/payment providers, Uptime Kuma, custom services, system metrics collectors, etc.
 
+Shipped `source_type` values: `webhook` | `poll`. Planned: `dashboard` (layout controls that POST authenticated events into the pipeline).
+
 A source owns:
 
 - Identity and metadata (name, slug, description, tags, icon)
@@ -102,7 +110,7 @@ A concrete occurrence. Normalized internal representation plus the original payl
 
 **Polling Schedule**  
 
-A timing/job row attached to a poll source: interval or cron, handler type (for example `http_get`, `system_snapshot`, `dns_resolve`, `backup_age`), typed handler parameters, timeout, and retry count. Each poll source has exactly one schedule. Jobs run in-process via APScheduler with jitter and consecutive-failure backoff.
+A timing/job row attached to a poll source: interval or cron (shipped), handler type (for example `http_get`, `system_snapshot`, `dns_resolve`, `backup_age`), typed handler parameters, timeout, and retry count. Each poll source has exactly one schedule. Jobs run in-process via APScheduler with jitter and consecutive-failure backoff. Planned: a **never** (trigger-only) mode that does not register an automatic tick — the poll stays enabled and runs only via Run now or a Trigger poll action.
 
 **Action**  
 
@@ -113,6 +121,8 @@ A side-effect attached to rules. Built-in types:
 - `notify` — thin convenience wrapper over HTTP for ntfy / Gotify / Discord (title/body templates)
 - `web_push` — browser push notification via VAPID
 - `local_script` — run a local command or argv list (gated by `PARA_SCOPE_ALLOW_LOCAL_ACTIONS`; optional path allowlist)
+
+Planned (not shipped): `trigger_poll` — when a rule fires, run a chosen poll source once (same execution path as Run now). Pairs with never-run schedules and dashboard-action sources; recursive trigger loops are an open design concern. Also planned: expanded maths helpers in expressions (e.g. `trunc` and similar) beyond the shipped `abs` / `round` / `min` / `max`.
 
 Actions are dispatched by rules. Rules support field-match conditions (exact, not, gt/lt, contains, regex) on dotted paths. List segment `*` means “any element” in conditions (correlated across fields that share the same list); when those conditions match, the same indexes apply to `*` in that rule’s action/template paths. Without starred conditions, `*` is the first element. Rate limiting and time windows are planned, not shipped.
 
@@ -213,7 +223,7 @@ Built-in actions cover field updates, HTTP egress, and Web Push. Custom actions 
 - Field state + FieldLogEntry (for logbooks)
 - AuditLog
 
-Schema evolution uses `Base.metadata.create_all()` plus explicit `ensure_schema` patches (no Alembic).
+Schema is models + `Base.metadata.create_all()` (no Alembic). Wipe the SQLite file when the model changes.
 
 **Dashboard (FastAPI + Jinja2 + HTMX + vanilla CSS)**  
 
@@ -330,6 +340,10 @@ Internal events can be treated like any other source so the same pipeline can al
 - Official packaging (PyPI entry point, standalone binary, etc.).
 - Richer plugin packaging vs keeping simple in-process registration.
 - Phase-2 / future poll integrations: Docker/runtime snapshots, SMART disk health, ZFS/Btrfs pool health, MQTT broker checks, and deeper Redis/RQ/Celery queue integrations.
+- Dashboard actions source type: widget or source-bound controls POST with auth/CSRF → ingest as events; reuse existing event types / rules / actions (no separate action engine).
+- Trigger poll action: config picks a target poll source; run once like Run now; avoid recursive trigger loops.
+- Never-run / trigger-only poll schedule: enabled but not registered on APScheduler; only Run now or Trigger poll.
+- Expanded maths in path/expression evaluation: additional functions such as `trunc` (and similar) on top of shipped `abs` / `round` / `min` / `max`.
 - Source templates / quick-add for common monitors.
 - Simple backup/export and event retention UI.
 - Test / dry-run of rules.
