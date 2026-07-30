@@ -307,6 +307,7 @@ def test_http_field_advanced_and_auth_metadata():
     assert by_name["retry_count"]["default"] == 2
     assert by_name["timeout_seconds"]["advanced"] is False
     assert by_name["event_type"]["advanced"] is True
+    assert by_name["event_type"]["label"] == "Success event type"
     assert by_name["request_method"]["param_key"] == "method"
     assert by_name["request_method"]["options"] == [("GET", "GET"), ("HEAD", "HEAD")]
     assert by_name["expected_status"]["parse_as"] == "int"
@@ -541,6 +542,30 @@ def test_run_schedule_emits_always_when_present(db, source):
         assert always.normalized_data["_poll"]["trigger"] == "always"
     finally:
         s2.close()
+
+
+def test_resolve_poll_event_type_casefold(db, source):
+    from app.pollers import _resolve_poll_event_type
+    from app.models import EventTypeRecord
+
+    db.add(EventTypeRecord(source_id=source.id, name="status.ok"))
+    db.commit()
+    schedule = _make_schedule(db, source, handler_params={"event_type": "Status.OK"})
+    et = _resolve_poll_event_type(db, schedule, source, "on_success")
+    assert et is not None
+    assert et.name == "status.ok"
+
+    always = _resolve_poll_event_type(
+        db, schedule, source, "on_success", type_name="ALWAYS",
+    )
+    assert always is None
+    db.add(EventTypeRecord(source_id=source.id, name="always"))
+    db.commit()
+    always = _resolve_poll_event_type(
+        db, schedule, source, "on_success", type_name="ALWAYS",
+    )
+    assert always is not None
+    assert always.name == "always"
 
 
 def test_run_schedule_skips_always_when_absent(db, source):

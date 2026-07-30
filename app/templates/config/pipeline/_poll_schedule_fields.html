@@ -79,18 +79,12 @@
 {% endmacro %}
 
 <label class="stack">
-  <span class="field-label">
-    Poll category
-    <button type="button" class="field-tip" tabindex="0"
-            aria-label="About poll category"
-            data-tip="Choose the kind of thing you want to check first. Categories narrow the subtype list and explain the expected target shape.">?</button>
-  </span>
+  Poll category
   <select name="poll_category" class="input" id="poll-category">
     {% for category in poller_categories %}
       <option value="{{ category.slug }}" {% if category.slug == selected_category %}selected{% endif %}>{{ category.label }}</option>
     {% endfor %}
   </select>
-  <span class="text-muted">Pick the broad target first: HTTP endpoint, host, network path, filesystem, local app, or an external service.</span>
 </label>
 
 <div class="stack">
@@ -105,12 +99,7 @@
 </div>
 
 <label class="stack">
-  <span class="field-label">
-    Poll subtype
-    <button type="button" class="field-tip" tabindex="0"
-            aria-label="About poll subtype"
-            data-tip="The subtype is the exact poller implementation. Pick the concrete check you want to run inside the selected category.">?</button>
-  </span>
+  Poll subtype
   <select name="handler_type" class="input" id="handler-type">
     {% for spec in poller_specs %}
       <option value="{{ spec.handler_type }}"
@@ -120,7 +109,6 @@
       </option>
     {% endfor %}
   </select>
-  <span class="text-muted">Choose the concrete check next. The fields below change to match that subtype.</span>
 </label>
 
 {% for spec in poller_specs %}

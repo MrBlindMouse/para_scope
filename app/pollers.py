@@ -28,7 +28,7 @@ from sqlalchemy import create_engine, text
 from app.database import SQLALCHEMY_DATABASE_URL, SessionLocal
 from app.fields import get_by_path
 from app.models import Event, EventTypeRecord, PollingSchedule, Secret, Source
-from app.pipeline import evaluate_and_dispatch
+from app.pipeline import evaluate_and_dispatch, normalize_event_type
 from app.security import decrypt_secret
 
 logger = logging.getLogger("para_scope.poller")
@@ -39,27 +39,27 @@ _POLLER_SPECS: dict[str, dict[str, Any]] = {}
 POLLER_CATEGORY_META = {
     "url": {
         "label": "HTTP / APIs",
-        "help_text": "Use for direct HTTP endpoint checks, generic API polling, and simple URL status checks.",
+        "help_text": "Direct HTTP endpoint checks, generic API polling, and simple URL status checks.",
     },
     "system": {
         "label": "Host / OS",
-        "help_text": "Use for host-level snapshots and operating system checks on the Para-Scope machine.",
+        "help_text": "Host-level snapshots and operating system checks on the Para-Scope machine.",
     },
     "connectivity": {
         "label": "Network / DNS / TLS",
-        "help_text": "Use for reachability, name resolution, and certificate checks between hosts.",
+        "help_text": "Reachability, name resolution, and certificate checks between hosts.",
     },
     "storage": {
         "label": "Files / Backups",
-        "help_text": "Use for filesystem capacity and backup freshness on local or mounted paths.",
+        "help_text": "Filesystem capacity and backup freshness on local or mounted paths.",
     },
     "application": {
         "label": "Local Apps / Data",
-        "help_text": "Use for app-specific checks on local repos, logs, databases, and self-hosted services.",
+        "help_text": "App-specific checks on local repos, logs, databases, and self-hosted services.",
     },
     "external": {
         "label": "External Services",
-        "help_text": "Use for non-HTTP internet integrations such as feeds, IMAP mailboxes, and domain registration data.",
+        "help_text": "Non-HTTP internet integrations such as feeds, IMAP mailboxes, and domain registration data.",
     },
 }
 
@@ -1053,7 +1053,6 @@ _HTTP_TIMEOUT_FIELD = _field(
     input_type="number",
     store="timeout",
     default=20,
-    help_text="Seconds to wait before giving up.",
 )
 _HTTP_RETRY_FIELD = _field(
     "retry_count",
@@ -1062,7 +1061,6 @@ _HTTP_RETRY_FIELD = _field(
     input_type="number",
     store="retry",
     default=2,
-    help_text="Extra tries after a failure.",
 )
 _HTTP_BODY_FIELD = _field(
     "body",
@@ -1072,22 +1070,21 @@ _HTTP_BODY_FIELD = _field(
     default={},
     rows=4,
     advanced=True,
-    help_text="JSON body for POST, PUT, and PATCH requests.",
 )
 _HTTP_ADVANCED_FIELDS = [
     _field(
         "event_type",
-        "Success event name",
+        "Success event type",
         placeholder="on_success",
         advanced=True,
-        help_text="Optional custom event type for successful runs.",
+        help_text="Custom event type for successful runs.",
     ),
     _field(
         "json_path",
         "JSON path",
         placeholder="payload.items.0",
         advanced=True,
-        help_text="Optional dotted path inside the JSON response.",
+        help_text="Dotted path inside the JSON response.",
     ),
     _field(
         "expected_status",
@@ -1096,7 +1093,7 @@ _HTTP_ADVANCED_FIELDS = [
         parse_as="int",
         advanced=True,
         placeholder="200",
-        help_text="Optional exact HTTP status to require for a successful run.",
+        help_text="Exact HTTP status to require for a successful run.",
     ),
     _field(
         "headers",
@@ -1106,7 +1103,6 @@ _HTTP_ADVANCED_FIELDS = [
         default={},
         rows=3,
         advanced=True,
-        help_text="Optional request headers as a JSON object.",
     ),
     _field(
         "query",
@@ -1116,7 +1112,6 @@ _HTTP_ADVANCED_FIELDS = [
         default={},
         rows=3,
         advanced=True,
-        help_text="Optional query string parameters as a JSON object.",
     ),
     _field(
         "auth_mode",
@@ -1680,22 +1675,29 @@ def _resolve_poll_event_type(db, schedule, source, outcome: str, *, type_name: s
     Success uses handler_params.event_type when set, else falls back to on_success.
     Failure uses on_failure.
     When type_name is set (e.g. 'always'), look up that name only — return None if missing.
+    Matching is casefold-normalized.
     """
     if type_name:
-        return db.query(EventTypeRecord).filter(
+        want = normalize_event_type(type_name)
+        for et in db.query(EventTypeRecord).filter(
             EventTypeRecord.source_id == source.id,
-            EventTypeRecord.name == type_name,
-        ).first()
+        ).all():
+            if normalize_event_type(et.name) == want:
+                return et
+        return None
 
     params = schedule.handler_params or {}
     if outcome == "on_failure":
         et_name = "on_failure"
     else:
-        et_name = (params.get("event_type") or "").strip() or "on_success"
-    return db.query(EventTypeRecord).filter(
+        et_name = normalize_event_type(params.get("event_type")) or "on_success"
+    want = normalize_event_type(et_name)
+    for et in db.query(EventTypeRecord).filter(
         EventTypeRecord.source_id == source.id,
-        EventTypeRecord.name == et_name,
-    ).first()
+    ).all():
+        if normalize_event_type(et.name) == want:
+            return et
+    return None
 
 
 def _create_poll_event(

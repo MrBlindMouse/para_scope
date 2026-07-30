@@ -86,13 +86,13 @@
 
         <div class="pipeline-chain__events">
           <div class="pipeline-chain__section-head flex items-center gap">
-            <span class="pipeline-node__label">Events</span>
+            <span class="pipeline-node__label">Event Types</span>
             <button type="button"
                     class="btn btn--sm"
                     hx-get="/config/pipeline/source/{{ source.id }}/partials/event-form"
                     hx-target="#pipeline-dialog"
                     hx-swap="innerHTML">
-              Add Event
+              Add Event Type
             </button>
           </div>
           {% if event_types %}
@@ -146,7 +146,7 @@
                             hx-post="/config/event-type/{{ et.id }}/delete"
                             hx-target="#source-chain-{{ source.id }}"
                             hx-swap="outerHTML"
-                            hx-confirm="Delete event {{ et.name }}?">
+                            hx-confirm="Delete event type {{ et.name }}?">
                         {% include 'components/csrf.html' %}
                         <button type="submit" class="btn btn--sm btn--negative pipeline-action-menu__item">Delete</button>
                       </form>
@@ -157,7 +157,7 @@
               {% endfor %}
             </ul>
           {% else %}
-            <p class="text-muted">No events for this source.</p>
+            <p class="text-muted">No event types for this source.</p>
           {% endif %}
         </div>
 

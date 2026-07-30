@@ -38,7 +38,12 @@
     </select>
   </label>
   {% if st == 'webhook' %}
-    <p class="text-muted">Webhook path: <code>/webhook/{{ source.slug }}</code></p>
+    <p class="text-muted">
+      Senders post to this site’s address + <code>/webhook/{{ source.slug }}</code>.
+    </p>
+    <p class="alert alert--warning" role="note">
+      Changing the source name re-derives this path. Update your senders if the slug changes.
+    </p>
   {% endif %}
 
   {% set webhook_provider = (source.config or {}).get('webhook_provider') or 'generic_hmac' %}
@@ -49,12 +54,7 @@
   <fieldset class="stack" id="schedule-fields" {% if st != 'poll' %}style="display:none"{% endif %}>
     <legend>Schedule</legend>
     <label class="stack">
-      <span class="field-label">
-        Schedule type
-        <button type="button" class="field-tip" tabindex="0"
-                aria-label="About schedule type"
-                data-tip="Interval: every N seconds. Cron: a schedule like 0 * * * * (every hour).">?</button>
-      </span>
+      Schedule type
       <select name="schedule_type" class="input" id="sched-type">
         <option value="interval" {% if sched_type != 'cron' %}selected{% endif %}>Interval</option>
         <option value="cron" {% if sched_type == 'cron' %}selected{% endif %}>Cron Expression</option>

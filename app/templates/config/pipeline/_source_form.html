@@ -13,7 +13,12 @@
     <p class="alert alert--danger" role="alert">{{ error }}</p>
   {% endif %}
   <label class="stack">
-    Name *
+    <span class="field-label">
+      Name *
+      <button type="button" class="field-tip" tabindex="0"
+              aria-label="About source name"
+              data-tip="Also sets the address: &quot;Warehouse sensors&quot; receives at /webhook/warehouse-sensors on this site.">?</button>
+    </span>
     <input name="name" type="text" class="input" placeholder="Warehouse sensors" value="{{ source.name or '' }}" required autofocus>
   </label>
   <label class="stack">
@@ -42,12 +47,7 @@
   <fieldset class="stack" id="schedule-fields" {% if source.source_type != 'poll' %}style="display:none"{% endif %}>
     <legend>Initial schedule</legend>
     <label class="stack">
-      <span class="field-label">
-        Schedule type
-        <button type="button" class="field-tip" tabindex="0"
-                aria-label="About schedule type"
-                data-tip="Interval: every N seconds. Cron: a schedule like 0 * * * * (every hour).">?</button>
-      </span>
+      Schedule type
       <select name="schedule_type" class="input" id="sched-type">
         <option value="interval" {% if sched_type != 'cron' %}selected{% endif %}>Interval</option>
         <option value="cron" {% if sched_type == 'cron' %}selected{% endif %}>Cron Expression</option>

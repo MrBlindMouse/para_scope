@@ -7,54 +7,42 @@
       hx-swap="innerHTML">
   {% include 'components/csrf.html' %}
   <header class="dialog__header flex items-center gap">
-    <h2 class="dialog__title">{% if is_edit %}Edit Event{% else %}Add Event{% endif %} — {{ source.name }}</h2>
+    <h2 class="dialog__title">{% if is_edit %}Edit Event Type{% else %}Add Event Type{% endif %} — {{ source.name }}</h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
   {% if error %}
     <p class="alert alert--danger" role="alert">{{ error }}</p>
   {% endif %}
 
-  {% if source.source_type == "poll" %}
-  <p class="text-muted">
-    Polls create success and failure events automatically.
-    Name one <code>always</code> to run on every check.
-    Custom names only fire if the schedule’s event name matches.
-  </p>
-  {% else %}
-  <p class="text-muted">
-    Once you add event names, senders must include a matching type (header or body field).
-    Add <code>always</code> to also run on every delivery.
-  </p>
-  {% endif %}
-
   <label class="stack">
     <span class="field-label">
-      Name *
+      Event type *
       <button type="button" class="field-tip" tabindex="0"
-              aria-label="About event name"
+              aria-label="About event type"
               {% if source.source_type == "poll" %}
-              data-tip="Built-in: on_success, on_failure. Optional: always (every run). Custom names need a matching schedule setting."
+              data-tip="Built-in: on_success, on_failure. Optional: always (every run). Custom types need a matching schedule setting. Stored lowercase."
               {% else %}
-              data-tip="Name the sender uses (e.g. status.changed). Must match what the sender includes once types exist. Optional: always."
+              data-tip="Read from X-Event-Type (or X-GitHub-Event), else body event_type, else body type. Stored lowercase; case variants match. Optional: always. Once any producer type exists, non-matching deliveries are rejected."
               {% endif %}
       >?</button>
     </span>
     <input name="name" type="text" class="input"
            value="{{ event.name if event is defined and event else '' }}"
            placeholder="{% if source.source_type == 'poll' %}always{% else %}status.changed{% endif %}"
+           maxlength="200"
            required autofocus>
   </label>
   <label class="stack">
     <span class="field-label">
       Description
       <button type="button" class="field-tip" tabindex="0"
-              aria-label="About event description"
+              aria-label="About event type description"
               data-tip="Optional note for you. Shown on the pipeline; senders don’t see it.">?</button>
     </span>
     <textarea name="description" rows="2" class="input"
               placeholder="{% if source.source_type == 'poll' %}Poll completed successfully{% else %}Fired when status changes{% endif %}">{{ event.description if event is defined and event else '' }}</textarea>
   </label>
   <div class="flex items-center gap">
-    <button type="submit" class="btn btn--primary">{% if is_edit %}Save Event{% else %}Create Event{% endif %}</button>
+    <button type="submit" class="btn btn--primary">{% if is_edit %}Save Event Type{% else %}Create Event Type{% endif %}</button>
   </div>
 </form>

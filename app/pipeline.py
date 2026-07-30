@@ -8,6 +8,21 @@ from app.models import Event, EventTypeRecord, Rule, ActionInstance
 
 logger = logging.getLogger("para_scope.pipeline")
 
+# Matches EventTypeRecord.name Column(String(200)).
+EVENT_TYPE_MAX_LEN = 200
+
+
+def normalize_event_type(value) -> str:
+    """Canonical event type: stripped + casefold, punctuation preserved.
+
+    Empty / whitespace-only input becomes ``\"\"``. Used for matching,
+    storage, and poll success-type lookup so ``Order.Paid`` matches
+    ``order.paid``.
+    """
+    if value is None:
+        return ""
+    return str(value).strip().casefold()
+
 
 def evaluate_rules(db, event):
     """Find all enabled rules that match the given event.

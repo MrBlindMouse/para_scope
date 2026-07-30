@@ -16,6 +16,7 @@ from app.models import (
     EventTypeRecord,
 )
 from app.ingest import ingest_event
+from app.pipeline import normalize_event_type
 
 from app import webctx as ctx
 from app.webhook_verifiers import verify_webhook_request, WebhookAuthError
@@ -85,56 +86,78 @@ async def handle_webhook(
     if provider == "discord" and isinstance(payload, dict) and payload.get("type") == 1:
         return JSONResponse({"type": 1}, status_code=200)
 
-    # Resolve event type: header preferred, then payload fields.
+    # Resolve event type: explicit headers preferred, then payload fields.
     # `always` is an optional side-emission (like pollers), not a producer type.
-    et_name = (request.headers.get("x-event-type") or "").strip()
+    et_name = normalize_event_type(request.headers.get("x-event-type"))
+    if not et_name:
+        et_name = normalize_event_type(request.headers.get("x-github-event"))
     if not et_name and isinstance(payload, dict):
         if provider == "discord":
             raw_type = payload.get("type")
             mapped = _DISCORD_INTERACTION_TYPES.get(raw_type)
             if mapped:
-                et_name = mapped
+                et_name = normalize_event_type(mapped)
             elif raw_type is not None:
-                et_name = str(raw_type).strip()
+                et_name = normalize_event_type(raw_type)
         if not et_name:
-            et_name = str(payload.get("event_type") or payload.get("type") or "").strip()
+            et_name = normalize_event_type(
+                payload.get("event_type") or payload.get("type")
+            )
 
     registered_types = db.query(EventTypeRecord).filter(
         EventTypeRecord.source_id == source.id
     ).all()
-    always_et = next((et for et in registered_types if et.name == "always"), None)
-    match_types = [et for et in registered_types if et.name != "always"]
+    always_et = next(
+        (et for et in registered_types if normalize_event_type(et.name) == "always"),
+        None,
+    )
+    match_types = [
+        et for et in registered_types if normalize_event_type(et.name) != "always"
+    ]
     event_type = None
 
     if match_types:
         # Source has producer-facing types — require a matching event type
         if not et_name:
-            names = sorted({et.name for et in match_types})
+            names = sorted({normalize_event_type(et.name) for et in match_types})
             return JSONResponse(
                 {
                     "error": "Event type required",
-                    "hint": "Send X-Event-Type header or event_type/type in JSON body",
+                    "hint": (
+                        "Send X-Event-Type header (or X-GitHub-Event), "
+                        "or event_type/type in JSON body"
+                    ),
                     "registered": names,
                 },
                 status_code=400,
             )
-        event_type = next((et for et in match_types if et.name == et_name), None)
+        event_type = next(
+            (et for et in match_types if normalize_event_type(et.name) == et_name),
+            None,
+        )
         if not event_type:
             return JSONResponse(
                 {"error": f"Event type '{et_name}' not found for source"},
                 status_code=400,
             )
     elif et_name:
-        # Only `always` (or empty) registered — attach if the named type exists
-        event_type = next((et for et in registered_types if et.name == et_name), None)
-        if not event_type:
-            return JSONResponse(
-                {"error": f"Event type '{et_name}' not found for source"},
-                status_code=400,
-            )
+        # No producer types (empty or only `always`): attach only if the
+        # declared type exists; otherwise accept untyped so discovery works
+        # when payloads carry a generic top-level `type` field.
+        event_type = next(
+            (et for et in registered_types if normalize_event_type(et.name) == et_name),
+            None,
+        )
+        if event_type is None:
+            et_name = ""
 
     correlation_id = (request.headers.get("x-correlation-id") or "").strip() or str(uuid.uuid4())
     raw_truncated = raw_body.decode("utf-8", errors="replace")[:65536]
+
+    # Canonical producer type for metadata (null when untyped).
+    meta_event_type = (
+        normalize_event_type(event_type.name) if event_type is not None else None
+    )
 
     webhook_meta = {
         "slug": source.slug,
@@ -144,7 +167,7 @@ async def handle_webhook(
         "body_bytes": len(raw_body),
         "client": request.client.host if request.client else None,
         "user_agent": ((request.headers.get("user-agent") or "").strip() or None),
-        "event_type": et_name or None,
+        "event_type": meta_event_type,
         "correlation_id": correlation_id,
         "signed": bool(verified.signed),
         "timestamp": datetime.now(timezone.utc).isoformat(),

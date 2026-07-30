@@ -22,7 +22,7 @@
       Type
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About field types"
-              data-tip="Logbook: growing list. Value: number. Text: string. Toggle: on/off. Data: JSON object. Type can’t change later.">?</button>
+              data-tip="Type can’t change after create.">?</button>
     </span>
     <select name="field_type" class="input" id="field-type-select" autofocus
             {% if is_edit %}disabled{% endif %}>
@@ -32,7 +32,6 @@
     </select>
     {% if is_edit %}
       <input type="hidden" name="field_type" value="{{ field.field_type }}">
-      <span class="text-muted">Type cannot be changed after create.</span>
     {% endif %}
   </label>
 

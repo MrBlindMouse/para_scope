@@ -17,6 +17,11 @@
     background-color: var(--color-positive-bg);
   }
 
+  .alert--warning {
+    color: var(--color-warning);
+    background-color: var(--color-warning-bg);
+  }
+
   .badge {
     display: inline-block;
     padding: 0.15em 0.5em;

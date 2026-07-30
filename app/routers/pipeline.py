@@ -27,10 +27,59 @@ from app.scheduler import add_or_update_job, remove_job
 from app.pollers import (
     get_poller_categories, get_poller_category, get_poller_specs, run_schedule,
 )
+from app.pipeline import EVENT_TYPE_MAX_LEN, normalize_event_type
 
 from app import webctx as ctx
 
 router = APIRouter()
+
+
+def _validate_event_type_name(
+    db: Session,
+    source_id: int,
+    raw_name: str,
+    *,
+    exclude_id: int | None = None,
+) -> tuple[str | None, str | None]:
+    """Return (canonical_name, error). error is set when invalid or duplicate."""
+    name = normalize_event_type(raw_name)
+    if not name:
+        return None, "Event type is required"
+    if len(name) > EVENT_TYPE_MAX_LEN:
+        return None, f"Event type must be at most {EVENT_TYPE_MAX_LEN} characters"
+    q = db.query(EventTypeRecord).filter(EventTypeRecord.source_id == source_id)
+    if exclude_id is not None:
+        q = q.filter(EventTypeRecord.id != exclude_id)
+    for et in q.all():
+        if normalize_event_type(et.name) == name:
+            return None, f"Event type '{name}' already exists on this source"
+    return name, None
+
+
+def _ensure_event_type(
+    db: Session,
+    source_id: int,
+    name: str,
+    description: str,
+    existing_names: set[str] | None = None,
+) -> None:
+    """Add EventTypeRecord if a casefold-equal name is not already present."""
+    want = normalize_event_type(name)
+    if existing_names is None:
+        existing_names = {
+            normalize_event_type(et.name)
+            for et in db.query(EventTypeRecord).filter(
+                EventTypeRecord.source_id == source_id
+            ).all()
+        }
+    if want in existing_names:
+        return
+    db.add(EventTypeRecord(
+        source_id=source_id,
+        name=want,
+        description=description,
+    ))
+    existing_names.add(want)
 
 
 def _poller_template_context(source: Source | None = None, schedule: PollingSchedule | None = None) -> dict:
@@ -780,9 +829,11 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
             ("on_success", "Poll completed successfully"),
             ("on_failure", "Poll failed (HTTP error or timeout)"),
         ):
-            db.add(EventTypeRecord(
-                source_id=source.id, name=et_name, description=et_desc,
-            ))
+            _ensure_event_type(db, source.id, et_name, et_desc)
+    elif source_type == "webhook":
+        _ensure_event_type(
+            db, source.id, "always", "Fires on every accepted webhook delivery",
+        )
 
     schedule = None
     if schedule_kwargs:
@@ -931,16 +982,16 @@ async def pipeline_create_event(request: Request, source_id: int, db: Session = 
         return ctx._pipeline_redirect(error="Source not found")
 
     form = await request.form()
-    name = (form.get("name") or "").strip()
     description = (form.get("description") or "").strip()
-    if not name:
+    name, name_error = _validate_event_type_name(db, source_id, form.get("name") or "")
+    if name_error:
         if ctx._is_htmx(request):
             return ctx.templates.TemplateResponse(
                 request,
                 "config/pipeline/_event_form.html",
-                _build_event_dialog_context(source=source, form=form, error="Name is required"),
+                _build_event_dialog_context(source=source, form=form, error=name_error),
             )
-        return ctx._pipeline_redirect(error="Name is required", request=request)
+        return ctx._pipeline_redirect(error=name_error, request=request)
 
     et = EventTypeRecord(source_id=source_id, name=name, description=description)
     db.add(et)
@@ -952,7 +1003,7 @@ async def pipeline_create_event(request: Request, source_id: int, db: Session = 
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success=f"Event '{name}' created")
+    return ctx._pipeline_redirect(success=f"Event type '{name}' created")
 
 
 # route: /config/pipeline/event/{et_id}
@@ -965,16 +1016,18 @@ async def pipeline_update_event(request: Request, et_id: int, db: Session = Depe
         return ctx._pipeline_redirect(error="Event not found")
     source = db.query(Source).filter(Source.id == et.source_id).first()
     form = await request.form()
-    name = (form.get("name") or "").strip()
     description = (form.get("description") or "").strip()
-    if not name:
+    name, name_error = _validate_event_type_name(
+        db, et.source_id, form.get("name") or "", exclude_id=et.id,
+    )
+    if name_error:
         if ctx._is_htmx(request) and source:
             return ctx.templates.TemplateResponse(
                 request,
                 "config/pipeline/_event_form.html",
-                _build_event_dialog_context(source=source, event=et, form=form, error="Name is required"),
+                _build_event_dialog_context(source=source, event=et, form=form, error=name_error),
             )
-        return ctx._pipeline_redirect(error="Name is required", request=request)
+        return ctx._pipeline_redirect(error=name_error, request=request)
     et.name = name
     et.description = description
     db.commit()
@@ -984,7 +1037,7 @@ async def pipeline_update_event(request: Request, et_id: int, db: Session = Depe
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success=f"Event '{name}' updated")
+    return ctx._pipeline_redirect(success=f"Event type '{name}' updated")
 
 
 # route: /config/pipeline/source/{source_id}/partials/rule-form
@@ -1516,6 +1569,8 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
     paypal_client_id = (form.get("paypal_client_id") or "").strip()
     paypal_environment = (form.get("paypal_environment") or "sandbox").strip() or "sandbox"
     poll_category = (form.get("poll_category") or "url").strip()
+    previous_slug = source.slug
+    previous_type = source.source_type
 
     if not name:
         return _err("Name is required")
@@ -1585,19 +1640,23 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
             db.add(secret)
             db.flush()
             source.webhook_secret_id = secret.id
+        if previous_type != "webhook":
+            _ensure_event_type(
+                db, source.id, "always",
+                "Fires on every accepted webhook delivery",
+            )
     elif source_type == "poll":
         existing_type_names = {
-            et.name
+            normalize_event_type(et.name)
             for et in db.query(EventTypeRecord).filter(EventTypeRecord.source_id == source.id).all()
         }
         for et_name, et_desc in (
             ("on_success", "Poll completed successfully"),
             ("on_failure", "Poll failed (HTTP error or timeout)"),
         ):
-            if et_name not in existing_type_names:
-                db.add(EventTypeRecord(
-                    source_id=source.id, name=et_name, description=et_desc,
-                ))
+            _ensure_event_type(
+                db, source.id, et_name, et_desc, existing_names=existing_type_names,
+            )
 
     schedule = None
     if schedule_kwargs:
@@ -1643,7 +1702,13 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
             db.delete(existing)
 
     db.commit()
-    ctx._audit_log(db, request, "source.update", resource_type="source", resource_id=source.id, details={"name": name})
+    audit_details = {"name": name, "slug": source.slug}
+    if previous_slug != source.slug:
+        audit_details["previous_slug"] = previous_slug
+    ctx._audit_log(
+        db, request, "source.update",
+        resource_type="source", resource_id=source.id, details=audit_details,
+    )
 
     if schedule:
         db.refresh(schedule)

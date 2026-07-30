@@ -402,12 +402,18 @@ class TestSourcesCRUD:
         )
         assert resp.status_code == 303
         from app.database import get_db
+        from app.models import EventTypeRecord
         db = next(get_db())
         try:
             src = db.query(Source).filter(Source.name == "My API").first()
             assert src is not None
             assert src.slug == "my_api"
             assert src.source_type == "webhook"
+            names = {
+                et.name
+                for et in db.query(EventTypeRecord).filter(EventTypeRecord.source_id == src.id)
+            }
+            assert names == {"always"}
         finally:
             db.close()
 
@@ -499,7 +505,7 @@ class TestSourcesCRUD:
         assert 'data-webhook-provider="discord"' in resp.text
         assert 'data-webhook-provider="paypal"' in resp.text
         assert "Application public key" in resp.text
-        assert "Webhook path" in resp.text
+        assert "/webhook/" in resp.text
         assert 'hx-target="#pipeline-dialog"' in resp.text
         assert 'hx-swap="innerHTML"' in resp.text
 
@@ -637,7 +643,7 @@ class TestEventTypes:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert "error" in resp.headers.get("location", "").lower() or "Name" in resp.headers.get("location", "")
+        assert "error" in resp.headers.get("location", "").lower() or "Event" in resp.headers.get("location", "")
 
     def test_htmx_event_validation_stays_in_dialog(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="ET HTMX", slug="et-htmx")
@@ -649,9 +655,10 @@ class TestEventTypes:
         )
         assert resp.status_code == 200
         assert resp.headers.get("HX-Redirect") is None
-        assert "Name is required" in resp.text
+        assert "Event type is required" in resp.text
         assert "Keep me" in resp.text
         assert 'hx-target="#pipeline-dialog"' in resp.text
+        assert "Event type *" in resp.text
 
     def test_pipeline_create_event(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="ET Pipeline", slug="et-pipeline")
@@ -728,6 +735,130 @@ class TestEventTypes:
             assert names == {"on_success", "on_failure"}
             sched = db.query(PollingSchedule).filter(PollingSchedule.source_id == src.id).first()
             assert (sched.handler_params or {}).get("event_type") == "on_success"
+        finally:
+            db.close()
+
+    def test_event_type_normalized_and_duplicates_rejected(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="ET Norm", slug="et-norm")
+        resp = authenticated_client.post(
+            f"/config/pipeline/source/{sid}/events",
+            data={"name": "Order.Paid", "description": ""},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        from app.database import get_db
+        from app.models import Rule
+        db = next(get_db())
+        try:
+            et = db.query(EventTypeRecord).filter(
+                EventTypeRecord.source_id == sid,
+                EventTypeRecord.name == "order.paid",
+            ).first()
+            assert et is not None
+            et_id = et.id
+            rule = Rule(
+                source_id=sid, description="bound",
+                event_type_ids=[et_id], action_ids=[], conditions={},
+            )
+            db.add(rule)
+            db.commit()
+        finally:
+            db.close()
+
+        dup = authenticated_client.post(
+            f"/config/pipeline/source/{sid}/events",
+            data={"name": "ORDER.PAID", "description": ""},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert dup.status_code == 200
+        assert "already exists" in dup.text
+
+        rename = authenticated_client.post(
+            f"/config/pipeline/event/{et_id}",
+            data={"name": "Order.Shipped", "description": "shipped"},
+            follow_redirects=False,
+        )
+        assert rename.status_code == 303
+        db = next(get_db())
+        try:
+            et = db.query(EventTypeRecord).filter(EventTypeRecord.id == et_id).first()
+            assert et.name == "order.shipped"
+            rule = db.query(Rule).filter(Rule.source_id == sid).first()
+            assert et_id in (rule.event_type_ids or [])
+        finally:
+            db.close()
+
+    def test_event_type_rejects_too_long(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="ET Long", slug="et-long")
+        resp = authenticated_client.post(
+            f"/config/pipeline/source/{sid}/events",
+            data={"name": "x" * 201, "description": ""},
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 200
+        assert "at most 200" in resp.text
+
+    def test_poll_to_webhook_seeds_always(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="Convert Me", source_type="poll")
+        resp = authenticated_client.post(
+            f"/config/source/{sid}/edit",
+            data={
+                "name": "Convert Me",
+                "source_type": "webhook",
+                "description": "",
+                "webhook_provider": "generic_hmac",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        from app.database import get_db
+        db = next(get_db())
+        try:
+            names = {
+                et.name
+                for et in db.query(EventTypeRecord).filter(EventTypeRecord.source_id == sid)
+            }
+            assert "always" in names
+            assert "on_success" in names
+        finally:
+            db.close()
+
+    def test_edit_source_warns_about_slug_change(self, authenticated_client):
+        sid, slug = _create_source(authenticated_client, name="Rename Warn")
+        resp = authenticated_client.get(f"/config/pipeline/source/{sid}/partials/edit-form")
+        assert resp.status_code == 200
+        assert "/webhook/" in resp.text
+        assert "re-derives this path" in resp.text
+        assert "alert--warning" in resp.text
+
+        authenticated_client.post(
+            f"/config/source/{sid}/edit",
+            data={
+                "name": "Rename Warn New",
+                "source_type": "webhook",
+                "description": "",
+                "webhook_provider": "generic_hmac",
+            },
+            follow_redirects=False,
+        )
+        from app.database import get_db
+        from app.models import AuditLog
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            assert src.slug != slug
+            audit = (
+                db.query(AuditLog)
+                .filter(AuditLog.action == "source.update", AuditLog.resource_id == sid)
+                .order_by(AuditLog.id.desc())
+                .first()
+            )
+            assert audit is not None
+            details = audit.details or {}
+            assert details.get("previous_slug") == slug
+            assert details.get("slug") == src.slug
         finally:
             db.close()
 
@@ -1557,6 +1688,9 @@ class TestDashboardLayout:
         assert b'name="widget_type"' not in resp.content
         assert b'data-widget-toggle' in resp.content
         assert b'dashboard-widget-editor__toggle' in resp.content
+        assert b'id="widgets-error"' in resp.content
+        assert b"firstWidgetProblem" in resp.content
+        assert b'form.addEventListener("submit"' in resp.content
 
     def test_save_dashboard_layout(self, authenticated_client):
         widgets = [
@@ -1780,10 +1914,9 @@ class TestDashboardLayout:
             data={"widgets": json.dumps(widgets)},
             follow_redirects=False,
         )
-        assert resp.status_code == 303
-
-        follow = authenticated_client.get(resp.headers["location"])
-        assert b"valid IANA timezone" in follow.content
+        assert resp.status_code == 400
+        assert b"Broken Clock" in resp.content
+        assert b"valid IANA timezone" in resp.content
 
     def test_clock_partial_renders_world_clocks(self, authenticated_client):
         from app.database import get_db
@@ -1922,9 +2055,9 @@ class TestDashboardLayout:
             data={"widgets": json.dumps(widgets)},
             follow_redirects=False,
         )
-        assert resp.status_code == 303
-        follow = authenticated_client.get(resp.headers["location"])
-        assert b"layout" in follow.content
+        assert resp.status_code == 400
+        assert b"Bad Layout" in resp.content
+        assert b"layout" in resp.content.lower()
 
 
 class TestStyleConfig:
@@ -2891,26 +3024,68 @@ class TestWidgetTransforms:
 
     def test_save_dashboard_rejects_toggle_wrong_field(self, authenticated_client):
         from app.database import get_db
-        from app.models import Field
+        from app.models import Field, DashboardLayout
+        from app.dashboard_layout import parse_layout_config
 
         db = next(get_db())
         try:
-            counter = Field(name="Bad Toggle Counter", slug="c-bad-tog", field_type="value", config={}, state={"value": 0})
-            db.add(counter)
+            if not db.query(Field).filter(Field.slug == "c-bad-tog").first():
+                db.add(Field(
+                    name="Bad Toggle Counter", slug="c-bad-tog",
+                    field_type="value", config={}, state={"value": 0},
+                ))
+            keep_payload = {
+                "widgets": [{
+                    "type": "system", "display": "source_health", "title": "Keep Me",
+                }],
+            }
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            if layout:
+                layout.layout_config = keep_payload
+            else:
+                layout = DashboardLayout(layout_config=keep_payload)
+                db.add(layout)
             db.commit()
+            keep_id = layout.id
         finally:
             db.close()
         widgets = [{
-            "type": "display", "display": "toggle", "title": "Bad",
+            "type": "display", "display": "toggle", "title": "Bad Toggle Draft",
             "config": {"field_slug": "c-bad-tog", "style": "led"},
         }]
         resp = authenticated_client.post(
             "/config/dashboard",
             data={"widgets": json.dumps(widgets)},
-            follow_redirects=True,
+            follow_redirects=False,
         )
-        assert resp.status_code == 200
-        assert b"must be one of" in resp.content or b"toggle" in resp.content.lower()
+        assert resp.status_code == 400
+        assert b"Bad Toggle Draft" in resp.content
+        assert b"compatible" in resp.content.lower() or b"toggle" in resp.content.lower()
+        assert b'id="widgets-error"' in resp.content
+
+        db = next(get_db())
+        try:
+            saved = db.query(DashboardLayout).filter(DashboardLayout.id == keep_id).first()
+            assert saved is not None
+            titles = [w.get("title") for w in parse_layout_config(saved.layout_config)["widgets"]]
+            assert "Keep Me" in titles
+            assert "Bad Toggle Draft" not in titles
+        finally:
+            db.close()
+
+    def test_save_dashboard_keeps_draft_on_missing_required_field(self, authenticated_client):
+        widgets = [{
+            "type": "display", "display": "toggle", "title": "Unfinished Toggle",
+            "config": {"style": "led"},
+        }]
+        resp = authenticated_client.post(
+            "/config/dashboard",
+            data={"widgets": json.dumps(widgets)},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 400
+        assert b"Unfinished Toggle" in resp.content
+        assert b"choose a field" in resp.content.lower()
 
     def test_toggle_style_in_fetch(self, authenticated_client):
         from app.database import get_db
@@ -3528,6 +3703,8 @@ class TestWebhookPipeline:
             assert wh["body_bytes"] > 0
             assert "correlation_id" in wh
             assert wh["timestamp"]
+            assert wh.get("event_type") is None
+            assert "always_event_id" in resp.json()
         finally:
             db.close()
 

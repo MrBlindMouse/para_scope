@@ -30,11 +30,11 @@
     <div class="card__header"><h2>Pipeline overview</h2></div>
     <div class="card__body stack">
       <p>Configure everything under <a href="/config/pipeline">Pipeline</a> as a chain per source:</p>
-      <p><strong>Source → Events → Rules → Actions</strong></p>
+      <p><strong>Source → Event Types → Rules → Actions</strong></p>
       <ol class="stack help__list help__list--ordered">
         <li><strong>Source</strong> — a webhook receiver or a poll that runs a typed poller on a schedule.</li>
-        <li><strong>Events</strong> — named types for that source (e.g. <code>status.changed</code>, <code>on_success</code>).</li>
-        <li><strong>Rules</strong> — which events (and optional conditions) should fire actions.</li>
+        <li><strong>Event types</strong> — named kinds for that source (e.g. <code>status.changed</code>, <code>on_success</code>, <code>always</code>).</li>
+        <li><strong>Rules</strong> — which event types (and optional conditions) should fire actions.</li>
         <li><strong>Actions</strong> — update a Field, notify (ntfy/Gotify/Discord), call a URL, send a browser notification, or (when enabled) run a local script when the rule matches.</li>
       </ol>
       <p class="text-muted">
@@ -330,13 +330,60 @@
     <div class="card__body stack">
       <p>Send events to your source’s webhook URL. Create a <strong>Webhook</strong> source on the Pipeline page.</p>
       <ul class="stack help__list">
-        <li>Once you’ve added any event type (except <code>always</code>), senders must include a matching type.</li>
-        <li>Add an event named <code>always</code> to also run on every delivery (senders don’t send <code>always</code> — Para-Scope emits it).</li>
+        <li>The URL is this site’s address plus the source path, e.g. <code>https://your-host/webhook/warehouse-sensors</code>. The path is shown on the source’s edit dialog and on <a href="/system">System</a>.</li>
+        <li>New webhook sources get an <code>always</code> event type automatically (fires on every delivery; senders don’t send it).</li>
+        <li>Once you’ve added any producer event type (anything except <code>always</code>), senders must include a matching type.</li>
         <li>Choose a <strong>Webhook verification</strong> mode and, when needed, a credential in the Webhook secret field.</li>
+        <li>Renaming a source re-derives its slug and webhook path — update senders if the path changes.</li>
       </ul>
       <p>
         Accepted deliveries return <strong>202</strong>. Discord’s endpoint handshake (PING) returns <strong>200</strong>.
         PayPal accepts any 2xx, so 202 is fine.
+      </p>
+
+      <h3>Event types</h3>
+      <p>
+        You don’t invent event types — you copy them from the sender. An event type’s
+        value is stored lowercase (punctuation preserved). Para-Scope reads it from the
+        first of these that isn’t empty:
+      </p>
+      <ol class="stack help__list help__list--ordered">
+        <li>the <code>X-Event-Type</code> header</li>
+        <li>the <code>X-GitHub-Event</code> header (GitHub / Gitea)</li>
+        <li>the JSON body field <code>event_type</code></li>
+        <li>the JSON body field <code>type</code></li>
+      </ol>
+      <p>
+        Matching is case-insensitive: <code>Order.Paid</code> matches a registered
+        <code>order.paid</code>. Providers that send uppercase values (e.g. PayPal
+        <code>PAYMENT.SALE.COMPLETED</code>) still match when registered as
+        <code>payment.sale.completed</code>. Discord maps numeric interaction
+        <code>type</code> values to <code>application_command</code>,
+        <code>message_component</code>, <code>application_command_autocomplete</code>,
+        or <code>modal_submit</code>.
+      </p>
+      <table class="table">
+        <thead>
+          <tr><th>Types on the source</th><th>Delivery declares</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>One or more producer types</td><td>a matching type</td><td>202 — event stored with that type (+ <code>always</code> if present)</td></tr>
+          <tr><td>One or more producer types</td><td>an unknown type</td><td>400 — <code>Event type '…' not found for source</code></td></tr>
+          <tr><td>One or more producer types</td><td>nothing</td><td>400 — response lists the types you registered</td></tr>
+          <tr><td>None, or only <code>always</code></td><td>nothing, or an unmatched body <code>type</code></td><td>202 — event stored untyped (+ <code>always</code> side-emit)</td></tr>
+        </tbody>
+      </table>
+      <p>
+        With only <code>always</code> (the default for new webhooks), a payload’s generic
+        top-level <code>type</code> field does <strong>not</strong> block discovery — the
+        delivery is accepted untyped so you can inspect it with <strong>Recent</strong>,
+        then register the producer type you need.
+      </p>
+      <p>
+        <strong>Finding the right type:</strong> check the sender’s documentation
+        (Stripe <code>checkout.session.completed</code>, GitHub’s <code>X-GitHub-Event</code> value,
+        PayPal <code>PAYMENT.SALE.COMPLETED</code>), or inspect an untyped sample.
+        Register the lowercase form (e.g. <code>payment.sale.completed</code>).
       </p>
       <p>
         On the Pipeline page, use <strong>Recent</strong> for the last few events,
@@ -422,7 +469,7 @@
         <summary>For senders (generic HMAC)</summary>
         <ul class="stack help__list">
           <li>Send <code>POST /webhook/{slug}</code> with a JSON body.</li>
-          <li>Type via the <code>X-Event-Type</code> header, or body field <code>event_type</code> / <code>type</code>.</li>
+          <li>Type via the <code>X-Event-Type</code> header, <code>X-GitHub-Event</code> (GitHub/Gitea), or body field <code>event_type</code> / <code>type</code>. Types are matched case-insensitively and stored lowercase.</li>
           <li>
             With a secret: also send <code>X-Webhook-Timestamp</code> (unix seconds) and
             <code>X-Webhook-Signature</code>. Sign with HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>
@@ -500,7 +547,7 @@
       <p>
         A successful poll emits <code>on_success</code> by default, or another success type if that subtype exposes one.
         Failures emit <code>on_failure</code>.
-        Add an event named <code>always</code> to also fire on every run.
+        Add an event type named <code>always</code> to also fire on every run.
       </p>
 
       <h3>HTTP poll authentication</h3>

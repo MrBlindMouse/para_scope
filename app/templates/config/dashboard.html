@@ -27,8 +27,9 @@
 
   <p id="widgets-empty" class="text-muted" hidden>No widgets yet. Add one from the catalog above.</p>
 
-  <div class="flex items-center gap mt">
+  <div class="flex items-center gap mt flex-wrap">
     <button type="submit" class="btn btn--primary">Save Layout</button>
+    <p id="widgets-error" class="alert alert--danger" role="alert" hidden></p>
   </div>
 </form>
 
@@ -1241,6 +1242,237 @@
     jsonEl.value = JSON.stringify(readFromDom());
   }
 
+  function fieldBySlug(raw) {
+    var head = String(raw || "").trim().split(".")[0];
+    if (!head) return null;
+    for (var i = 0; i < FIELDS.length; i++) {
+      if (FIELDS[i].slug === head) return FIELDS[i];
+    }
+    return null;
+  }
+
+  function splitSlugPath(raw) {
+    var s = String(raw || "").trim();
+    if (!s) return {slug: "", path: null};
+    var dot = s.indexOf(".");
+    if (dot < 0) return {slug: s, path: null};
+    var slug = s.slice(0, dot).trim();
+    var path = s.slice(dot + 1).trim();
+    return {slug: slug, path: path || null};
+  }
+
+  function widgetBinding(w) {
+    var entry = displayEntry(w.type, w.display);
+    return (entry && entry.binding) ||
+      (KIND_BY_TYPE[w.type] && KIND_BY_TYPE[w.type].binding) ||
+      null;
+  }
+
+  function widgetLabel(w, index) {
+    var title = (w.title || "").trim() || kindTitle(w.type);
+    return title || ("Widget " + (index + 1));
+  }
+
+  // Mirrors app/widgets.py validate_widget_bindings for required/type/path/cardinality.
+  function firstWidgetProblem(widgets) {
+    for (var i = 0; i < widgets.length; i++) {
+      var w = widgets[i];
+      if (!w || !w.type) continue;
+      var cfg = w.config || {};
+      var disp = w.display || defaultDisplay(w.type);
+      var b = widgetBinding(w);
+      var label = widgetLabel(w, i);
+      var style = cfg.style || defaultStyle(w.type, disp);
+      var meta = styleMeta(w.type, disp, style);
+      var focusSel = null;
+
+      if (!b || b.cardinality === "none") continue;
+      var required = !!b.required;
+      var allowed = Array.isArray(b.field_types) && b.field_types.length ? b.field_types : null;
+      var key = b.config_key || "";
+
+      if (w.type === "display" && disp === "logbook_list") {
+        var rawLb = (cfg.field_slug || cfg.template || "").trim();
+        if (cfg.template && String(cfg.template).indexOf("{{ '{{' }}") >= 0) {
+          // Template form: server checks logbook heads; skip deep parse client-side.
+          continue;
+        }
+        if (!rawLb) {
+          if (required) {
+            return {index: i, message: "Choose a field for “" + label + "”.",
+              selector: '[data-cfg="logbook_field"], [data-cfg="field_slug"]'};
+          }
+          continue;
+        }
+        var fLb = fieldBySlug(rawLb);
+        if (!fLb) {
+          return {index: i, message: "“" + rawLb + "” isn’t an existing Field slug.",
+            selector: '[data-cfg="logbook_field"], [data-cfg="field_slug"]'};
+        }
+        if (allowed && allowed.indexOf(fLb.field_type) < 0) {
+          return {index: i, message: "“" + fLb.name + "” isn’t a compatible field type here.",
+            selector: '[data-cfg="logbook_field"], [data-cfg="field_slug"]'};
+        }
+        continue;
+      }
+
+      if (key === "sources") {
+        var sources = Array.isArray(cfg.sources) ? cfg.sources : [];
+        var filled = sources.filter(function (s) {
+          return s && String(s.field_slug || "").trim();
+        });
+        focusSel = '[data-src="field_slug"], [data-ssrc="field_slug"]';
+        if (required && !filled.length) {
+          return {index: i, message: "Pick at least one field for “" + label + "”.", selector: focusSel};
+        }
+        var minSrc = parseInt(meta.min_sources, 10);
+        if (!isFinite(minSrc) || minSrc < 1) minSrc = 1;
+        var maxSrc = meta.max_sources;
+        if (filled.length && filled.length < minSrc) {
+          return {index: i,
+            message: "“" + label + "” needs at least " + minSrc + " field(s) for this style.",
+            selector: focusSel};
+        }
+        if (maxSrc != null && filled.length > parseInt(maxSrc, 10)) {
+          return {index: i,
+            message: "“" + label + "” can use at most " + maxSrc + " field(s) for this style.",
+            selector: focusSel};
+        }
+        for (var si = 0; si < filled.length; si++) {
+          var rawS = String(filled[si].field_slug || "").trim();
+          var parts = splitSlugPath(rawS);
+          var fS = fieldBySlug(parts.slug);
+          if (!fS) {
+            return {index: i, message: "“" + rawS + "” isn’t an existing Field slug.", selector: focusSel};
+          }
+          if (allowed && allowed.indexOf(fS.field_type) < 0) {
+            return {index: i, message: "“" + fS.name + "” isn’t the right field type.", selector: focusSel};
+          }
+          if ((fS.field_type === "logbook" || fS.field_type === "data") && !parts.path) {
+            return {index: i,
+              message: "Append a path for “" + label + "” (e.g. " + parts.slug + ".response_time_ms).",
+              selector: focusSel};
+          }
+        }
+        continue;
+      }
+
+      if (key === "cells") {
+        var cells = Array.isArray(cfg.cells) ? cfg.cells : [];
+        var boardKind = cfg.cell_kind || "toggle";
+        var boardMeta = boardCellKindMeta(boardKind);
+        var boardAllowed = boardMeta.field_types;
+        focusSel = '[data-bcell="field_slug"]';
+        var filledCells = cells.filter(function (c) {
+          return c && String(c.field_slug || "").trim();
+        });
+        if (required && !filledCells.length && boardKind !== "kv_text") {
+          return {index: i, message: "Pick at least one field for “" + label + "”.", selector: focusSel};
+        }
+        if (required && boardKind === "kv_text" && !cells.length) {
+          return {index: i, message: "Pick at least one field for “" + label + "”.", selector: focusSel};
+        }
+        for (var ci = 0; ci < cells.length; ci++) {
+          var rawC = String((cells[ci] && cells[ci].field_slug) || "").trim();
+          if (!rawC) {
+            if (boardKind === "kv_text") continue;
+            return {index: i, message: "Pick at least one field for “" + label + "”.", selector: focusSel};
+          }
+          var fC = fieldBySlug(rawC);
+          if (!fC) {
+            return {index: i, message: "“" + rawC + "” isn’t an existing Field slug.", selector: focusSel};
+          }
+          if (Array.isArray(boardAllowed) && boardAllowed.length &&
+              boardAllowed.indexOf(fC.field_type) < 0) {
+            return {index: i, message: "“" + fC.name + "” isn’t the right field type.", selector: focusSel};
+          }
+        }
+        continue;
+      }
+
+      if (key === "field_slugs") {
+        var slugs = Array.isArray(cfg.field_slugs) ? cfg.field_slugs : [];
+        focusSel = '[data-cfg="field_slugs"]';
+        if (required && !slugs.length) {
+          return {index: i, message: "Pick at least one field for “" + label + "”.", selector: focusSel};
+        }
+        for (var ti = 0; ti < slugs.length; ti++) {
+          var rawT = String(slugs[ti] || "").trim();
+          var fT = fieldBySlug(rawT);
+          if (!fT) {
+            return {index: i, message: "“" + rawT + "” isn’t an existing Field slug.", selector: focusSel};
+          }
+          if (allowed && allowed.indexOf(fT.field_type) < 0) {
+            return {index: i, message: "“" + fT.name + "” isn’t the right field type.", selector: focusSel};
+          }
+        }
+        continue;
+      }
+
+      // single field_slug
+      var slugRaw = String(cfg.field_slug || "").trim();
+      focusSel = '[data-cfg="field_slug"]';
+      if (!slugRaw) {
+        if (required) {
+          return {index: i, message: "Choose a field for “" + label + "”.", selector: focusSel};
+        }
+        continue;
+      }
+      var fOne = fieldBySlug(slugRaw);
+      if (!fOne) {
+        return {index: i, message: "“" + slugRaw + "” isn’t an existing Field slug.", selector: focusSel};
+      }
+      if (allowed && allowed.indexOf(fOne.field_type) < 0) {
+        return {index: i, message: "“" + fOne.name + "” isn’t a compatible field type here.", selector: focusSel};
+      }
+    }
+    return null;
+  }
+
+  function clearWidgetValidation() {
+    var box = document.getElementById("widgets-error");
+    if (box) {
+      box.hidden = true;
+      box.textContent = "";
+    }
+    listEl.querySelectorAll(".input--invalid").forEach(function (el) {
+      el.classList.remove("input--invalid");
+    });
+  }
+
+  function showWidgetProblem(problem) {
+    var box = document.getElementById("widgets-error");
+    if (box) {
+      box.hidden = false;
+      box.textContent = problem.message;
+    }
+    var card = listEl.querySelector('.card[data-index="' + problem.index + '"]');
+    if (!card) return;
+    var toggle = card.querySelector("[data-widget-toggle]");
+    var body = card.querySelector(".dashboard-widget-editor__body");
+    if (toggle && body) {
+      toggle.setAttribute("aria-expanded", "true");
+      body.hidden = false;
+    }
+    var input = null;
+    if (problem.selector) {
+      input = card.querySelector(problem.selector);
+    }
+    if (!input) {
+      input = card.querySelector(
+        '[data-cfg="field_slug"], [data-src="field_slug"], [data-ssrc="field_slug"], ' +
+        '[data-bcell="field_slug"], [data-cfg="field_slugs"], [data-cfg="logbook_field"]'
+      );
+    }
+    if (input) {
+      input.classList.add("input--invalid");
+      if (typeof input.focus === "function") input.focus();
+    }
+    if (typeof card.scrollIntoView === "function") {
+      card.scrollIntoView({behavior: "smooth", block: "nearest"});
+    }
+  }
+
   function setWidgets(widgets, expandedKeys) {
     jsonEl.value = JSON.stringify(normalize(widgets));
     render(expandedKeys);
@@ -1530,8 +1762,21 @@
     }
   });
 
-  listEl.addEventListener("input", function () { syncJson(); });
-  form.addEventListener("submit", function () { syncJson(); });
+  listEl.addEventListener("input", function () {
+    clearWidgetValidation();
+    syncJson();
+  });
+  listEl.addEventListener("change", function () {
+    clearWidgetValidation();
+    syncJson();
+  });
+  form.addEventListener("submit", function (e) {
+    syncJson();
+    var problem = firstWidgetProblem(JSON.parse(jsonEl.value || "[]"));
+    if (!problem) return;
+    e.preventDefault();
+    showWidgetProblem(problem);
+  });
 
   if (fieldsDialog) {
     fieldsDialog.addEventListener("click", function (e) {

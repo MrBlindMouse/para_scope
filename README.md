@@ -16,6 +16,128 @@ In-app detail: **Help** at `/help` after login.
 
 ![Para-Scope live dashboard](docs/dashboard.png)
 
+## Requirements
+
+- Python 3.11+
+- [`uv`](https://github.com/astral-sh/uv) (or pip + venv)
+- For production: systemd and nginx (optional TLS via certbot)
+
+## Quick Start
+
+```bash
+uv venv .venv && uv pip install -r requirements.txt -p .venv
+source .venv/bin/activate
+cp .env.example .env   # then set PARA_SCOPE_SECRET_KEY (see Environment)
+uvicorn app.main:app --reload
+```
+
+Open http://localhost:8000. The first start creates SQLite `para_scope.db` in the project root. With no users yet you are sent to `/setup` to create the first account; after that, use `/login`.
+
+For headless installs (after the app has created the DB once):
+
+```bash
+python create_user.py
+```
+
+## Environment
+
+Copy `.env.example` to `.env` (gitignored). Values are loaded automatically via `python-dotenv`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PARA_SCOPE_SECRET_KEY` | Yes | Signs session cookies and encrypts stored secrets (Fernet). Login and secret storage fail without it. Generate with `openssl rand -hex 32`. |
+| `PARA_SCOPE_SECURE_COOKIES` | No | Set to `1`/`true`/`yes` so session and CSRF cookies use the `Secure` flag (use behind HTTPS). |
+| `PARA_SCOPE_DATABASE_URL` | No | SQLAlchemy URL. Default: SQLite file `para_scope.db` in the project root. |
+| `PARA_SCOPE_LOG_LEVEL` | No | Logging level (default `INFO`). |
+| `PARA_SCOPE_UPLOADS_DIR` | No | Directory for uploaded dashboard backgrounds (default `data/uploads`). |
+| `PARA_SCOPE_VAPID_PUBLIC_KEY` | No | Web Push VAPID public key (required for `web_push` actions). |
+| `PARA_SCOPE_VAPID_PRIVATE_KEY` | No | Web Push VAPID private key. |
+| `PARA_SCOPE_VAPID_SUBJECT` | No | VAPID subject (`mailto:`…); defaults to `mailto:admin@localhost`. |
+| `PARA_SCOPE_ALLOW_LOCAL_ACTIONS` | No | Set to `1`/`true`/`yes` to allow `local_script` pipeline actions. |
+| `PARA_SCOPE_LOCAL_ACTION_ALLOWLIST` | No | Optional colon-separated path prefixes / exact paths for the script binary (`argv[0]`). |
+
+## How to
+
+Get a working pipeline after login (more detail in `/help`):
+
+1. **Open Pipeline** at `/config/pipeline`. Add a source (name required; slug is always derived from the name). Choose type **Webhook** (optional provider + secret in the same dialog) or **Poll** (initial schedule required). Poll sources get `on_success` and `on_failure` events automatically (no auto-rules).
+2. **Add event types** on the source chain (Source → Event Types → Rules). New webhooks already include `always`. Once a source has producer types, webhooks must declare a matching type via the `X-Event-Type` header (or `X-GitHub-Event`), or body field `event_type` / `type`. Matching is case-insensitive; types are stored lowercase.
+3. **Ingest an event** — pick one path:
+   - **Webhook:** `POST /webhook/{slug}` with a JSON body (see [Webhooks](#webhooks)).
+   - **Poll:** schedules feed `on_success` / `on_failure` into the same pipeline (see [Polling](#polling)).
+4. **Add a rule** for the event(s) you care about (use **Add rule** on an event row to pre-select it). Empty conditions match all events for those types.
+5. **Add an action on that rule** (`field_push` is a good smoke test; `http_forward`, `notify` for ntfy / Gotify / Discord, and `web_push` are also built in; `local_script` needs `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`). Optional credentials can be attached in the action dialog. For `web_push`, set VAPID env vars and click the bell in the header to enable notifications. Events, rules, and actions are editable from the chain.
+6. **Confirm** on `/events`, enable widgets at `/config/dashboard`, and view them on `/`.
+
+Day-to-day: `/events`, `/metrics`, and `/system`. Manage accounts at `/config/users`. Appearance and dashboard background: `/config/style`.
+
+## Webhooks
+
+`POST /webhook/{slug}` accepts JSON (max body 256KB). Accepted deliveries return **202**. Provider-specific verification is listed under [Capabilities](#webhook-providers). For **generic HMAC**, requests must include `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature` = HMAC-SHA256 of `{timestamp}.{raw_body}` (hex, optional `sha256=` prefix). Sources without a secret accept unsigned traffic (fine for local/dev; use a secret in production).
+
+The webhook URL is your Para-Scope origin plus the source path, e.g. `https://para.example.com/webhook/warehouse-sensors`. The slug is derived from the source name and shown on the source edit dialog and on `/system`. Renaming a source re-derives its slug and therefore changes the URL — update your senders if you rename one.
+
+```bash
+curl -X POST https://para.example.com/webhook/warehouse-sensors \
+  -H 'Content-Type: application/json' \
+  -H 'X-Event-Type: status.changed' \
+  -d '{"door": "open"}'
+```
+
+### Event types
+
+You do not invent event types — you copy them from the sender. Values are stored **lowercase** (punctuation preserved); matching is case-insensitive (`Order.Paid` matches `order.paid`). Providers that send uppercase (e.g. PayPal `PAYMENT.SALE.COMPLETED`) match when registered as `payment.sale.completed`.
+
+Para-Scope reads the type from the first of these that is non-empty:
+
+1. the `X-Event-Type` header
+2. the `X-GitHub-Event` header (GitHub / Gitea)
+3. the JSON body field `event_type`
+4. the JSON body field `type`
+
+Discord is a special case: its numeric interaction `type` is mapped to `application_command`, `message_component`, `application_command_autocomplete`, or `modal_submit`.
+
+What happens on delivery depends on which **producer** types the source has registered (`always` does not count as a producer type):
+
+| Registered on the source | Delivery declares | Result |
+|---|---|---|
+| One or more producer types | a matching type | 202, typed event (+ `always` side-emit if present) |
+| One or more producer types | an unknown type | 400 `Event type '<name>' not found for source` |
+| One or more producer types | nothing | 400 `Event type required`, with the registered types listed |
+| Nothing, or only `always` | nothing, or an unmatched body `type` | 202, event stored untyped (+ `always` side-emit if present) |
+
+New webhook sources are seeded with `always`. With only `always`, a payload’s generic top-level `type` field does not block discovery — the delivery is accepted untyped so you can inspect it, then register the producer type you need.
+
+**Finding the right type:** check the sender's documentation (Stripe `checkout.session.completed`, GitHub's `X-GitHub-Event` value, PayPal `PAYMENT.SALE.COMPLETED`), or inspect an untyped sample with **Recent**. Register the lowercase form.
+
+Senders never send `always`; Para-Scope emits it alongside the normal event with `_webhook.trigger` set to `always` and `_webhook.event_type` set to the producer type (or `null` when untyped).
+
+Public health check: `GET /health`.
+
+## Polling
+
+Set the schedule when you create or edit a **Poll** source (exactly one schedule per poll source: interval or cron). Full subtype inventory is under [Capabilities](#pollers).
+
+Jobs run in-process via APScheduler and feed the same pipeline as webhooks. Use **Run now** on a poll source to fire immediately.
+
+Successful polls emit `on_success` by default; failures emit `on_failure`. Some pollers also let you set a different success event type. If you add an event type named `always` (not created automatically), it also fires on every poll run.
+
+### Poll privileges
+
+Para-Scope does **not** need to run as root by default. The normal production setup is:
+
+- run the app as a dedicated `parascope` service user
+- grant that user only the filesystem and group access needed for the pollers you actually configure
+
+For the shipped pollers:
+
+- **Usually fine as an unprivileged service user:** HTTP / APIs, DNS, TCP connect, TLS cert expiry, RSS / Atom, IMAP, domain expiry, Home Assistant, local LLM HTTP status, database health, system snapshot, disk free space, backup age, git status
+- **May need extra read access:** log pattern watch, backup age on restricted paths, disk free space on restricted mount points
+- **May need host group access:** `journal_recent_errors` often needs membership in `systemd-journal` or `adm` (distro-dependent) so `journalctl` can read the system journal
+- **Usually works unprivileged, but still depends on host policy:** `systemd_failed_units` (it shells out to `systemctl`); `icmp_ping` may need ping capability or network policy that allows ICMP from the service user
+
+Highest reasonable privilege for the shipped pollers is usually **a dedicated service user with a minimal supplemental group set and/or ACLs on the monitored paths**, not root.
+
 ## Capabilities
 
 ### Dashboard widgets
@@ -83,95 +205,6 @@ Use generic HTTP pollers for plain endpoint checks. Prefer specialized subtypes 
 - **PayPal** — PayPal verify-webhook-signature API
 
 Sources without a secret accept unsigned traffic (fine for local/dev; use a provider secret in production).
-
-## Requirements
-
-- Python 3.11+
-- [`uv`](https://github.com/astral-sh/uv) (or pip + venv)
-- For production: systemd and nginx (optional TLS via certbot)
-
-## Quick Start
-
-```bash
-uv venv .venv && uv pip install -r requirements.txt -p .venv
-source .venv/bin/activate
-cp .env.example .env   # then set PARA_SCOPE_SECRET_KEY (see below)
-uvicorn app.main:app --reload
-```
-
-Open http://localhost:8000. The first start creates SQLite `para_scope.db` in the project root. With no users yet you are sent to `/setup` to create the first account; after that, use `/login`.
-
-## Environment
-
-Copy `.env.example` to `.env` (gitignored). Values are loaded automatically via `python-dotenv`.
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `PARA_SCOPE_SECRET_KEY` | Yes | Signs session cookies and encrypts stored secrets (Fernet). Login and secret storage fail without it. Generate with `openssl rand -hex 32`. |
-| `PARA_SCOPE_SECURE_COOKIES` | No | Set to `1`/`true`/`yes` so session and CSRF cookies use the `Secure` flag (use behind HTTPS). |
-| `PARA_SCOPE_DATABASE_URL` | No | SQLAlchemy URL. Default: SQLite file `para_scope.db` in the project root. |
-| `PARA_SCOPE_LOG_LEVEL` | No | Logging level (default `INFO`). |
-| `PARA_SCOPE_UPLOADS_DIR` | No | Directory for uploaded dashboard backgrounds (default `data/uploads`). |
-| `PARA_SCOPE_VAPID_PUBLIC_KEY` | No | Web Push VAPID public key (required for `web_push` actions). |
-| `PARA_SCOPE_VAPID_PRIVATE_KEY` | No | Web Push VAPID private key. |
-| `PARA_SCOPE_VAPID_SUBJECT` | No | VAPID subject (`mailto:`…); defaults to `mailto:admin@localhost`. |
-| `PARA_SCOPE_ALLOW_LOCAL_ACTIONS` | No | Set to `1`/`true`/`yes` to allow `local_script` pipeline actions. |
-| `PARA_SCOPE_LOCAL_ACTION_ALLOWLIST` | No | Optional colon-separated path prefixes / exact paths for the script binary (`argv[0]`). |
-
-## First User
-
-On a fresh install, open the app and complete `/setup`. For headless installs you can still run (after the app has created the DB once):
-
-```bash
-python create_user.py
-```
-
-## How to
-
-Get a working pipeline after login (more detail in `/help`):
-
-1. **Open Pipeline** at `/config/pipeline`. Add a source (name required; slug is always derived from the name). Choose type **Webhook** (optional provider + secret in the same dialog) or **Poll** (initial schedule required). Poll sources get `on_success` and `on_failure` events automatically (no auto-rules).
-2. **Add events** on the source chain (Source → Events → Rules). Once a source has producer types, webhooks must declare a matching type via the `X-Event-Type` header or body field `event_type` / `type`. Optional `always` also fires on every accepted webhook (and every poll run).
-3. **Ingest an event** — pick one path:
-   - **Webhook:** `POST /webhook/{slug}` with a JSON body (see [Webhooks](#webhooks)).
-   - **Poll:** schedules feed `on_success` / `on_failure` into the same pipeline (see [Polling](#polling)).
-4. **Add a rule** for the event(s) you care about (use **Add rule** on an event row to pre-select it). Empty conditions match all events for those types.
-5. **Add an action on that rule** (`field_push` is a good smoke test; `http_forward`, `notify` for ntfy / Gotify / Discord, and `web_push` are also built in; `local_script` needs `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`). Optional credentials can be attached in the action dialog. For `web_push`, set VAPID env vars and click the bell in the header to enable notifications. Events, rules, and actions are editable from the chain.
-6. **Confirm** on `/events`, enable widgets at `/config/dashboard`, and view them on `/`.
-
-Day-to-day: `/events`, `/metrics`, and `/system`. Manage accounts at `/config/users`. Appearance and dashboard background: `/config/style`.
-
-## Polling
-
-Set the schedule when you create or edit a **Poll** source (exactly one schedule per poll source: interval or cron). Full subtype inventory is under [Capabilities](#pollers).
-
-Jobs run in-process via APScheduler and feed the same pipeline as webhooks. Use **Run now** on a poll source to fire immediately.
-
-Successful polls emit `on_success` by default; failures emit `on_failure`. Some pollers also let you set a different success event name. If you add an event type named `always` (not created automatically), it also fires on every poll run.
-
-### Poll privileges
-
-Para-Scope does **not** need to run as root by default. The normal production setup is:
-
-- run the app as a dedicated `parascope` service user
-- grant that user only the filesystem and group access needed for the pollers you actually configure
-
-For the shipped pollers:
-
-- **Usually fine as an unprivileged service user:** HTTP / APIs, DNS, TCP connect, TLS cert expiry, RSS / Atom, IMAP, domain expiry, Home Assistant, local LLM HTTP status, database health, system snapshot, disk free space, backup age, git status
-- **May need extra read access:** log pattern watch, backup age on restricted paths, disk free space on restricted mount points
-- **May need host group access:** `journal_recent_errors` often needs membership in `systemd-journal` or `adm` (distro-dependent) so `journalctl` can read the system journal
-- **Usually works unprivileged, but still depends on host policy:** `systemd_failed_units` (it shells out to `systemctl`); `icmp_ping` may need ping capability or network policy that allows ICMP from the service user
-
-Highest reasonable privilege for the shipped pollers is usually **a dedicated service user with a minimal supplemental group set and/or ACLs on the monitored paths**, not root.
-
-## Webhooks
-
-`POST /webhook/{slug}` accepts JSON (max body 256KB). Provider-specific verification is listed under [Capabilities](#webhook-providers). For **generic HMAC**, requests must include `X-Webhook-Timestamp` (unix seconds) and `X-Webhook-Signature` = HMAC-SHA256 of `{timestamp}.{raw_body}` (hex, optional `sha256=` prefix). Sources without a secret accept unsigned traffic (fine for local/dev; use a secret in production).
-
-If you add an event type named `always` (not created automatically), it also fires on every accepted delivery. Producers keep sending their normal type; `always` is a side-emission with `_webhook.trigger` set to `always`.
-
-Public health check: `GET /health`.
 
 ## Production (VM + systemd + nginx)
 

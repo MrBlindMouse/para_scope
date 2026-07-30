@@ -258,8 +258,20 @@ async def api_dashboard_notes(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/dashboard")
 async def config_dashboard(request: Request, db: Session = Depends(get_db)):
     success, error = ctx.get_message_params(request)
-    layout_config = _load_widgets(db)
+    return ctx.templates.TemplateResponse(
+        request, "config/dashboard.html",
+        _dashboard_editor_context(db, current_widgets=_load_widgets(db),
+                                  success=success, error=error),
+    )
 
+
+def _dashboard_editor_context(
+    db: Session,
+    *,
+    current_widgets: list,
+    success: str | None = None,
+    error: str | None = None,
+) -> dict:
     available_widgets = [
         {
             "type": w["type"],
@@ -270,13 +282,14 @@ async def config_dashboard(request: Request, db: Session = Depends(get_db)):
         }
         for w in get_widget_types()
     ]
-
-    return ctx.templates.TemplateResponse(
-        request, "config/dashboard.html", {"active": "dashboard",
-         "current_widgets": layout_config, "available_widgets": available_widgets,
-         "fields": db.query(Field).order_by(Field.name).all(),
-         "success": success, "error": error}
-    )
+    return {
+        "active": "dashboard",
+        "current_widgets": current_widgets,
+        "available_widgets": available_widgets,
+        "fields": db.query(Field).order_by(Field.name).all(),
+        "success": success,
+        "error": error,
+    }
 
 
 # route: /config/dashboard
@@ -318,9 +331,11 @@ async def save_dashboard(request: Request, db: Session = Depends(get_db)):
     widgets = normalize_for_save(widgets)
     err = validate_widget_bindings(db, widgets)
     if err:
-        return RedirectResponse(
-            url=ctx.flash_url("/config/dashboard", error=err),
-            status_code=303,
+        # Keep the submitted editor state so a failed save doesn’t wipe setup.
+        return ctx.templates.TemplateResponse(
+            request, "config/dashboard.html",
+            _dashboard_editor_context(db, current_widgets=widgets, error=err),
+            status_code=400,
         )
     payload = layout_json(widgets)
 

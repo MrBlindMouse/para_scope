@@ -14,15 +14,12 @@
   {% if error %}
     <p class="alert alert--danger" role="alert">{{ error }}</p>
   {% endif %}
-  <p class="text-muted">
-    Create the rule first, then add actions on the rule in the chain.
-  </p>
   <label class="stack">
     <span class="field-label">
       Event Types
       <button type="button" class="field-tip" tabindex="0"
               aria-label="About event types on rules"
-              data-tip="Select one or more (Ctrl/Cmd). Leave empty to match all events from this source.">?</button>
+              data-tip="Leave empty to match all events from this source.">?</button>
     </span>
     <select name="event_type_ids" class="input" multiple size="4" autofocus>
       {% for et in event_types %}

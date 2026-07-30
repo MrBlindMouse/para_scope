@@ -4,12 +4,7 @@
 
 <div id="webhook-provider-fields" class="stack" {% if hide_webhook_fields %}style="display:none"{% endif %}>
   <label class="stack" id="webhook-provider-fieldset">
-    <span class="field-label">
-      Webhook verification
-      <button type="button" class="field-tip" tabindex="0"
-              aria-label="About webhook verification"
-              data-tip="Choose how Para-Scope verifies inbound webhook authenticity.">?</button>
-    </span>
+    Webhook verification
     <select name="webhook_provider" class="input" id="webhook-provider">
       {% for provider in providers %}
         <option value="{{ provider.slug }}" {% if provider.slug == selected_provider %}selected{% endif %}>
