@@ -5,6 +5,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 FIELD_TYPES = ("logbook", "value", "text", "toggle", "data")
+# Names that cannot be Field slugs (enforced by _unique_field_slug).
+# field/fields: pipeline reserved; value: conventional state key; source/_poll:
+# poll payload injections; ts: series point key; dt/system: reserved for future.
+RESERVED_FIELD_SLUGS = ("field", "fields", "value", "source", "_poll", "dt", "system", "ts")
 DEFAULT_MAX_ENTRIES = 100
 
 # Prefix → list index for ``*`` segments (set while a matching rule's actions run).
@@ -116,15 +120,6 @@ def resolve_numeric(metric_value, normalized_data: dict | None) -> float:
         return float(raw)
     except (TypeError, ValueError) as e:
         raise ValueError(f"Couldn’t find number “{metric_value}” in the event") from e
-
-
-def resolve_string(config: dict, normalized_data: dict | None) -> str:
-    """Resolve text-field template (``{{ }}`` / maths) against event (+ ``field``) data."""
-    from app.widget_transforms import render_data_template
-
-    if "value" not in config:
-        return ""
-    return render_data_template(str(config["value"] or ""), normalized_data or {})
 
 
 def resolve_bool(config: dict, normalized_data: dict | None = None) -> bool:

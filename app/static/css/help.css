@@ -1,6 +1,27 @@
 @layer components;
 
 @layer components {
+  /* Help is long-form: use the column, don't hug unbreakable table/URL min-content. */
+  .config-layout__main:has(> .help) {
+    width: min(120ch, 100%);
+    max-inline-size: 100%;
+  }
+
+  .help {
+    min-inline-size: 0;
+    overflow-wrap: break-word;
+  }
+
+  .help .table {
+    width: 100%;
+    table-layout: fixed;
+  }
+
+  .help :is(td, th, code),
+  .help__code {
+    overflow-wrap: anywhere;
+  }
+
   .help__code {
     margin: 0;
     padding: 0.75em 1em;

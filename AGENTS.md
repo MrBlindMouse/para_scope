@@ -22,11 +22,15 @@ Tests use a real SQLite DB (`.test_db.sqlite`) — remove it between runs if sch
 - **No new dependencies** if stdlib or an already-installed package covers it.
 - **Deletion over abstraction** — shortest working diff; boring over clever; fewest files.
 - **Single worker** — rate limits, replay cache, scheduler, and token caches are in-process. Never assume multi-worker.
-- **No Alembic / no Docker-first** — schema is models + `create_all`; ops are systemd + nginx (see README).
+- **SQLite only / no migrations / no Docker-first** — PostgreSQL and migration tooling are not planned; schema is models + `create_all`; ops are systemd + nginx (see README).
+- **Keep auth simple** — retain password + signed-cookie sessions and full access for authenticated users; no roles, API tokens, TOTP, WebAuthn, or OIDC.
+- **Keep rules stateless** — conditions match event payloads; do not add per-rule rate limits or time windows.
+- **Keep execution in-process** — no durable queue, dead-letter system, or delivery-guarantee framework.
+- **Keep extensions built-in** — use `register_action` / `register_poller`; no plugin discovery or Python entry-point loading.
 - **Clean breaks over legacy** — prefer wipe/recreate and breaking changes over compatibility shims, dual-path code, or migration frameworks (schema, config shape, APIs). When a change is breaking, **warn the user clearly**: what breaks, what to wipe or reconfigure (`para_scope.db`, `.test_db.sqlite`, env, dashboard layout, etc.).
 
 ## Architecture
-Single-process FastAPI app. No migrations, no Docker. Everything is DB-backed config with HTMX-driven UI.
+Single-process FastAPI app. SQLite only, no migrations, no Docker. Everything is DB-backed config with HTMX-driven UI.
 
 | Layer | Files |
 |-------|-------|
@@ -36,10 +40,12 @@ Single-process FastAPI app. No migrations, no Docker. Everything is DB-backed co
 | Ingress | `app/ingest.py` + `app/event_store.py` — persist + prune (keep `pending`) |
 | Models / DB | `app/models.py`, `app/database.py` — all models; SQLite + `PRAGMA foreign_keys=ON` |
 | Auth / secrets | `app/security.py` — bcrypt, CSRF mint, timed session, Fernet |
-| Pipeline | `app/pipeline.py` — rule matching + `evaluate_and_dispatch` |
+| Pipeline | `app/pipeline.py` — rule matching + `evaluate_and_dispatch` (trigger cascade depth 3) |
 | Actions / fields | `app/actions.py`, `app/fields.py` — action registry; Field sinks |
 | Polling | `app/scheduler.py` + `app/pollers.py` — APScheduler + poller registry |
 | Webhooks | `app/webhook_verifiers.py` — provider signature / replay verification |
+| Live events | `app/event_stream.py` — in-process SSE fan-out for `/events/stream` |
+| Source recipes | `app/source_templates.py` — full-stack quick-add prefills |
 | Widgets | `app/widgets.py`, `app/widget_transforms.py`, `app/dashboard_layout.py` |
 | Appearance | `app/themes.py`, `app/labels.py`, `app/webpush_util.py` |
 
@@ -56,8 +62,11 @@ Flow: `webhook|poll → ingest_event → evaluate_and_dispatch → actions → F
 - **Polling jobs** — registered at startup and on poll source create/edit/delete. Jobs run in-process; never scale beyond 1 worker.
 - **Rate-limit dicts live on `app.main`** — tests clear them via `main_mod._LOGIN_RATE_LIMIT.clear()` etc. If you add rate limiting elsewhere, re-export from `app.main`.
 - **CSRF** — form POSTs need `csrf_token` cookie + `_csrf_token` form field; JSON POSTs need `X-CSRF-Token`. Webhooks / static / `/sw.js` skip CSRF. Auth/CSRF truth is `app/webctx.py`.
-- **Soft JSON FKs on Rule** — `action_ids` / `event_type_ids` are JSON lists; scrub on delete via existing webctx helpers.
-- **MetricPoint ≠ Field series** — charts/series use Field logbooks/data today; do not rebuild MetricPoint writes without an explicit product ask.
+- **Soft JSON FKs on Rule** — `action_ids` / `event_type_ids` are JSON lists; scrub on delete via existing webctx helpers. Deletes cascade forward only (source → event type → rule → action); rule owns its actions.
+- **`Rule.source_id` is NOT NULL** — no global rules. Schema wipe required when upgrading from nullable `source_id`.
+- **`PARA_SCOPE_SECRET_KEY`** — required at process start (`main` lifespan); empty key aborts boot (tests set a default).
+- **Trigger cascade depth 3** — nested `trigger_source` / Triggers widget calls share `evaluate_and_dispatch`’s ContextVar ceiling.
+- **Dashboard widget text templates** — titles, labels, units, link URLs render `{{ slug… }}` at display time via `fields_snapshot`; notes text stays literal.
 
 ## Adding a new model
 1. Define the class in `app/models.py` with `Base` inheritance.
@@ -71,7 +80,7 @@ Vanilla CSS, 37signals/Fizzy system. No build step. Files: `app/static/css/`.
 - Naming: BEM-inspired (`.card`, `.card__header`, `.card--featured`). Flat file structure, one concept per file.
 
 ## DESIGN.md
-Full design doc at root. Key entities: Source, EventTypeRecord, PollingSchedule, Rule, ActionInstance, Event, MetricPoint, AuditLog, DashboardLayout. Non-goals include multi-region HA, complex workflow engine, and Docker-first deployment.
+Full design doc at root. Key entities: Source, EventTypeRecord, PollingSchedule, Rule, ActionInstance, Event, Field, AuditLog, DashboardLayout. Non-goals include multi-region HA, complex workflow engine, and Docker-first deployment.
 
 ## Directory AGENTS.md index
 

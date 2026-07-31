@@ -1605,21 +1605,21 @@ register_poller(
 )
 
 
-def run_schedule(schedule_id: int) -> bool:
+def run_schedule(schedule_id: int) -> bool | None:
     """Entry point called by the scheduler for a single schedule id.
 
-    Returns True on success, False on failure (or no-op skip).
+    Returns True on success, False on failure, None when skipped (disabled).
     """
     db = SessionLocal()
     success = False
     try:
         schedule = db.query(PollingSchedule).filter(PollingSchedule.id == schedule_id).first()
         if not schedule or not schedule.enabled:
-            return False
+            return None
 
         source = db.query(Source).filter(Source.id == schedule.source_id).first()
         if not source or not source.enabled:
-            return False
+            return None
 
         now = datetime.now(timezone.utc)
         handler = _POLLERS.get(schedule.handler_type)
@@ -1761,3 +1761,5 @@ def _create_poll_event(
 
     source.last_seen_at = datetime.now(timezone.utc)
     db.commit()
+    from app.event_stream import publish
+    publish(event.id)

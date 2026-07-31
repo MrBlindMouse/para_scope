@@ -11,6 +11,13 @@
             hx-swap="innerHTML">
       Add Source
     </button>
+    <button type="button"
+            class="btn"
+            hx-get="/config/pipeline/partials/source-templates"
+            hx-target="#pipeline-dialog"
+            hx-swap="innerHTML">
+      From template
+    </button>
   </div>
 
   {% include 'components/alerts.html' %}
@@ -19,7 +26,7 @@
 
   <div id="pipeline-chains" class="pipeline__chains stack mt">
     {% for chain in chains %}
-      {% with source=chain.source, rules=chain.rules, actions=chain.actions, actions_by_id=chain.actions_by_id, unbound_actions=chain.unbound_actions, event_types=chain.event_types, event_types_by_id=chain.event_types_by_id, fields_by_id=chain.fields_by_id %}
+      {% with source=chain.source, rules=chain.rules, rules_by_event_type_id=chain.rules_by_event_type_id, orphan_rules=chain.orphan_rules, actions=chain.actions, actions_by_id=chain.actions_by_id, unbound_actions=chain.unbound_actions, event_types=chain.event_types, event_types_by_id=chain.event_types_by_id, fields_by_id=chain.fields_by_id, sources_by_id=chain.sources_by_id %}
         {% include "config/pipeline/_source_chain.html" %}
       {% endwith %}
     {% else %}

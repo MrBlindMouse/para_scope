@@ -73,7 +73,7 @@
         <span class="field-label">
           Value from event *
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Path, maths, or JSON object/array. String leaves = path, maths, or literal. field = current stored value. e.g. status, field.n + 1, or {&quot;c&quot;:&quot;temp&quot;}">?</button>
+                  data-tip="Path, maths, or JSON object/array. String leaves = path, maths, or literal. field = current stored value; fields.slug.path = any Field. e.g. status, field.n + 1, fields.temperature.value">?</button>
         </span>
         <textarea name="value_key" class="input" id="logbook-value-key" rows="4"
                   placeholder='status&#10;or field.n + 1&#10;or {"celsius":"temp","label":"Sensor A"}'>{{ cfg.get('value_key') or '' }}</textarea>
@@ -82,7 +82,7 @@
         <span class="field-label">
           Template
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Always a string. Text with {{ '{{ path }}' }} / maths; field = current stored value. For typed numbers or JSON shapes use Value from event.">?</button>
+                  data-tip="Always a string. Text with {{ '{{ path }}' }} / maths; field = current stored value; fields.slug.path = any Field. For typed numbers or JSON shapes use Value from event.">?</button>
         </span>
         <input name="value" type="text" class="input" id="logbook-value"
                value="{% if 'value' in cfg and not cfg.get('value_key') %}{{ cfg.get('value') }}{% endif %}"
@@ -104,7 +104,7 @@
         <span class="field-label">
           Amount
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Number, path, or maths; field = current value. For Set this is the new value; default 1 for Inc/Dec">?</button>
+                  data-tip="Number, path, or maths; field = current value; fields.slug.path = any Field. For Set this is the new value; default 1 for Inc/Dec">?</button>
         </span>
         <input name="delta" type="text" class="input"
                value="{% if cfg.get('delta') is not none %}{{ cfg.get('delta') }}{% endif %}"
@@ -117,7 +117,7 @@
         <span class="field-label">
           Template
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Text with {{ '{{ path }}' }} / maths; field = current stored value">?</button>
+                  data-tip="Text with {{ '{{ path }}' }} / maths; field = current stored value; fields.slug.path = any Field">?</button>
         </span>
         <input name="value" type="text" class="input" id="text-template"
                value="{{ cfg.get('value') if 'value' in cfg else '' }}"
@@ -154,7 +154,7 @@
         <span class="field-label">
           Object from event *
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Path or JSON object shape. Result must be a JSON object. field = current stored value.">?</button>
+                  data-tip="Path or JSON object shape. Result must be a JSON object. field = current stored value; fields.slug.path = any Field.">?</button>
         </span>
         <textarea name="value_key" class="input" id="data-value-key" rows="4"
                   placeholder='payload&#10;or {"celsius":"temp","sensor":"payload.sensor"}'>{{ cfg.get('value_key') or '' }}</textarea>
@@ -174,7 +174,7 @@
       <span class="field-label">
         Body
         <button type="button" class="field-tip" tabindex="0"
-                data-tip="Use {{ '{{ path }}' }} or maths from event data.">?</button>
+                data-tip="Use {{ '{{ path }}' }} or maths from event data; fields.slug.path = any Field.">?</button>
       </span>
       <input name="body" type="text" class="input"
              value="{{ cfg.get('body') or '' }}"
@@ -221,7 +221,7 @@
       <span class="field-label">
         Body
         <button type="button" class="field-tip" tabindex="0"
-                data-tip="Templates: {{ '{{ path }}' }} or maths from event data.">?</button>
+                data-tip="Templates: {{ '{{ path }}' }} or maths from event data; fields.slug.path = any Field.">?</button>
       </span>
       <textarea name="body" class="input" rows="3"
                 placeholder="{{ '{{ message }}' }}">{{ cfg.get('body') or '' }}</textarea>
@@ -268,7 +268,7 @@
       <span class="field-label">
         Command *
         <button type="button" class="field-tip" tabindex="0"
-                data-tip="Runs via the shell. Templates: {{ '{{ path }}' }}.">?</button>
+                data-tip="Runs via the shell. Templates: {{ '{{ path }}' }}; fields.slug.path = any Field.">?</button>
       </span>
       <input name="command" type="text" class="input" id="script-command"
              value="{{ cfg.get('command') or '' }}"
@@ -328,7 +328,7 @@
       <span class="field-label">
         URL *
         <button type="button" class="field-tip" tabindex="0"
-                data-tip="Supports {{ '{{ path }}' }} / maths templates.">?</button>
+                data-tip="Supports {{ '{{ path }}' }} / maths templates; fields.slug.path = any Field.">?</button>
       </span>
       <input name="url" type="url" class="input" id="http-url"
              value="{{ cfg.get('url') or '' }}" placeholder="https://example.com/hook">
@@ -463,6 +463,31 @@
     </details>
   </div>
 
+  {# ── trigger_source ── #}
+  <div id="panel-trigger-source" class="stack action-panel" hidden>
+    <p class="alert alert--warning" role="note">
+      Para-Scope limits nested triggers to 3 deep. Do not point a source’s own rules back at itself in a loop.
+    </p>
+    <label class="stack">
+      Target *
+      <select name="target_ref" id="trigger-target-ref" class="input">
+        <option value="">— select target —</option>
+        {% for t in trigger_targets %}
+          {% set val = ("poll:" ~ t.source_id) if t.kind == "poll" else ("webhook:" ~ t.source_id ~ ":" ~ t.event_type_id) %}
+          <option value="{{ val }}" {% if target_ref == val %}selected{% endif %}>
+            {{ t.label }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="stack" id="trigger-payload-wrap" hidden>
+      Payload (JSON object)
+      <textarea name="payload" class="input" rows="6" spellcheck="false"
+                placeholder='{"status": "ok", "temp": 22}'>{{ trigger_payload_text }}</textarea>
+      <span class="text-muted">Templates like <code>{{ '{{ status }}' }}</code> and <code>{{ '{{ fields.temperature.value }}' }}</code> resolve against the triggering event and Fields. Ignored for poll targets.</span>
+    </label>
+  </div>
+
   <div class="flex items-center gap">
     <button type="submit" class="btn btn--primary">{% if is_edit %}Save Action{% else %}Create Action{% endif %}</button>
   </div>
@@ -477,7 +502,8 @@
     web_push: document.getElementById("panel-web-push"),
     notify: document.getElementById("panel-notify"),
     local_script: document.getElementById("panel-local-script"),
-    http_forward: document.getElementById("panel-http-forward")
+    http_forward: document.getElementById("panel-http-forward"),
+    trigger_source: document.getElementById("panel-trigger-source")
   };
   var fpPanels = {
     logbook: document.getElementById("fp-logbook"),
@@ -691,6 +717,15 @@
     syncBodyMode();
     syncAuth();
   }
+  function syncTriggerPayload() {
+    var ref = document.getElementById("trigger-target-ref");
+    var wrap = document.getElementById("trigger-payload-wrap");
+    if (!ref || !wrap) return;
+    var isWebhook = (ref.value || "").indexOf("webhook:") === 0;
+    wrap.hidden = !isWebhook;
+    setDisabledIn(wrap, !isWebhook);
+  }
+
   function sync() {
     var t = typeSel.value;
     Object.keys(panels).forEach(function (k) {
@@ -711,9 +746,12 @@
     if (t === "http_forward") { syncAuth(); syncBodyMode(); syncSigning(); syncPresetUi(); }
     if (t === "notify") syncNotify();
     if (t === "local_script") syncScriptMode();
+    if (t === "trigger_source") syncTriggerPayload();
   }
 
   if (typeSel) typeSel.addEventListener("change", sync);
+  var tref = document.getElementById("trigger-target-ref");
+  if (tref) tref.addEventListener("change", syncTriggerPayload);
   if (fieldSel) fieldSel.addEventListener("change", syncFieldParams);
   var lm = document.getElementById("logbook-mode");
   if (lm) lm.addEventListener("change", syncLogbookMode);

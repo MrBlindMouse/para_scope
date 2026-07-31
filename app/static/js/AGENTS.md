@@ -13,7 +13,8 @@ Vanilla first-party scripts loaded by templates that need them. No module bundle
 | `dialogs.js`, `disclosures.js` | Config UX |
 | `source-dialog.js`, `conditions-builder.js` | Pipeline dialogs |
 | `dashboard-grid.js` | GridStack layout save |
-| `widget-charts.js`, `widget-clock.js`, `widget-notes.js` | Widget clients |
+| `widget-charts.js`, `widget-clock.js`, `widget-notes.js`, `triggers.js` | Widget clients |
+| `events.js` | Events page SSE live tail |
 
 ## Invariants
 

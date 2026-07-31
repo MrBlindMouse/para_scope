@@ -12,8 +12,9 @@ HTTP integration via `TestClient` plus unit tests for pollers, actions, fields, 
 | `test_app.py` | Large HTTP/integration suite (auth, CRUD, webhooks, widgets, …) |
 | `test_polling.py` | Poller handlers, `run_schedule`, scheduler jobs |
 | `test_phase4.py` | Actions (push/http/notify/script), jitter, WAL |
-| `test_remaining.py` | AES secrets, webhook `always`/type rules, metrics API |
+| `test_remaining.py` | AES secrets, webhook `always`/type rules |
 | `test_fields.py` | Pure unit: paths, templates, maths |
+| `test_feature_batch.py` | Triggers, SSE, dry-run, templates, fields namespace, self-metrics, cascade |
 | `test_themes.py` | Theme options + contrast floors |
 
 ## Invariants

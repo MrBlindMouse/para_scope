@@ -14,6 +14,7 @@
       <ul class="stack help__list">
         <li><a href="#pipeline">Pipeline overview</a></li>
         <li><a href="#fields">Fields</a></li>
+        <li><a href="#dot-notation">Dot notation</a></li>
         <li><a href="#rule-matching">Rule matching</a></li>
         <li><a href="#rule-conditions">Rule conditions</a></li>
         <li><a href="#actions">Actions</a></li>
@@ -43,7 +44,8 @@
       </p>
       <p class="text-muted">
         Source types today are webhook and poll.
-        <strong>Dashboard actions</strong> (authenticated dashboard controls that emit pipeline events) are planned — not available yet.
+        The <strong>Triggers</strong> dashboard widget and the <strong>Trigger source</strong> action
+        fire an existing poll or webhook source — they are not a third source type.
       </p>
     </div>
   </section>
@@ -76,6 +78,10 @@
             <td>Toggle</td>
             <td>On/off state — actions can set Fixed or Switch.</td>
           </tr>
+          <tr>
+            <td>Data</td>
+            <td>A single JSON object replaced from event data or a JSON shape.</td>
+          </tr>
         </tbody>
       </table>
       <p>
@@ -86,6 +92,96 @@
         Series graphs need a path after the slug (e.g. <code>usd_prices.rate</code>);
         for a bare number entry use <code>slug.value</code> (same as templates).
       </p>
+      <p class="text-muted">
+        These names are reserved and cannot be Field slugs
+        ({% for s in RESERVED_FIELD_SLUGS %}<code>{{ s }}</code>{% if not loop.last %}, {% endif %}{% endfor %}).
+        A Field whose name would produce one gets a numbered slug instead (e.g. <code>fields_2</code>).
+      </p>
+    </div>
+  </section>
+
+  <section class="card stack" id="dot-notation">
+    <div class="card__header"><h2>Dot notation</h2></div>
+    <div class="card__body stack">
+      <p>
+        Paths use dotted segments (<code>a.b.c</code>). List indexes are integers
+        (<code>items.0.id</code>) or <code>*</code> for a matched/first row.
+      </p>
+
+      <h3>Bindings (dashboard Field pickers)</h3>
+      <p>
+        Config values like <code>field_slug</code> are <code>slug</code> or <code>slug.path</code>.
+        The first segment is always the Field slug; the rest walks into that Field’s state
+        or latest logbook entry. Series and charts require a path for logbook/data Fields
+        (e.g. <code>my-log._poll.response_time_ms</code>).
+      </p>
+
+      <h3>Templates and expressions</h3>
+      <ul class="stack help__list">
+        <li>
+          <strong>Dashboard</strong> (<code>{{ '{{…}}' }}</code> templates, tone rules, Triggers payloads):
+          context is every Field keyed by slug. Write <code>{{ '{{ temperature.value }}' }}</code>
+          — not <code>fields.temperature</code>.
+        </li>
+        <li>
+          <strong>Pipeline</strong> (action templates, paths, maths, JSON shapes, rule condition keys):
+          event payload at the top level, plus reserved <code>fields.&lt;slug&gt;.&lt;path&gt;</code>
+          (e.g. <code>fields.temperature.value</code>). Update Field actions also expose
+          reserved <code>field</code> as the target Field’s current stored value.
+        </li>
+      </ul>
+      <p class="text-muted">
+        Rule condition <em>values</em> stay literal matchers — only the condition key is a path.
+      </p>
+
+      <h3>Reserved names</h3>
+      <table class="table">
+        <thead>
+          <tr><th>Name</th><th>Meaning</th><th>Scope</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>field</code></td>
+            <td>Current stored value of the Update Field target</td>
+            <td>Pipeline Update Field only</td>
+          </tr>
+          <tr>
+            <td><code>fields</code></td>
+            <td>All Fields keyed by slug (wins over a colliding event key)</td>
+            <td>Pipeline actions and rule condition keys</td>
+          </tr>
+          <tr>
+            <td><code>value</code></td>
+            <td>Conventional state key on value/text/toggle Fields; wraps scalar logbook entries</td>
+            <td>Field state / templates</td>
+          </tr>
+          <tr>
+            <td><code>source</code></td>
+            <td>Source name on every poll event (overwrites a colliding payload key)</td>
+            <td>Poll events</td>
+          </tr>
+          <tr>
+            <td><code>_poll</code></td>
+            <td>Poll metadata (schedule_id, response_time_ms, …)</td>
+            <td>Poll events</td>
+          </tr>
+          <tr>
+            <td><code>ts</code></td>
+            <td>Series point timestamp key</td>
+            <td>Series data shape</td>
+          </tr>
+          <tr>
+            <td><code>dt</code></td>
+            <td>Reserved for future date/time context</td>
+            <td>Not available yet</td>
+          </tr>
+          <tr>
+            <td><code>system</code></td>
+            <td>Reserved for future app metadata context</td>
+            <td>Not available yet</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   </section>
 
@@ -120,7 +216,7 @@
         <li><strong>Empty</strong> (no rows) — match all events that already passed source and event-type filters.</li>
         <li><strong>All must match</strong> — every condition row has to pass.</li>
         <li><strong>Missing or invalid data</strong> — for most operators, a missing field or bad value means the condition does <em>not</em> match. <strong>Not equal</strong> also matches when the field is missing.</li>
-        <li><strong>Nested values</strong> — use a simple name like <code>severity</code>, or a path like <code>status.code</code> if the event nests data.</li>
+        <li><strong>Nested values</strong> — use a simple name like <code>severity</code>, or a path like <code>status.code</code> if the event nests data. Conditions may also read Fields via <code>fields.&lt;slug&gt;.&lt;path&gt;</code> (for example <code>fields.temperature.value</code>). When a rule’s conditions use <code>fields.*</code>, matching sees a live Field snapshot — including writes by earlier rules in the same event. Rule order matters for that.</li>
         <li><strong>List indexes</strong> — <code>data.0.id</code> reads a fixed position in a list.</li>
         <li><strong>Any list item</strong> — <code>data.*.status</code> matches if <em>any</em> element’s <code>status</code> matches. Several paths that share the same list (e.g. <code>data.*.base</code> and <code>data.*.quote</code>) must all match on the <em>same</em> element.</li>
         <li><strong>Actions and templates</strong> — when the rule’s conditions used <code>*</code>, the same list row is used for <code>*</code> in field keys and <code>{{ '{{…}}' }}</code> placeholders (<code>value.*.rate</code> is the matched pair’s rate). If conditions did not use <code>*</code>, <code>*</code> means the first item. Each action still runs once.</li>
@@ -233,13 +329,17 @@
         </tbody>
       </table>
       <p class="text-muted">
-        Planned: <strong>Trigger poll</strong> — when a rule fires, run a chosen poll source once (same path as Run now). Not available yet.
+        <strong>Trigger source</strong> — when a rule fires, run a chosen poll source once (same path as Run now),
+        or ingest a webhook event type with an optional JSON payload. Payload strings may use
+        <code>{{ '{{…}}' }}</code> templates against the triggering event and <code>fields.*</code>.
+        Nested triggers are capped at 3 deep; do not create loops.
       </p>
 
       <h3 id="logbook-value-source">Logbook value source</h3>
       <p>
         When an Update field action targets a <strong>logbook</strong>, choose how the entry value is built.
-        Reserved name <code>field</code> is the current stored value (paths, maths, and shapes).
+        See <a href="#dot-notation">Dot notation</a> for reserved <code>field</code> / <code>fields.*</code>
+        and the difference between pipeline and dashboard namespaces.
       </p>
       <table class="table">
         <thead>
@@ -268,9 +368,10 @@
         <li>Path (keeps objects/lists): <code>payload.sensor</code></li>
         <li>
           Maths: <code>temp * 1.8 + 32</code> or <code>1 / value.*.rate</code> —
-          ops <code>+ - * / %</code>, functions <code>abs</code>, <code>round</code>, <code>min</code>, <code>max</code>.
+          ops <code>+ - * / %</code>, functions <code>abs</code>, <code>round</code>,
+          <code>trunc</code>, <code>min</code>, <code>max</code>, <code>sum</code>, <code>avg</code>
+          (variadic scalars, e.g. <code>sum(a, b, c)</code>).
           In maths, <code>*</code> is the list row matched by the rule’s conditions (same as path-only).
-          Planned: more helpers such as <code>trunc</code> (not available yet).
         </li>
         <li>JSON shape (string leaves = path, maths, or literal text):</li>
       </ul>
@@ -486,7 +587,7 @@
       <p>
         <strong>Poll</strong> sources run one poll subtype on a schedule (interval or cron) and feed the same pipeline.
         Create or edit the source, choose a category, then choose the subtype and fill in its typed fields.
-        Planned: a <strong>never</strong> (trigger-only) schedule mode with no automatic tick — only Run now or a Trigger poll action. Not available yet.
+        Schedule types: interval, cron, or <strong>trigger only</strong> (no automatic tick — only Run now or a Trigger source action).
       </p>
       <p class="text-muted">
         Think of the category as the target shape and the subtype as the exact implementation.
@@ -614,7 +715,7 @@
           <tr>
             <td><a href="https://frankfurter.dev/" rel="noopener noreferrer" target="_blank">Frankfurter</a></td>
             <td><code>https://api.frankfurter.dev/v2/rates?base=USD&amp;quotes=EUR,GBP</code></td>
-            <td>FX rates; no key. Narrow <code>quotes</code> to keep responses small.</td>
+            <td>FX rates (v2 array of <code>{date, base, quote, rate}</code>); no key. Narrow <code>quotes</code> to keep responses small. Poll wraps the array as <code>value</code>. Path hint: condition <code>value.*.quote</code> + <code>value.*.rate</code>.</td>
           </tr>
           <tr>
             <td><a href="https://www.coingecko.com/en/api" rel="noopener noreferrer" target="_blank">CoinGecko</a></td>
@@ -653,14 +754,12 @@
       <details class="stack">
         <summary>Planned / future poll integrations</summary>
         <ul class="stack help__list">
-          <li>Never-run (trigger-only) schedule mode — no interval/cron; only Run now or Trigger poll</li>
-          <li>Trigger poll pipeline action — run a chosen poll source once when a rule fires</li>
-          <li>Dashboard actions source type — dashboard controls emit pipeline events</li>
           <li>Container / runtime checks such as Docker snapshots</li>
           <li>Fuller systemd snapshots beyond failed-unit summaries</li>
           <li>SMART, ZFS, and Btrfs health checks</li>
           <li>MQTT / local broker checks</li>
           <li>Deeper queue integrations for Redis, RQ, and Celery</li>
+          <li><code>dt</code> / <code>system</code> standard template variables (names already reserved)</li>
         </ul>
       </details>
     </div>

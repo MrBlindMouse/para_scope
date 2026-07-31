@@ -1,7 +1,7 @@
-"""Tests for secrets encryption, webhook event-type validation, and metrics API."""
+"""Tests for secrets encryption and webhook event-type validation."""
 import os
 import tempfile
-from datetime import datetime, timezone, timedelta
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +24,33 @@ def db():
     session = Session()
     yield session
     session.close()
+
+
+@contextmanager
+def _webhook_client(db):
+    """Override get_db for webhook tests; restore SessionLocal afterward."""
+    from fastapi.testclient import TestClient
+    import app.database as database
+    import app.main as main_mod
+
+    TestSession = sessionmaker(bind=db.get_bind())
+    previous = database.SessionLocal
+
+    def override_get_db():
+        s = TestSession()
+        try:
+            yield s
+        finally:
+            s.close()
+
+    database.SessionLocal = TestSession
+    main_mod.app.dependency_overrides[database.get_db] = override_get_db
+    try:
+        with TestClient(main_mod.app) as client:
+            yield client, TestSession
+    finally:
+        main_mod.app.dependency_overrides.clear()
+        database.SessionLocal = previous
 
 
 # ── AES secrets ─────────────────────────────────────────────────────────────
@@ -73,10 +100,7 @@ def test_decrypt_rejects_non_aes():
 # ── Webhook event type validation ───────────────────────────────────────────
 
 def test_webhook_requires_event_type_when_registered(db):
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord
-    import app.database as database
-    import app.main as main_mod
 
     src = Source(name="API", slug="api", source_type="webhook", enabled=True)
     db.add(src)
@@ -85,80 +109,46 @@ def test_webhook_requires_event_type_when_registered(db):
     db.add(EventTypeRecord(source_id=src.id, name="order.paid"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
-    database.SessionLocal = TestSession
-    main_mod.get_db = lambda: (yield TestSession())
+    with _webhook_client(db) as (client, _):
+        r = client.post("/webhook/api", json={"amount": 10})
+        assert r.status_code == 400
+        assert "Event type required" in r.json()["error"]
 
-    # Patch get_db properly
-    def override_get_db():
-        s = TestSession()
-        try:
-            yield s
-        finally:
-            s.close()
+        r = client.post(
+            "/webhook/api",
+            json={"amount": 10},
+            headers={"X-Event-Type": "order.paid"},
+        )
+        assert r.status_code == 202
 
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post("/webhook/api", json={"amount": 10})
-            assert r.status_code == 400
-            assert "Event type required" in r.json()["error"]
+        r = client.post(
+            "/webhook/api",
+            json={"event_type": "order.paid", "amount": 11},
+        )
+        assert r.status_code == 202
 
-            r = client.post(
-                "/webhook/api",
-                json={"amount": 10},
-                headers={"X-Event-Type": "order.paid"},
-            )
-            assert r.status_code == 202
-
-            r = client.post(
-                "/webhook/api",
-                json={"event_type": "order.paid", "amount": 11},
-            )
-            assert r.status_code == 202
-
-            r = client.post(
-                "/webhook/api",
-                json={"amount": 10},
-                headers={"X-Event-Type": "nope"},
-            )
-            assert r.status_code == 400
-    finally:
-        main_mod.app.dependency_overrides.clear()
+        r = client.post(
+            "/webhook/api",
+            json={"amount": 10},
+            headers={"X-Event-Type": "nope"},
+        )
+        assert r.status_code == 400
 
 
 def test_webhook_allows_untyped_when_no_registry(db):
-    from fastapi.testclient import TestClient
     from app.models import Source
-    import app.database as database
-    import app.main as main_mod
 
     src = Source(name="Raw", slug="raw", source_type="webhook", enabled=True)
     db.add(src)
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
-
-    def override_get_db():
-        s = TestSession()
-        try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post("/webhook/raw", json={"ping": True})
-            assert r.status_code == 202
-    finally:
-        main_mod.app.dependency_overrides.clear()
+    with _webhook_client(db) as (client, _):
+        r = client.post("/webhook/raw", json={"ping": True})
+        assert r.status_code == 202
 
 
 def test_webhook_emits_always_when_present(db):
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord, Event
-    import app.main as main_mod
 
     src = Source(name="Hook", slug="hook-always", source_type="webhook", enabled=True)
     db.add(src)
@@ -168,30 +158,20 @@ def test_webhook_emits_always_when_present(db):
     db.add(EventTypeRecord(source_id=src.id, name="always", description="every delivery"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
+    with _webhook_client(db) as (client, TestSession):
+        r = client.post(
+            "/webhook/hook-always",
+            json={"amount": 5},
+            headers={"X-Event-Type": "order.paid"},
+        )
+        assert r.status_code == 202
+        body = r.json()
+        assert "event_id" in body
+        assert "always_event_id" in body
+        assert body["event_id"] != body["always_event_id"]
 
-    def override_get_db():
-        s = TestSession()
+        s2 = TestSession()
         try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post(
-                "/webhook/hook-always",
-                json={"amount": 5},
-                headers={"X-Event-Type": "order.paid"},
-            )
-            assert r.status_code == 202
-            body = r.json()
-            assert "event_id" in body
-            assert "always_event_id" in body
-            assert body["event_id"] != body["always_event_id"]
-
-            s2 = TestSession()
             events = s2.query(Event).filter(Event.source_id == src.id).all()
             assert len(events) == 2
             names = {
@@ -206,15 +186,12 @@ def test_webhook_emits_always_when_present(db):
             assert always.normalized_data["_webhook"]["trigger"] == "always"
             assert always.normalized_data["_webhook"]["event_type"] == "order.paid"
             assert always.normalized_data["amount"] == 5
+        finally:
             s2.close()
-    finally:
-        main_mod.app.dependency_overrides.clear()
 
 
 def test_webhook_skips_always_when_absent(db):
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord, Event
-    import app.main as main_mod
 
     src = Source(name="Hook2", slug="hook-no-always", source_type="webhook", enabled=True)
     db.add(src)
@@ -223,38 +200,25 @@ def test_webhook_skips_always_when_absent(db):
     db.add(EventTypeRecord(source_id=src.id, name="ping"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
+    with _webhook_client(db) as (client, TestSession):
+        r = client.post(
+            "/webhook/hook-no-always",
+            json={"ok": True},
+            headers={"X-Event-Type": "ping"},
+        )
+        assert r.status_code == 202
+        assert "always_event_id" not in r.json()
 
-    def override_get_db():
-        s = TestSession()
+        s2 = TestSession()
         try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post(
-                "/webhook/hook-no-always",
-                json={"ok": True},
-                headers={"X-Event-Type": "ping"},
-            )
-            assert r.status_code == 202
-            assert "always_event_id" not in r.json()
-
-            s2 = TestSession()
             assert s2.query(Event).filter(Event.source_id == src.id).count() == 1
+        finally:
             s2.close()
-    finally:
-        main_mod.app.dependency_overrides.clear()
 
 
 def test_webhook_always_alone_does_not_require_type(db):
     """`always` is a side-emission; alone it must not force producers to declare a type."""
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord, Event
-    import app.main as main_mod
 
     src = Source(name="Hook3", slug="hook-only-always", source_type="webhook", enabled=True)
     db.add(src)
@@ -263,38 +227,25 @@ def test_webhook_always_alone_does_not_require_type(db):
     db.add(EventTypeRecord(source_id=src.id, name="always"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
+    with _webhook_client(db) as (client, TestSession):
+        r = client.post("/webhook/hook-only-always", json={"ping": 1})
+        assert r.status_code == 202
+        body = r.json()
+        assert body.get("always_event_id")
 
-    def override_get_db():
-        s = TestSession()
+        s2 = TestSession()
         try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post("/webhook/hook-only-always", json={"ping": 1})
-            assert r.status_code == 202
-            body = r.json()
-            assert body.get("always_event_id")
-
-            s2 = TestSession()
             events = s2.query(Event).filter(Event.source_id == src.id).all()
             assert len(events) == 2  # untyped primary + always
             typed = [e for e in events if e.event_type_id is not None]
             assert len(typed) == 1
             assert typed[0].normalized_data["_webhook"]["trigger"] == "always"
+        finally:
             s2.close()
-    finally:
-        main_mod.app.dependency_overrides.clear()
 
 
 def test_webhook_case_insensitive_match(db):
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord, Event
-    import app.main as main_mod
 
     src = Source(name="Case", slug="hook-case", source_type="webhook", enabled=True)
     db.add(src)
@@ -303,37 +254,24 @@ def test_webhook_case_insensitive_match(db):
     db.add(EventTypeRecord(source_id=src.id, name="order.paid"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
-
-    def override_get_db():
-        s = TestSession()
+    with _webhook_client(db) as (client, TestSession):
+        r = client.post(
+            "/webhook/hook-case",
+            json={"amount": 1},
+            headers={"X-Event-Type": "Order.Paid"},
+        )
+        assert r.status_code == 202
+        s2 = TestSession()
         try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post(
-                "/webhook/hook-case",
-                json={"amount": 1},
-                headers={"X-Event-Type": "Order.Paid"},
-            )
-            assert r.status_code == 202
-            s2 = TestSession()
             ev = s2.query(Event).filter(Event.id == r.json()["event_id"]).first()
             assert ev.normalized_data["_webhook"]["event_type"] == "order.paid"
+        finally:
             s2.close()
-    finally:
-        main_mod.app.dependency_overrides.clear()
 
 
 def test_webhook_only_always_accepts_generic_body_type(db):
     """Unmatched body `type` must not 400 when only `always` is registered."""
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord, Event
-    import app.main as main_mod
 
     src = Source(name="Sensor", slug="hook-sensor", source_type="webhook", enabled=True)
     db.add(src)
@@ -342,37 +280,24 @@ def test_webhook_only_always_accepts_generic_body_type(db):
     db.add(EventTypeRecord(source_id=src.id, name="always"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
-
-    def override_get_db():
-        s = TestSession()
+    with _webhook_client(db) as (client, TestSession):
+        r = client.post(
+            "/webhook/hook-sensor",
+            json={"type": "temperature", "celsius": 21},
+        )
+        assert r.status_code == 202
+        s2 = TestSession()
         try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post(
-                "/webhook/hook-sensor",
-                json={"type": "temperature", "celsius": 21},
-            )
-            assert r.status_code == 202
-            s2 = TestSession()
             primary = s2.query(Event).filter(Event.id == r.json()["event_id"]).first()
             assert primary.event_type_id is None
             assert primary.normalized_data["_webhook"]["event_type"] is None
             assert primary.normalized_data["type"] == "temperature"
+        finally:
             s2.close()
-    finally:
-        main_mod.app.dependency_overrides.clear()
 
 
 def test_webhook_rejects_unknown_type_when_producers_exist(db):
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord
-    import app.main as main_mod
 
     src = Source(name="Producers", slug="hook-producers", source_type="webhook", enabled=True)
     db.add(src)
@@ -382,32 +307,17 @@ def test_webhook_rejects_unknown_type_when_producers_exist(db):
     db.add(EventTypeRecord(source_id=src.id, name="order.paid"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
-
-    def override_get_db():
-        s = TestSession()
-        try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post(
-                "/webhook/hook-producers",
-                json={"type": "temperature"},
-            )
-            assert r.status_code == 400
-            assert "not found" in r.json()["error"]
-    finally:
-        main_mod.app.dependency_overrides.clear()
+    with _webhook_client(db) as (client, _):
+        r = client.post(
+            "/webhook/hook-producers",
+            json={"type": "temperature"},
+        )
+        assert r.status_code == 400
+        assert "not found" in r.json()["error"]
 
 
 def test_webhook_github_event_header(db):
-    from fastapi.testclient import TestClient
     from app.models import Source, EventTypeRecord, Event
-    import app.main as main_mod
 
     src = Source(name="GH", slug="hook-gh", source_type="webhook", enabled=True)
     db.add(src)
@@ -416,30 +326,19 @@ def test_webhook_github_event_header(db):
     db.add(EventTypeRecord(source_id=src.id, name="push"))
     db.commit()
 
-    TestSession = sessionmaker(bind=db.get_bind())
-
-    def override_get_db():
-        s = TestSession()
+    with _webhook_client(db) as (client, TestSession):
+        r = client.post(
+            "/webhook/hook-gh",
+            json={"ref": "refs/heads/main"},
+            headers={"X-GitHub-Event": "Push"},
+        )
+        assert r.status_code == 202
+        s2 = TestSession()
         try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            r = client.post(
-                "/webhook/hook-gh",
-                json={"ref": "refs/heads/main"},
-                headers={"X-GitHub-Event": "Push"},
-            )
-            assert r.status_code == 202
-            s2 = TestSession()
             ev = s2.query(Event).filter(Event.id == r.json()["event_id"]).first()
             assert ev.normalized_data["_webhook"]["event_type"] == "push"
+        finally:
             s2.close()
-    finally:
-        main_mod.app.dependency_overrides.clear()
 
 
 def test_normalize_event_type_helper():
@@ -449,45 +348,3 @@ def test_normalize_event_type_helper():
     assert normalize_event_type(None) == ""
     assert normalize_event_type("  ") == ""
     assert EVENT_TYPE_MAX_LEN == 200
-
-
-# ── Multi-series metrics API ────────────────────────────────────────────────
-
-def test_metrics_api_multi_series(db):
-    from fastapi.testclient import TestClient
-    from app.models import Source, MetricPoint, User
-    from app.security import hash_password
-    import app.main as main_mod
-
-    src = Source(name="S", slug="s", source_type="generic", enabled=True)
-    db.add(src)
-    db.commit()
-    db.refresh(src)
-    now = datetime.now(timezone.utc)
-    db.add(MetricPoint(source_id=src.id, name="orders", value=1.0, timestamp=now))
-    db.add(MetricPoint(source_id=src.id, name="revenue", value=9.5, timestamp=now))
-    db.add(User(username="u", hashed_password=hash_password("p")))
-    db.commit()
-
-    TestSession = sessionmaker(bind=db.get_bind())
-
-    def override_get_db():
-        s = TestSession()
-        try:
-            yield s
-        finally:
-            s.close()
-
-    main_mod.app.dependency_overrides[main_mod.get_db] = override_get_db
-    try:
-        with TestClient(main_mod.app) as client:
-            client.post("/login", data={"username": "u", "password": "p"})
-            r = client.get("/metrics/api?name=orders,revenue&range=24")
-            assert r.status_code == 200
-            body = r.json()
-            assert "series" in body
-            assert len(body["series"]) == 2
-            names = {s["name"] for s in body["series"]}
-            assert names == {"orders", "revenue"}
-    finally:
-        main_mod.app.dependency_overrides.clear()

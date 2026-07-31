@@ -23,6 +23,13 @@ Base.metadata.create_all(bind=engine)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os
+    # Tests set PARA_SCOPE_SECRET_KEY in app.tests / pytest env.
+    if not os.environ.get("PARA_SCOPE_SECRET_KEY", "").strip():
+        raise RuntimeError(
+            "PARA_SCOPE_SECRET_KEY is required. Set it in .env "
+            "(generate with: openssl rand -hex 32)."
+        )
     start_scheduler()
     yield
     stop_scheduler()

@@ -16,6 +16,7 @@ import httpx
 from app.fields import (
     coerce_data_value,
     coerce_logbook_value,
+    resolve_bool,
     resolve_numeric,
     with_current_field,
 )
@@ -84,10 +85,22 @@ def _require_field(db, field_id, expected_types: tuple[str, ...] | None = None) 
     return field
 
 
+def event_data_context(db, event: Event) -> dict:
+    """Event payload plus reserved ``fields.<slug>`` snapshot.
+
+    Built per attempt so a later action (or rule) sees earlier Field writes.
+    Reserved ``fields`` wins over a colliding event key.
+    """
+    from app.widgets import fields_snapshot
+
+    return {**(event.normalized_data or {}), "fields": fields_snapshot(db)}
+
+
 def _action_field_push(db, event: Event, action: ActionInstance) -> None:
     config = action.config or {}
     field = _require_field(db, config.get("field_id"))
     nd = event.normalized_data or {}
+    base = event_data_context(db, event)
 
     if field.field_type == "logbook":
         cfg = field.config or {}
@@ -101,7 +114,7 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
             .first()
         )
         if "value" in config or config.get("value_key"):
-            ctx = with_current_field(nd, latest.value if latest else None)
+            ctx = with_current_field(base, latest.value if latest else None)
             if "value" in config:
                 raw = render_data_template(str(config["value"] or ""), ctx)
             else:
@@ -145,7 +158,7 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
         field = db.query(Field).filter(Field.id == field.id).with_for_update().one()
         state = dict(field.state or {})
         current = float(state.get("value") or 0)
-        ctx = with_current_field(nd, current)
+        ctx = with_current_field(base, current)
         if op == "reset":
             new_value = 0.0
         elif op == "set":
@@ -171,7 +184,7 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
             raise ValueError("Text action needs a template")
         state = dict(field.state or {})
         current = state.get("value", "")
-        ctx = with_current_field(nd, current)
+        ctx = with_current_field(base, current)
         new_value = render_data_template(str(config["value"] or ""), ctx)
         if str(new_value) == str(current if current is not None else ""):
             logger.debug(
@@ -188,21 +201,19 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
         field = db.query(Field).filter(Field.id == field.id).with_for_update().one()
         state = dict(field.state or {})
         current = bool(state.get("value", False))
+        ctx = with_current_field(base, current)
         if (config.get("op") or "").strip() == "switch":
             state["value"] = not current
         elif "value" in config:
-            raw = config["value"]
-            if isinstance(raw, bool):
-                if raw == current:
-                    logger.debug(
-                        "field_push toggle skip unchanged field=%s event_id=%s",
-                        field.name, event.id,
-                    )
-                    db.commit()  # release FOR UPDATE
-                    return
-                state["value"] = raw
-            else:
-                raise ValueError("Toggle Fixed needs on or off")
+            new_value = resolve_bool(config, ctx)
+            if new_value == current:
+                logger.debug(
+                    "field_push toggle skip unchanged field=%s event_id=%s",
+                    field.name, event.id,
+                )
+                db.commit()  # release FOR UPDATE
+                return
+            state["value"] = new_value
         else:
             raise ValueError("Toggle action needs Fixed or Switch")
         field.state = state
@@ -212,7 +223,7 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
     if field.field_type == "data":
         field = db.query(Field).filter(Field.id == field.id).with_for_update().one()
         state = dict(field.state or {})
-        ctx = with_current_field(nd, state)
+        ctx = with_current_field(base, state)
         raw = resolve_value_from_event(str(config["value_key"]), ctx) if config.get("value_key") else nd
         new_value = coerce_data_value(raw)
         if new_value == state:
@@ -294,6 +305,7 @@ def _send_http(
         raise ValueError("Forward URL is missing")
 
     signing_mode = (config.get("signing_mode") or "none").strip()
+    signed_body_bytes: bytes | None = None
     if signing_mode == "hmac_sha256":
         if action.secret_id_2:
             signing_key = _secret_value(db, action.secret_id_2)
@@ -312,6 +324,7 @@ def _send_http(
                 body_str = body_text
             elif body is not None:
                 body_str = json.dumps(body, separators=(",", ":"), sort_keys=True)
+                signed_body_bytes = body_str.encode("utf-8")
         message = f"{method}\n{url}\n{ts}\n{body_str}".encode()
         signature = hmac_mod.new(signing_key.encode(), message, hashlib.sha256).hexdigest()
         headers = dict(headers)
@@ -324,6 +337,10 @@ def _send_http(
             if body_text is not None:
                 kwargs["content"] = body_text.encode("utf-8")
                 headers.setdefault("Content-Type", "text/plain; charset=utf-8")
+                kwargs["headers"] = headers
+            elif signed_body_bytes is not None:
+                kwargs["content"] = signed_body_bytes
+                headers.setdefault("Content-Type", "application/json")
                 kwargs["headers"] = headers
             elif body is not None:
                 kwargs["json"] = body
@@ -403,7 +420,8 @@ def build_notify_request(
 
 def _action_http_forward(db, event: Event, action: ActionInstance) -> None:
     config = action.config or {}
-    nd = event.normalized_data or {}
+    raw_nd = event.normalized_data or {}
+    nd = event_data_context(db, event)
     url = render_data_template((config.get("url") or "").strip(), nd)
     if not url:
         raise ValueError("Forward URL is missing")
@@ -428,7 +446,7 @@ def _action_http_forward(db, event: Event, action: ActionInstance) -> None:
             "event_id": event.id,
             "source_id": event.source_id,
             "correlation_id": event.correlation_id,
-            "data": nd,
+            "data": raw_nd,
         }
 
     if method == "GET":
@@ -450,7 +468,7 @@ def _action_notify(db, event: Event, action: ActionInstance) -> None:
     service = (config.get("service") or "").strip().lower()
     if service not in _NOTIFY_SERVICES:
         raise ValueError("Choose ntfy, Gotify, or Discord")
-    nd = event.normalized_data or {}
+    nd = event_data_context(db, event)
     title = render_data_template(str(config.get("title") or ""), nd)
     body = render_data_template(str(config.get("body") or ""), nd)
     server_url = render_data_template(str(config.get("server_url") or ""), nd)
@@ -521,7 +539,7 @@ def _action_local_script(db, event: Event, action: ActionInstance) -> None:
             "Local scripts are disabled. Set PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1 to enable."
         )
     config = action.config or {}
-    nd = event.normalized_data or {}
+    nd = event_data_context(db, event)
     timeout = float(config.get("timeout_seconds") or _LOCAL_TIMEOUT_DEFAULT)
     timeout = max(1.0, min(timeout, _LOCAL_TIMEOUT_MAX))
 
@@ -575,7 +593,7 @@ def _action_web_push(db, event: Event, action: ActionInstance) -> None:
         raise ValueError("Browser notifications aren’t configured")
 
     config = action.config or {}
-    data = event.normalized_data or {}
+    data = event_data_context(db, event)
     title = render_data_template(config.get("title") or "Para-Scope", data)
     body = render_data_template(config.get("body") or "", data)
     url = render_data_template(config.get("url") or "/", data)
@@ -619,8 +637,99 @@ def _action_web_push(db, event: Event, action: ActionInstance) -> None:
         raise ValueError("Couldn’t send any push notifications")
 
 
+def _action_trigger_source(db, event: Event, action: ActionInstance) -> None:
+    """Fire a poll source (Run now) or ingest a webhook event type with payload."""
+    from app.ingest import ingest_manual_events
+    from app.models import EventTypeRecord, PollingSchedule, Source
+    from app.pollers import run_schedule
+
+    config = action.config or {}
+    raw = config.get("target_source_id")
+    if raw is None:
+        raise ValueError("Action is missing a target source")
+    try:
+        sid = int(raw)
+    except (TypeError, ValueError) as e:
+        raise ValueError("Invalid target source") from e
+    source = db.query(Source).filter(Source.id == sid).first()
+    if not source:
+        raise ValueError("Target source not found")
+    if not source.enabled:
+        raise ValueError(f"Source “{source.name}” is disabled")
+
+    if source.source_type == "poll":
+        schedule = db.query(PollingSchedule).filter(PollingSchedule.source_id == sid).first()
+        if not schedule:
+            raise ValueError(f"Poll source “{source.name}” has no schedule")
+        if not schedule.enabled:
+            raise ValueError(f"Schedule for “{source.name}” is disabled")
+        ok = run_schedule(schedule.id)
+        if not ok:
+            raise ValueError(f"Poll of “{source.name}” failed")
+        return
+
+    if source.source_type != "webhook":
+        raise ValueError(f"Source “{source.name}” cannot be triggered")
+
+    try:
+        et_id = int(config.get("event_type_id"))
+    except (TypeError, ValueError) as e:
+        raise ValueError("Event type is required for webhook targets") from e
+    event_type = (
+        db.query(EventTypeRecord)
+        .filter(EventTypeRecord.id == et_id, EventTypeRecord.source_id == sid)
+        .first()
+    )
+    if not event_type:
+        raise ValueError("Event type not found")
+    if not event_type.enabled:
+        raise ValueError(f"Event type “{event_type.name}” is disabled")
+
+    raw_payload = config.get("payload") or {}
+    if not isinstance(raw_payload, dict):
+        raise ValueError("Trigger payload must be a JSON object")
+    data = _template_mapping(raw_payload, event_data_context(db, event))
+    if not isinstance(data, dict):
+        raise ValueError("Trigger payload must be a JSON object")
+
+    from app.event_stream import publish
+    from app.pipeline import evaluate_and_dispatch
+
+    failures: list[str] = []
+    for ev in ingest_manual_events(
+        db,
+        source,
+        event_type,
+        data,
+        meta={
+            "origin": "action",
+            "action_id": action.id,
+            "event_id": event.id,
+            "event_type": event_type.name,
+        },
+    ):
+        try:
+            evaluate_and_dispatch(db, ev)
+            if ev.status != "failed":
+                ev.status = "processed"
+            else:
+                failures.append(ev.processing_error or "nested pipeline failed")
+        except Exception as e:
+            ev.status = "failed"
+            ev.processing_error = str(e)
+            failures.append(str(e))
+            logger.exception(
+                "trigger_source nested pipeline failed event_id=%s", ev.id,
+            )
+        db.commit()
+        publish(ev.id)
+    if failures:
+        raise ValueError(f"Nested trigger failed: {failures[0]}")
+
+
 register_action("field_push", _action_field_push)
 register_action("http_forward", _action_http_forward)
 register_action("notify", _action_notify)
 register_action("web_push", _action_web_push)
 register_action("local_script", _action_local_script)
+register_action("trigger_source", _action_trigger_source)

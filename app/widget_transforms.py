@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import operator
 import re
 from datetime import datetime, timezone, timedelta
@@ -20,7 +21,7 @@ _UNARYOPS = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
 }
-_CALL_FUNCS = frozenset({"abs", "round", "min", "max"})
+_CALL_FUNCS = frozenset({"abs", "round", "min", "max", "trunc", "sum", "avg"})
 _COMPARE_OPS = {
     "gt": operator.gt,
     "lt": operator.lt,
@@ -261,10 +262,22 @@ def _eval_ast(node, data: dict):
             if len(args) == 2:
                 return float(round(args[0], int(args[1])))
             raise ValueError("round arity")
+        if name == "trunc":
+            if len(args) != 1:
+                raise ValueError("trunc arity")
+            return float(math.trunc(args[0]))
         if name in ("min", "max"):
             if not args:
                 raise ValueError("minmax arity")
             return float((min if name == "min" else max)(args))
+        if name == "sum":
+            if not args:
+                raise ValueError("sum arity")
+            return float(sum(args))
+        if name == "avg":
+            if not args:
+                raise ValueError("avg arity")
+            return float(sum(args) / len(args))
         raise ValueError("disallowed call")
     if isinstance(node, ast.Name):
         raw = get_by_path(data, node.id)

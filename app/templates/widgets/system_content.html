@@ -120,21 +120,9 @@
   <p class="text-muted">No schedules configured.</p>
   {% endif %}
 {% elif disp == "metric_summary" %}
-  {% if wdata and (wdata.points or wdata.counters) %}
+  {% if wdata and wdata.counters %}
   {% if style == "cards" %}
   <div class="stack stack--tight">
-    <div class="widget-entry-card">
-      <div class="stat__label">Series</div>
-      <div class="stat__value">{{ wdata.series }}</div>
-    </div>
-    <div class="widget-entry-card">
-      <div class="stat__label">Points</div>
-      <div class="stat__value">{{ wdata.points }}</div>
-    </div>
-    <div class="widget-entry-card">
-      <div class="stat__label">Last hour</div>
-      <div class="stat__value">{{ wdata.last_hour }}</div>
-    </div>
     {% for c in wdata.counters %}
     <div class="widget-entry-card">
       <div class="stat__label">{{ c.name }}</div>
@@ -144,18 +132,6 @@
   </div>
   {% else %}
   <div class="grid-auto" style="--grid-min: {% if style == 'compact' %}6em{% else %}8em{% endif %}; --grid-gap: {% if style == 'compact' %}0.25rem{% else %}0.5rem{% endif %};">
-    <div class="stat">
-      <div class="stat__label">Series</div>
-      <div class="stat__value">{{ wdata.series }}</div>
-    </div>
-    <div class="stat">
-      <div class="stat__label">Points</div>
-      <div class="stat__value">{{ wdata.points }}</div>
-    </div>
-    <div class="stat">
-      <div class="stat__label">Last hour</div>
-      <div class="stat__value">{{ wdata.last_hour }}</div>
-    </div>
     {% for c in wdata.counters %}
     <div class="stat">
       <div class="stat__label">{{ c.name }}</div>
@@ -165,7 +141,7 @@
   </div>
   {% endif %}
   {% else %}
-  <p class="text-muted">No metrics yet.</p>
+  <p class="text-muted">No value fields yet.</p>
   {% endif %}
 {% else %}
 <p class="text-muted">Unknown system display.</p>

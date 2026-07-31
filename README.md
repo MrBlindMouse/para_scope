@@ -5,12 +5,12 @@ Self-hosted event hub and operational dashboard for personal or small-team infra
 - **Sources** — webhook receivers (HMAC, Stripe, GitHub, Slack, Discord, PayPal) and scheduled pollers
 - **Pipeline** — event types → rules (with conditions) → actions
 - **Fields** — shared logbook / value / text / toggle / data state for widgets and actions
-- **Dashboard** — configurable widgets on `/`: time series, charts, displays, clocks, links, notes, and system views
+- **Dashboard** — configurable widgets on `/`: time series, charts, displays, clocks, links, triggers, notes, and system views
 - **Style** — themes, fonts, and custom background images at `/config/style`
-- **Ops views** — `/events`, `/metrics`, `/system`, plus config for users, dashboard layout, and audit log
+- **Ops views** — `/events`, `/system`, plus config for users, dashboard layout, and audit log
 - **Simple ops** — single-process FastAPI + SQLite; no Docker required
 
-In-app detail: **Help** at `/help` after login.
+In-app detail: **Help** at `/help` after login. Contributor recipes for pollers, actions, and widgets: [docs/authoring.md](docs/authoring.md).
 
 [Landing Page](https://para-scope.bmd-studios.com)
 
@@ -45,9 +45,9 @@ Copy `.env.example` to `.env` (gitignored). Values are loaded automatically via 
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PARA_SCOPE_SECRET_KEY` | Yes | Signs session cookies and encrypts stored secrets (Fernet). Login and secret storage fail without it. Generate with `openssl rand -hex 32`. |
+| `PARA_SCOPE_SECRET_KEY` | Yes | Signs session cookies and encrypts stored secrets (Fernet). The app **refuses to start** if unset. Generate with `openssl rand -hex 32`. |
 | `PARA_SCOPE_SECURE_COOKIES` | No | Set to `1`/`true`/`yes` so session and CSRF cookies use the `Secure` flag (use behind HTTPS). |
-| `PARA_SCOPE_DATABASE_URL` | No | SQLAlchemy URL. Default: SQLite file `para_scope.db` in the project root. |
+| `PARA_SCOPE_DATABASE_URL` | No | SQLite SQLAlchemy URL only. Default: `para_scope.db` in the project root. PostgreSQL support is not planned. |
 | `PARA_SCOPE_LOG_LEVEL` | No | Logging level (default `INFO`). |
 | `PARA_SCOPE_UPLOADS_DIR` | No | Directory for uploaded dashboard backgrounds (default `data/uploads`). |
 | `PARA_SCOPE_VAPID_PUBLIC_KEY` | No | Web Push VAPID public key (required for `web_push` actions). |
@@ -67,9 +67,9 @@ Get a working pipeline after login (more detail in `/help`):
    - **Poll:** schedules feed `on_success` / `on_failure` into the same pipeline (see [Polling](#polling)).
 4. **Add a rule** for the event(s) you care about (use **Add rule** on an event row to pre-select it). Empty conditions match all events for those types.
 5. **Add an action on that rule** (`field_push` is a good smoke test; `http_forward`, `notify` for ntfy / Gotify / Discord, and `web_push` are also built in; `local_script` needs `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`). Optional credentials can be attached in the action dialog. For `web_push`, set VAPID env vars and click the bell in the header to enable notifications. Events, rules, and actions are editable from the chain.
-6. **Confirm** on `/events`, enable widgets at `/config/dashboard`, and view them on `/`.
+6. **Confirm** on `/events` (live SSE tail), enable widgets at `/config/dashboard`, and view them on `/`. Widget **titles**, **labels**, **units**, and **link URLs** accept `{{ slug… }}` Field templates at display time (same bare-slug namespace as display templates; notes stay literal).
 
-Day-to-day: `/events`, `/metrics`, and `/system`. Manage accounts at `/config/users`. Appearance and dashboard background: `/config/style`.
+Day-to-day: `/events` and `/system`. Manage accounts at `/config/users`. Appearance and dashboard background: `/config/style`.
 
 ## Webhooks
 
@@ -116,7 +116,7 @@ Public health check: `GET /health`.
 
 ## Polling
 
-Set the schedule when you create or edit a **Poll** source (exactly one schedule per poll source: interval or cron). Full subtype inventory is under [Capabilities](#pollers).
+Set the schedule when you create or edit a **Poll** source (exactly one schedule per poll source: interval, cron, or never / trigger-only). Full subtype inventory is under [Capabilities](#pollers).
 
 Jobs run in-process via APScheduler and feed the same pipeline as webhooks. Use **Run now** on a poll source to fire immediately.
 
@@ -191,6 +191,7 @@ Use generic HTTP pollers for plain endpoint checks. Prefer specialized subtypes 
 | **Call URL** (`http_forward`) | HTTP request to another service |
 | **Notify** | ntfy, Gotify, or Discord (thin wrapper over Call URL) |
 | **Browser notification** (`web_push`) | Web Push via VAPID (bell in the header to subscribe) |
+| **Trigger source** (`trigger_source`) | Run a poll once or ingest a webhook event type (nested cascades capped at depth 3) |
 | **Local script** | Run a host command (requires `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`; optional path allowlist) |
 
 ### Webhook providers
@@ -198,10 +199,10 @@ Use generic HTTP pollers for plain endpoint checks. Prefer specialized subtypes 
 `POST /webhook/{slug}` accepts JSON (max body 256KB). Choose a verification provider per source:
 
 - **Generic HMAC** — `X-Webhook-Timestamp` + `X-Webhook-Signature` (HMAC-SHA256 of `{timestamp}.{raw_body}`)
-- **Stripe** — Stripe signature header
-- **GitHub** — GitHub / Gitea webhook secret
-- **Slack** — Slack signing secret
-- **Discord** — Ed25519 application public key
+- **Stripe** — Stripe signature header (+ timestamp skew)
+- **GitHub** — GitHub / Gitea webhook secret (body HMAC; no timestamp in the protocol — replay protection is the in-memory cache TTL only)
+- **Slack** — Slack signing secret (+ timestamp skew)
+- **Discord** — Ed25519 application public key (+ timestamp skew)
 - **PayPal** — PayPal verify-webhook-signature API
 
 Sources without a secret accept unsigned traffic (fine for local/dev; use a provider secret in production).
@@ -350,6 +351,21 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
+    }
+
+    # Live event tail (SSE) — disable buffering and keep the connection open.
+    location /events/stream {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 1h;
     }
 }
 ```

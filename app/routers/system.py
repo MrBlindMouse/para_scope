@@ -12,14 +12,11 @@ from app.models import (
     Source,
     EventTypeRecord,
     PollingSchedule,
-    Secret,
     Event,
     AuditLog,
-    MetricPoint,
 )
 from app.security import (
     hash_password,
-    encrypt_secret,
 )
 from app.scheduler import job_count
 from app.themes import (
@@ -179,49 +176,6 @@ async def create_user(request: Request, db: Session = Depends(get_db)):
 # ── Config: Dashboard Layout ────────────────────────────────────────────────
 
 
-# route: /config/secrets
-@router.post("/config/secrets")
-async def create_secret(request: Request, db: Session = Depends(get_db)):
-    form = await request.form()
-    scoped_to_type = (form.get("scoped_to_type") or "source").strip()
-    scoped_to_id_str = form.get("scoped_to_id", "").strip()
-    value = (form.get("value") or "").strip()
-
-    if not scoped_to_id_str or not value:
-        return ctx._pipeline_redirect(error="Target and value are required")
-
-    try:
-        scoped_to_id = int(scoped_to_id_str)
-    except ValueError:
-        return ctx._pipeline_redirect(error="Target must be a number")
-
-    try:
-        encrypted_value = encrypt_secret(value)
-    except ValueError:
-        return ctx._pipeline_redirect(error="Secrets aren’t available until the server is configured")
-    secret = Secret(
-        scoped_to_type=scoped_to_type,
-        scoped_to_id=scoped_to_id, encrypted_value=encrypted_value,
-    )
-    db.add(secret)
-    db.commit()
-    ctx._audit_log(db, request, "secret.create", resource_type="secret", resource_id=secret.id)
-    return ctx._pipeline_redirect(success="Secret created")
-
-
-# route: /config/secret/{secret_id}/delete
-@router.post("/config/secret/{secret_id}/delete")
-async def delete_secret(request: Request, secret_id: int, db: Session = Depends(get_db)):
-    secret = db.query(Secret).filter(Secret.id == secret_id).first()
-    if not secret:
-        return ctx._pipeline_redirect(error="Secret not found")
-    sid = secret.id
-    db.delete(secret)
-    db.commit()
-    ctx._audit_log(db, request, "secret.delete", resource_type="secret", resource_id=sid)
-    return ctx._pipeline_redirect(success="Secret deleted")
-
-
 # ── Config: Audit Log ───────────────────────────────────────────────────────
 
 
@@ -231,13 +185,19 @@ async def config_audit_log(request: Request, db: Session = Depends(get_db)):
     success, error = ctx.get_message_params(request)
     user_id_filter = request.query_params.get("user_id", "").strip()
     action_filter = request.query_params.get("action", "").strip()
-    page = int(request.query_params.get("page", 1))
+    try:
+        page = max(1, int(request.query_params.get("page", 1)))
+    except ValueError:
+        page = 1
     per_page = 50
     offset = (page - 1) * per_page
 
     query = db.query(AuditLog).order_by(AuditLog.timestamp.desc())
     if user_id_filter:
-        query = query.filter(AuditLog.user_id == int(user_id_filter))
+        try:
+            query = query.filter(AuditLog.user_id == int(user_id_filter))
+        except ValueError:
+            pass
     if action_filter:
         query = query.filter(AuditLog.action.like(f"%{action_filter}%"))
 
@@ -264,7 +224,10 @@ async def list_events(request: Request, db: Session = Depends(get_db)):
     source_id_filter = request.query_params.get("source_id", "").strip()
     event_type_filter = request.query_params.get("event_type_id", "").strip()
     status_filter = request.query_params.get("status", "").strip()
-    page = int(request.query_params.get("page", 1))
+    try:
+        page = max(1, int(request.query_params.get("page", 1)))
+    except ValueError:
+        page = 1
     per_page = 50
     offset = (page - 1) * per_page
 
@@ -273,9 +236,15 @@ async def list_events(request: Request, db: Session = Depends(get_db)):
     event_types = db.query(EventTypeRecord).all()
 
     if source_id_filter:
-        query = query.filter(Event.source_id == int(source_id_filter))
+        try:
+            query = query.filter(Event.source_id == int(source_id_filter))
+        except ValueError:
+            pass
     if event_type_filter:
-        query = query.filter(Event.event_type_id == int(event_type_filter))
+        try:
+            query = query.filter(Event.event_type_id == int(event_type_filter))
+        except ValueError:
+            pass
     if status_filter:
         query = query.filter(Event.status == status_filter)
 
@@ -293,38 +262,123 @@ async def list_events(request: Request, db: Session = Depends(get_db)):
     )
 
 
-# route: /events/rows
-@router.get("/events/rows")
-async def events_live_rows(request: Request, db: Session = Depends(get_db)):
-    """HTMX partial: return new event rows newer than `after` id."""
-    after = int(request.query_params.get("after") or 0)
+def _render_event_row(item, display_timezone) -> str:
+    return ctx.templates.env.get_template("components/event_row.html").render(
+        item=item,
+        display_timezone=display_timezone,
+    )
+
+
+# route: /events/stream
+@router.get("/events/stream")
+async def events_stream(request: Request):
+    """SSE live event tail. Auth via session cookie; short-lived DB sessions only."""
+    import asyncio
+    import json as _json
+    from starlette.responses import StreamingResponse
+    from app.database import SessionLocal
+    from app import event_stream as es
+    from app.themes import get_display_timezone
+
     source_id_filter = request.query_params.get("source_id", "").strip()
     event_type_filter = request.query_params.get("event_type_id", "").strip()
     status_filter = request.query_params.get("status", "").strip()
+    after_raw = request.query_params.get("after") or request.headers.get("Last-Event-ID") or "0"
+    try:
+        after = int(after_raw)
+    except ValueError:
+        after = 0
 
-    query = db.query(Event).filter(Event.id > after).order_by(Event.id.asc()).limit(50)
-    if source_id_filter:
-        query = query.filter(Event.source_id == int(source_id_filter))
-    if event_type_filter:
-        query = query.filter(Event.event_type_id == int(event_type_filter))
-    if status_filter:
-        query = query.filter(Event.status == status_filter)
+    def _matches(event: Event) -> bool:
+        if source_id_filter:
+            try:
+                if event.source_id != int(source_id_filter):
+                    return False
+            except ValueError:
+                return False
+        if event_type_filter:
+            try:
+                if event.event_type_id != int(event_type_filter):
+                    return False
+            except ValueError:
+                return False
+        if status_filter and event.status != status_filter:
+            return False
+        return True
 
-    entries = list(reversed(query.all()))  # newest first for afterbegin swap
-    if not entries:
-        return HTMLResponse("")
-
-    rows = []
-    display_timezone = get_display_timezone(db)
-    for item in entries:
-        rows.append(
-            ctx.templates.env.get_template("components/event_row.html").render(
-                item=item,
-                display_timezone=display_timezone,
+    def _fetch_rows(ids: list[int]) -> list[tuple[int, str]]:
+        if not ids:
+            return []
+        db = SessionLocal()
+        try:
+            display_timezone = get_display_timezone(db)
+            rows = (
+                db.query(Event)
+                .filter(Event.id.in_(ids))
+                .order_by(Event.id.asc())
+                .all()
             )
-        )
-    return HTMLResponse("".join(rows))
+            out = []
+            for item in rows:
+                if not _matches(item):
+                    continue
+                out.append((item.id, _render_event_row(item, display_timezone)))
+            return out
+        finally:
+            db.close()
 
+    queue = await es.subscribe()
+    # Catch-up: register first, then query so nothing between is lost; dedupe by id.
+    seen: set[int] = set()
+
+    async def gen():
+        try:
+            db = SessionLocal()
+            try:
+                q = db.query(Event).filter(Event.id > after).order_by(Event.id.asc())
+                if source_id_filter:
+                    q = q.filter(Event.source_id == int(source_id_filter))
+                if event_type_filter:
+                    q = q.filter(Event.event_type_id == int(event_type_filter))
+                if status_filter:
+                    q = q.filter(Event.status == status_filter)
+                catchup = q.limit(50).all()
+                display_timezone = get_display_timezone(db)
+                for item in catchup:
+                    seen.add(item.id)
+                    html = _render_event_row(item, display_timezone)
+                    yield f"id: {item.id}\nevent: event\ndata: {_json.dumps(html)}\n\n"
+            finally:
+                db.close()
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event_id = await asyncio.wait_for(queue.get(), timeout=25.0)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                if event_id in seen:
+                    continue
+                seen.add(event_id)
+                for eid, html in _fetch_rows([event_id]):
+                    yield f"id: {eid}\nevent: event\ndata: {_json.dumps(html)}\n\n"
+        finally:
+            await es.unsubscribe(queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ── Event detail ────────────────────────────────────────────────────────────
 
 # route: /event/{event_id}
 @router.get("/event/{event_id}")
@@ -339,81 +393,6 @@ async def view_event(request: Request, event_id: int, db: Session = Depends(get_
             "event": event, "source": source, "event_type": event_type,
         }
     )
-
-
-# ── Metrics Graphing ────────────────────────────────────────────────────────
-
-
-# route: /metrics
-@router.get("/metrics")
-async def metrics_page(request: Request, db: Session = Depends(get_db)):
-    """Time-series chart for MetricPoint data. Supports multiple series via name=a,b,c."""
-    metric_names_selected = []
-    for n in request.query_params.getlist("name"):
-        for part in n.split(","):
-            part = part.strip()
-            if part and part not in metric_names_selected:
-                metric_names_selected.append(part)
-
-    source_id_str = request.query_params.get("source_id", "").strip()
-    range_hours = int(request.query_params.get("range", "24") or 24)
-    sources = db.query(Source).order_by(Source.name).all()
-
-    all_metrics = db.query(MetricPoint.name).distinct().order_by(MetricPoint.name).all()
-    metric_names = [m[0] for m in all_metrics]
-
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=range_hours)
-    series_list = []
-    for metric_name in metric_names_selected:
-        query = db.query(MetricPoint).filter(
-            MetricPoint.name == metric_name,
-            MetricPoint.timestamp >= cutoff,
-        )
-        if source_id_str:
-            query = query.filter(MetricPoint.source_id == int(source_id_str))
-        points = query.order_by(MetricPoint.timestamp).all()
-        series_list.append({
-            "name": metric_name,
-            "points": [{"ts": _iso_utc(p.timestamp), "v": p.value} for p in points],
-        })
-
-    return ctx.templates.TemplateResponse(
-        request, "metrics.html", {
-            "metric_names_selected": metric_names_selected,
-            "metric_name": ",".join(metric_names_selected),
-            "source_id": source_id_str,
-            "range_hours": range_hours, "sources": sources,
-            "metric_names": metric_names, "series_list": series_list,
-        }
-    )
-
-
-# route: /metrics/api
-@router.get("/metrics/api")
-async def metrics_api(request: Request, db: Session = Depends(get_db)):
-    """JSON API for metric data — supports multiple series via name=a,b."""
-    raw_names = request.query_params.get("name", "").strip()
-    names = [n.strip() for n in raw_names.split(",") if n.strip()] if raw_names else []
-    source_id_str = request.query_params.get("source_id", "").strip()
-    range_hours = int(request.query_params.get("range", "24") or 24)
-    if not names:
-        return JSONResponse({"error": "name required"}, status_code=400)
-
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=range_hours)
-    series = []
-    for metric_name in names:
-        query = db.query(MetricPoint).filter(
-            MetricPoint.name == metric_name,
-            MetricPoint.timestamp >= cutoff,
-        )
-        if source_id_str:
-            query = query.filter(MetricPoint.source_id == int(source_id_str))
-        points = query.order_by(MetricPoint.timestamp).all()
-        series.append({
-            "name": metric_name,
-            "points": [{"ts": _iso_utc(p.timestamp), "v": p.value} for p in points],
-        })
-    return {"series": series}
 
 
 # ── Help ─────────────────────────────────────────────────────────────────────
@@ -434,26 +413,52 @@ async def help_page(request: Request):
 @router.get("/system")
 async def system_page(request: Request, db: Session = Depends(get_db)):
     """Show system health: sources, scheduler, webhook audit, retained event log."""
+    from pathlib import Path
     from app.event_store import MAX_EVENTS_PER_SOURCE
+    from app.database import SQLALCHEMY_DATABASE_URL
 
     total_sources = db.query(Source).count()
     enabled_sources = db.query(Source).filter(Source.enabled == True).count()  # noqa: E712
 
     retained_events = db.query(Event).count()
     events_pending = db.query(Event).filter(Event.status == "pending").count()
+    events_failed = db.query(Event).filter(Event.status == "failed").count()
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+    events_failed_last_hour = db.query(Event).filter(
+        Event.status == "failed",
+        Event.timestamp >= cutoff,
+    ).count()
 
     webhook_accepted = db.query(AuditLog).filter(
         AuditLog.action == "webhook.accepted"
     ).count()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
     webhook_accepted_last_hour = db.query(AuditLog).filter(
         AuditLog.action == "webhook.accepted",
         AuditLog.timestamp >= cutoff,
     ).count()
 
+    # SQLite on-disk size (main + wal + shm)
+    db_size_bytes = 0
+    if SQLALCHEMY_DATABASE_URL.startswith("sqlite:///"):
+        db_path = Path(SQLALCHEMY_DATABASE_URL.removeprefix("sqlite:///"))
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(db_path) + suffix) if suffix else db_path
+            try:
+                if p.is_file():
+                    db_size_bytes += p.stat().st_size
+            except OSError:
+                pass
+
+    now = datetime.now(timezone.utc)
     schedules = db.query(PollingSchedule).all()
     schedule_info = []
     for s in schedules:
+        overdue_seconds = None
+        if s.enabled and s.next_run_at:
+            nxt = s.next_run_at
+            if nxt.tzinfo is None:
+                nxt = nxt.replace(tzinfo=timezone.utc)
+            overdue_seconds = max(0, int((now - nxt).total_seconds()))
         schedule_info.append({
             "name": s.name,
             "source_id": s.source_id,
@@ -463,13 +468,13 @@ async def system_page(request: Request, db: Session = Depends(get_db)):
             "success_count": s.success_count or 0,
             "failure_count": s.failure_count or 0,
             "last_error": s.last_error or "",
+            "overdue_seconds": overdue_seconds,
         })
 
     from app.widgets import source_age_status
 
     source_health = []
     all_sources = db.query(Source).all()
-    now = datetime.now(timezone.utc)
     for src in all_sources:
         last_seen = src.last_seen_at
         source_health.append({
@@ -489,6 +494,9 @@ async def system_page(request: Request, db: Session = Depends(get_db)):
             "webhook_accepted_last_hour": webhook_accepted_last_hour,
             "retained_events": retained_events,
             "events_pending": events_pending,
+            "events_failed": events_failed,
+            "events_failed_last_hour": events_failed_last_hour,
+            "db_size_bytes": db_size_bytes,
             "max_events_per_source": MAX_EVENTS_PER_SOURCE,
             "schedules": schedule_info,
             "source_health": source_health,

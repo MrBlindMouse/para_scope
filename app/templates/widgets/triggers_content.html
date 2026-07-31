@@ -1,0 +1,40 @@
+{% set disp = display or wdata.display or "button_row" %}
+{% set style = (widget_config.style if widget_config else None) or wdata.style or "default" %}
+{% set trigger_items = wdata.get("items") if wdata else none %}
+{% if wdata and wdata.error %}
+<p class="text-muted">{{ wdata.error }}</p>
+{% elif trigger_items %}
+  {% if disp == "list" %}
+  <ul class="stack stack--tight widget-list widget-triggers--{{ style }}">
+    {% for it in trigger_items %}
+    <li>
+      <button type="button"
+              class="btn {% if style == 'emphasized' %}btn--primary{% elif style == 'compact' %}btn--sm{% else %}btn--primary{% endif %}"
+              data-trigger-btn
+              data-trigger-kind="{{ it.kind }}"
+              data-trigger-source-id="{{ it.source_id }}"
+              {% if it.kind == 'webhook' %}data-trigger-event-type-id="{{ it.event_type_id }}" data-trigger-payload="{{ it.payload_json }}"{% endif %}
+              {% if not it.enabled %}disabled title="Source or event type is disabled"{% endif %}>
+        {{ it.label }}
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <div class="flex items-center gap flex-wrap widget-triggers widget-triggers--{{ style }}">
+    {% for it in trigger_items %}
+    <button type="button"
+            class="btn {% if style == 'emphasized' %}btn--primary{% elif style == 'compact' %}btn--sm{% else %}btn--primary{% endif %}"
+            data-trigger-btn
+            data-trigger-kind="{{ it.kind }}"
+            data-trigger-source-id="{{ it.source_id }}"
+            {% if it.kind == 'webhook' %}data-trigger-event-type-id="{{ it.event_type_id }}" data-trigger-payload="{{ it.payload_json }}"{% endif %}
+            {% if not it.enabled %}disabled title="Source or event type is disabled"{% endif %}>
+      {{ it.label }}
+    </button>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% else %}
+<p class="text-muted">No triggers configured.</p>
+{% endif %}

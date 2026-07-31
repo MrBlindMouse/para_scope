@@ -14,6 +14,7 @@ from app.database import Base
 class ScheduleType(str, enum.Enum):
     INTERVAL = "interval"
     CRON = "cron"
+    NEVER = "never"  # trigger-only: Run now / trigger_source, no APScheduler tick
 
 
 # ── User (existing, extended) ───────────────────────────────────────────────
@@ -58,8 +59,6 @@ class Source(Base):
     slug = Column(String(100), unique=True, nullable=False, index=True)
     source_type = Column(String(100), nullable=False)  # 'webhook' | 'poll'
     description = Column(Text, default="")
-    tags = Column(JSON, default=list)  # list[str]
-    icon = Column(String(100), default="")
     enabled = Column(Boolean, default=True)
     config = Column(JSON, default=dict)  # adapter-specific config
     webhook_secret_id = Column(Integer, ForeignKey("secrets.id"), nullable=True)
@@ -72,7 +71,6 @@ class Source(Base):
         "PollingSchedule", back_populates="source", uselist=False,
     )
     events = relationship("Event", back_populates="source")
-    metrics = relationship("MetricPoint", back_populates="source")
     actions = relationship("ActionInstance", back_populates="source")
 
 
@@ -86,7 +84,6 @@ class EventTypeRecord(Base):
     source_id = Column(Integer, ForeignKey("sources.id"), nullable=False, index=True)
     name = Column(String(200), nullable=False)  # e.g. 'client.created', 'order.paid'
     description = Column(Text, default="")
-    schema_hint = Column(JSON, default=dict)  # extraction hints / JSON schema
     enabled = Column(Boolean, default=True)  # paused types still ingest; rules skip them
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -153,7 +150,7 @@ class Rule(Base):
     id = Column(Integer, primary_key=True, index=True)
     description = Column(Text, default="")
     event_type_ids = Column(JSON, default=list)  # list[int] — FK targets in event_types
-    source_id = Column(Integer, ForeignKey("sources.id"), nullable=True, index=True)  # source-wide if set
+    source_id = Column(Integer, ForeignKey("sources.id"), nullable=False, index=True)
     conditions = Column(JSON, default=dict)  # field matchers (exact/not/gt/lt/contains/regex)
     action_ids = Column(JSON, default=list)  # list[int] — FK targets in actions
     order_index = Column(Integer, default=0)  # execution order within matching rules
@@ -201,7 +198,6 @@ class Field(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     log_entries = relationship("FieldLogEntry", back_populates="field")
-    metrics = relationship("MetricPoint", back_populates="field")
 
 
 class FieldLogEntry(Base):
@@ -216,24 +212,6 @@ class FieldLogEntry(Base):
     event_id = Column(Integer, ForeignKey("events.id"), nullable=True, index=True)
 
     field = relationship("Field", back_populates="log_entries")
-
-
-# ── MetricPoint (time-series / aggregated metrics) ──────────────────────────
-
-class MetricPoint(Base):
-    __tablename__ = "metric_points"
-
-    id = Column(Integer, primary_key=True, index=True)
-    source_id = Column(Integer, ForeignKey("sources.id"), nullable=True, index=True)
-    field_id = Column(Integer, ForeignKey("fields.id"), nullable=True, index=True)
-    name = Column(String(200), nullable=False, index=True)  # metric name (often Field.name)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    value = Column(Float, default=0.0)
-    tags = Column(JSON, default=dict)  # arbitrary key-value labels
-    metric_type = Column(String(20), default="counter")  # counter | gauge | histogram
-
-    source = relationship("Source", back_populates="metrics")
-    field = relationship("Field", back_populates="metrics")
 
 
 # ── AuditLog ────────────────────────────────────────────────────────────────

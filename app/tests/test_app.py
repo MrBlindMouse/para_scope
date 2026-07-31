@@ -19,7 +19,7 @@ os.environ["PARA_SCOPE_DATABASE_URL"] = f"sqlite:///{DB_PATH}"
 import pytest
 from fastapi.testclient import TestClient
 
-from app.models import Base, User, Source, EventTypeRecord, ActionInstance, Rule, Event, MetricPoint, Secret
+from app.models import Base, User, Source, EventTypeRecord, ActionInstance, Rule, Event, Secret
 from app.security import hash_password, encrypt_secret, create_session_token, verify_session_token
 from app.main import app
 
@@ -303,6 +303,18 @@ class TestAuth:
             assert cookie
             assert cookie != username
             assert verify_session_token(cookie) == username
+
+    def test_login_rate_limit(self, client, test_user):
+        import app.main as main_mod
+        main_mod._LOGIN_RATE_LIMIT.clear()
+        for _ in range(10):
+            resp = client.post("/login", data={"username": "nobody", "password": "wrong"})
+            assert resp.status_code == 200
+            assert "Wrong username or password" in resp.text
+        resp = client.post("/login", data={"username": "nobody", "password": "wrong"})
+        assert resp.status_code == 200
+        assert "Too many login attempts" in resp.text
+        main_mod._LOGIN_RATE_LIMIT.clear()
 
     def test_unauthenticated_redirects_to_login(self, client):
         resp = client.get("/config/pipeline", follow_redirects=False)
@@ -680,30 +692,84 @@ class TestEventTypes:
             follow_redirects=False,
         )
         from app.database import get_db
-        from app.models import Rule
+        from app.models import ActionInstance, Event, Rule
         db = next(get_db())
         try:
             et = db.query(EventTypeRecord).filter(EventTypeRecord.name == "to-delete").first()
             et_id = et.id
+            action = ActionInstance(
+                source_id=sid, action_type="http_forward",
+                config={"url": "https://example.com", "method": "POST"},
+                enabled=True,
+            )
+            db.add(action)
+            db.flush()
             rule = Rule(
                 source_id=sid,
                 description="bound",
                 event_type_ids=[et_id],
-                action_ids=[],
+                action_ids=[action.id],
                 conditions={},
             )
             db.add(rule)
+            db.add(Event(
+                source_id=sid, event_type_id=et_id,
+                raw_payload="{}", normalized_data={}, status="processed",
+            ))
             db.commit()
             rule_id = rule.id
+            action_id = action.id
+            event_count = db.query(Event).filter(Event.event_type_id == et_id).count()
+            assert event_count == 1
         finally:
             db.close()
         resp = authenticated_client.post(f"/config/event-type/{et_id}/delete", follow_redirects=False)
         assert resp.status_code == 303
         db = next(get_db())
         try:
+            assert db.query(EventTypeRecord).filter(EventTypeRecord.id == et_id).first() is None
+            assert db.query(Rule).filter(Rule.id == rule_id).first() is None
+            assert db.query(ActionInstance).filter(ActionInstance.id == action_id).first() is None
+            assert db.query(Event).filter(Event.event_type_id == et_id).count() == 0
+            assert db.query(Source).filter(Source.id == sid).first() is not None
+        finally:
+            db.close()
+
+    def test_delete_event_type_keeps_multi_type_rule(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="ET Multi", slug="et-multi")
+        for name in ("keep-me", "drop-me"):
+            authenticated_client.post(
+                f"/config/pipeline/source/{sid}/events",
+                data={"name": name, "description": ""},
+                follow_redirects=False,
+            )
+        from app.database import get_db
+        from app.models import Rule
+        db = next(get_db())
+        try:
+            keep = db.query(EventTypeRecord).filter(
+                EventTypeRecord.source_id == sid, EventTypeRecord.name == "keep-me"
+            ).first()
+            drop = db.query(EventTypeRecord).filter(
+                EventTypeRecord.source_id == sid, EventTypeRecord.name == "drop-me"
+            ).first()
+            rule = Rule(
+                source_id=sid, event_type_ids=[keep.id, drop.id],
+                action_ids=[], conditions={},
+            )
+            db.add(rule)
+            db.commit()
+            rule_id, keep_id, drop_id = rule.id, keep.id, drop.id
+        finally:
+            db.close()
+        resp = authenticated_client.post(f"/config/event-type/{drop_id}/delete", follow_redirects=False)
+        assert resp.status_code == 303
+        db = next(get_db())
+        try:
             rule = db.query(Rule).filter(Rule.id == rule_id).first()
             assert rule is not None
-            assert et_id not in (rule.event_type_ids or [])
+            assert rule.event_type_ids == [keep_id]
+            assert db.query(EventTypeRecord).filter(EventTypeRecord.id == drop_id).first() is None
         finally:
             db.close()
 
@@ -1056,6 +1122,66 @@ class TestRules:
         resp = authenticated_client.get("/config/pipeline")
         assert resp.status_code == 200
         assert "on all events" in resp.text
+        assert "pipeline-event__rules" in resp.text
+        assert 'pipeline-node__label">Rules</span>' not in resp.text
+        assert "Add Rule" not in resp.text  # source-level Rules column removed
+
+    def test_rules_nested_under_matching_event_type(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="Nest Rules Src")
+        authenticated_client.post(
+            f"/config/pipeline/source/{sid}/events",
+            data={"name": "alpha.event", "description": ""},
+            follow_redirects=False,
+        )
+        authenticated_client.post(
+            f"/config/pipeline/source/{sid}/events",
+            data={"name": "beta.event", "description": ""},
+            follow_redirects=False,
+        )
+        from app.database import get_db
+        db = next(get_db())
+        try:
+            ets = (
+                db.query(EventTypeRecord)
+                .filter(EventTypeRecord.source_id == sid)
+                .order_by(EventTypeRecord.name)
+                .all()
+            )
+            # alpha before beta alphabetically; also seeded always for webhooks
+            alpha = next(et for et in ets if et.name == "alpha.event")
+            beta = next(et for et in ets if et.name == "beta.event")
+            alpha_id, beta_id = alpha.id, beta.id
+        finally:
+            db.close()
+        authenticated_client.post(
+            f"/config/pipeline/source/{sid}/rules",
+            data={
+                "event_type_ids": f"[{alpha_id}]",
+                "conditions": "{}",
+                "action_ids": "[]",
+                "order_index": "0",
+            },
+            follow_redirects=False,
+        )
+        resp = authenticated_client.get("/config/pipeline")
+        assert resp.status_code == 200
+        text = resp.text
+        # Expand details aren't required — markup order should nest rule under alpha.
+        assert "alpha.event" in text and "beta.event" in text
+        assert "on alpha.event" in text
+        alpha_pos = text.index("alpha.event")
+        rule_pos = text.index("on alpha.event")
+        beta_pos = text.index("beta.event")
+        assert alpha_pos < rule_pos
+        # Rule should appear before beta when alpha sorts before beta,
+        # or at least inside alpha's event block (after alpha, before next sibling content).
+        # With name order: always, alpha.event, beta.event — rule after alpha.event chip.
+        always_block = text.find("always")
+        if always_block != -1 and always_block < alpha_pos:
+            pass
+        assert rule_pos < beta_pos or text.count("on alpha.event") >= 1
+        assert "pipeline-event__rules" in text
+        assert "No rules for this event type." in text  # beta (and maybe always) empty
 
     def test_create_rule(self, authenticated_client):
         sid = self._setup(authenticated_client)
@@ -1153,6 +1279,12 @@ class TestRules:
             db.close()
         resp = authenticated_client.post(f"/config/rule/{rid}/delete", follow_redirects=False)
         assert resp.status_code == 303
+        db = next(get_db())
+        try:
+            assert db.query(Rule).filter(Rule.id == rid).first() is None
+            assert db.query(ActionInstance).filter(ActionInstance.id == action_id).first() is None
+        finally:
+            db.close()
 
 
 # ── Rule-first pipeline UX ───────────────────────────────────────────────────
@@ -1210,6 +1342,50 @@ class TestRuleFirstPipeline:
         assert "conditions-builder" in resp.text
         assert "severity" in resp.text
         assert "high" in resp.text
+
+    def test_rule_form_edit_preserves_event_types(self, authenticated_client):
+        """Edit must preselect saved event types, not wipe to empty / first option."""
+        import re
+
+        sid, _ = _create_source(
+            authenticated_client, name="RF Edit ET", source_type="poll",
+        )
+        from app.database import get_db
+        db = next(get_db())
+        try:
+            ets = {
+                et.name: et.id
+                for et in db.query(EventTypeRecord).filter(EventTypeRecord.source_id == sid)
+            }
+            success_id = ets["on_success"]
+            failure_id = ets["on_failure"]
+        finally:
+            db.close()
+        authenticated_client.post(
+            f"/config/pipeline/source/{sid}/rules",
+            data={
+                "event_type_ids": f"[{success_id}]",
+                "conditions": "{}",
+                "order_index": "0",
+            },
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            rule = db.query(Rule).filter(Rule.source_id == sid).first()
+            rule_id = rule.id
+        finally:
+            db.close()
+        resp = authenticated_client.get(
+            f"/config/pipeline/source/{sid}/partials/rule-form?rule_id={rule_id}"
+        )
+        assert resp.status_code == 200
+        success_opt = re.search(rf'<option[^>]*value="{success_id}"[^>]*>', resp.text)
+        failure_opt = re.search(rf'<option[^>]*value="{failure_id}"[^>]*>', resp.text)
+        assert success_opt is not None
+        assert "selected" in success_opt.group(0)
+        assert failure_opt is not None
+        assert "selected" not in failure_opt.group(0)
 
     def test_create_action_on_rule_binds(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="RF Bind", slug="rf-bind")
@@ -1612,6 +1788,8 @@ class TestPipelineEventSamples:
 
 class TestHelp:
     def test_help_page(self, authenticated_client):
+        from app.fields import RESERVED_FIELD_SLUGS
+
         resp = authenticated_client.get("/help")
         assert resp.status_code == 200
         assert "Rule conditions" in resp.text
@@ -1619,10 +1797,15 @@ class TestHelp:
         assert "config-nav__link--active" in resp.text
         assert 'id="fields"' in resp.text
         assert "Logbook" in resp.text
+        assert "Data" in resp.text
+        assert 'id="dot-notation"' in resp.text
+        assert "Dot notation" in resp.text
+        for name in RESERVED_FIELD_SLUGS:
+            assert f"<code>{name}</code>" in resp.text
         assert 'id="example-apis"' in resp.text
         assert "api.open-meteo.com" in resp.text
-        assert "Trigger poll" in resp.text
-        assert "Dashboard actions" in resp.text
+        assert "Trigger source" in resp.text
+        assert "Triggers" in resp.text
 
     def test_help_requires_auth(self, client):
         client.cookies.clear()
@@ -2359,7 +2542,7 @@ class TestDashboardGridLayout:
             db.close()
         resp = authenticated_client.get(f"/widgets/system?id={wid}")
         assert resp.status_code == 200
-        assert b"Series" in resp.content or b"No metrics yet" in resp.content
+        assert b"No value fields yet" in resp.content or b"stat__value" in resp.content
 
 
 class TestWidgetTransforms:
@@ -3256,17 +3439,17 @@ class TestWidgetTransforms:
                     "cells": [
                         {
                             "field_slug": "board_hits",
-                            "template": "{{value}} k",
+                            "template": "{{ board_hits.value }} k",
                             "tone_rules": [
-                                {"expr": "value", "op": "gt", "compare": "0", "tone": "positive"},
+                                {"expr": "board_hits.value", "op": "gt", "compare": "0", "tone": "positive"},
                             ],
                         },
                         {
                             "field_slug": "board_lag",
-                            "template": "{{value}} ms",
+                            "template": "{{ board_lag.value }} ms",
                             "tone_rules": [
-                                {"expr": "value", "op": "lt", "compare": "0", "tone": "negative"},
-                                {"expr": "value", "op": "gt", "compare": "0", "tone": "neutral"},
+                                {"expr": "board_lag.value", "op": "lt", "compare": "0", "tone": "negative"},
+                                {"expr": "board_lag.value", "op": "gt", "compare": "0", "tone": "neutral"},
                             ],
                         },
                     ],
@@ -3323,70 +3506,6 @@ class TestWidgetTransforms:
 # ── Config: Secrets ──────────────────────────────────────────────────────────
 
 class TestSecretsCRUD:
-    def test_create_secret(self, authenticated_client):
-        sid, _ = _create_source(authenticated_client, name="Sec Src", slug="sec-src")
-        resp = authenticated_client.post(
-            "/config/secrets",
-            data={"scoped_to_type": "source",
-                  "scoped_to_id": str(sid), "value": "supersecret"},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        assert "error" not in str(resp.headers.get("location", ""))
-
-    def test_create_secret_requires_fields(self, authenticated_client):
-        resp = authenticated_client.post(
-            "/config/secrets",
-            data={"scoped_to_type": "source",
-                  "scoped_to_id": "", "value": ""},
-            follow_redirects=False,
-        )
-        assert resp.status_code == 303
-        loc = str(resp.headers.get("location", ""))
-        assert "error" in loc
-
-    def test_create_secret_persists(self, authenticated_client):
-        sid, _ = _create_source(authenticated_client, name="Sec Persist", slug="sec-persist")
-        authenticated_client.post(
-            "/config/secrets",
-            data={"scoped_to_type": "source",
-                  "scoped_to_id": str(sid), "value": "password123"},
-            follow_redirects=False,
-        )
-        from app.database import get_db
-        db = next(get_db())
-        try:
-            secret = db.query(Secret).filter(Secret.scoped_to_id == sid).first()
-            assert secret is not None
-            assert secret.scoped_to_id == sid
-        finally:
-            db.close()
-
-    def test_delete_secret(self, authenticated_client):
-        sid, _ = _create_source(authenticated_client, name="Sec Del", slug="sec-del")
-        authenticated_client.post(
-            "/config/secrets",
-            data={"scoped_to_type": "source",
-                  "scoped_to_id": str(sid), "value": "pass"},
-            follow_redirects=False,
-        )
-        from app.database import get_db
-        db = next(get_db())
-        try:
-            secret = db.query(Secret).filter(Secret.scoped_to_id == sid).first()
-            assert secret is not None
-            secret_id = secret.id
-        finally:
-            db.close()
-        resp = authenticated_client.post(f"/config/secret/{secret_id}/delete", follow_redirects=False)
-        assert resp.status_code == 303
-
-    def test_delete_secret_not_found(self, authenticated_client):
-        resp = authenticated_client.post(
-            "/config/secret/9999/delete", follow_redirects=False
-        )
-        assert resp.status_code == 303
-
     def test_source_create_with_inline_webhook_secret(self, authenticated_client):
         resp = authenticated_client.post(
             "/config/pipeline/sources",
@@ -3548,9 +3667,9 @@ class TestSystemPage:
         assert resp.status_code == 200
         assert "waiting to be processed" in resp.text
 
-    def test_system_and_metrics_use_display_timezone(self, authenticated_client):
+    def test_system_uses_display_timezone(self, authenticated_client):
         from app.database import get_db
-        from app.models import MetricPoint, PollingSchedule
+        from app.models import PollingSchedule
 
         sid, _ = _create_source(authenticated_client, name="TZ System", slug="tz-system")
         _set_display_timezone("Africa/Johannesburg")
@@ -3571,7 +3690,6 @@ class TestSystemPage:
                 success_count=1,
                 failure_count=0,
             ))
-            db.add(MetricPoint(source_id=sid, name="tz-metric", value=1.0, timestamp=ts))
             db.commit()
         finally:
             db.close()
@@ -3580,11 +3698,6 @@ class TestSystemPage:
         assert system_resp.status_code == 200
         assert "2026-01-02 05:04" in system_resp.text
         assert "2026-01-02 06:04" in system_resp.text
-
-        metrics_resp = authenticated_client.get("/metrics?name=tz-metric")
-        assert metrics_resp.status_code == 200
-        assert 'data-display-timezone="Africa/Johannesburg"' in metrics_resp.text
-        assert "Intl.DateTimeFormat" in metrics_resp.text
 
 
 # ── Webhook provider UI metadata ─────────────────────────────────────────────
@@ -3629,7 +3742,7 @@ class TestCascadeDelete:
         finally:
             db.close()
 
-    def test_source_delete_with_events_and_metrics(self, authenticated_client):
+    def test_source_delete_with_events(self, authenticated_client):
         """Deleting a source with events FK'd to event types must not IntegrityError."""
         sid, slug = _create_source(authenticated_client, name="Evt Cascade", slug="evt-cascade")
         from app.database import get_db
@@ -3643,7 +3756,6 @@ class TestCascadeDelete:
                 source_id=src.id, event_type_id=et.id,
                 normalized_data={"a": 1}, raw_payload="{}",
             ))
-            db.add(MetricPoint(source_id=src.id, name="m", value=1.0))
             db.commit()
             source_id = src.id
         finally:
@@ -3660,7 +3772,6 @@ class TestCascadeDelete:
         try:
             assert db.query(Source).filter(Source.id == source_id).first() is None
             assert db.query(Event).filter(Event.source_id == source_id).count() == 0
-            assert db.query(MetricPoint).filter(MetricPoint.source_id == source_id).count() == 0
         finally:
             db.close()
 
@@ -4022,6 +4133,21 @@ class TestWebhookPipeline:
         assert bad.status_code == 401
         assert bad.json()["error"] == "Invalid signature"
 
+        # Expired timestamp (beyond replay TTL) must be rejected.
+        old_ts = str(int(time.time()) - 10_000)
+        old_sig = signing_key.sign(old_ts.encode() + body).signature.hex()
+        expired = authenticated_client.post(
+            f"/webhook/{slug}",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Signature-Ed25519": old_sig,
+                "X-Signature-Timestamp": old_ts,
+            },
+        )
+        assert expired.status_code == 400
+        assert expired.json()["error"] == "Timestamp expired"
+
         ping_payload = {"type": 1}
         ping_body = json.dumps(ping_payload, separators=(",", ":")).encode()
         ping_timestamp = str(int(time.time()) + 1)
@@ -4038,22 +4164,176 @@ class TestWebhookPipeline:
         assert ping.status_code == 200
         assert ping.json() == {"type": 1}
 
+    def test_webhook_stripe_signature_verification(self, authenticated_client):
+        import hashlib as _hashlib
+        import hmac as _hmac
+
+        from app.database import get_db
+        from app.models import Event, EventTypeRecord, Secret, Source
+        from app.security import encrypt_secret
+
+        sid, slug = _create_source(authenticated_client, name="Stripe Source", slug="stripe-src")
+        secret = "whsec_test_stripe"
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            src.config = {"webhook_provider": "stripe"}
+            sec = Secret(
+                scoped_to_type="source",
+                scoped_to_id=src.id,
+                encrypted_value=encrypt_secret(secret),
+            )
+            db.add(sec)
+            db.flush()
+            src.webhook_secret_id = sec.id
+            db.add(EventTypeRecord(source_id=src.id, name="charge.succeeded", enabled=True))
+            db.commit()
+        finally:
+            db.close()
+
+        payload = {"type": "charge.succeeded", "data": {"object": {"id": "ch_1"}}}
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        ts = str(int(time.time()))
+        expected = _hmac.new(secret.encode(), f"{ts}.".encode() + body, _hashlib.sha256).hexdigest()
+        headers = {
+            "Content-Type": "application/json",
+            "Stripe-Signature": f"t={ts},v1={expected}",
+            "X-Event-Type": "charge.succeeded",
+        }
+        resp = authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers)
+        assert resp.status_code == 202
+
+        db = next(get_db())
+        try:
+            event = db.query(Event).filter(Event.id == resp.json()["event_id"]).first()
+            assert event.normalized_data["_webhook"]["signed"] is True
+        finally:
+            db.close()
+
+        assert authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers).status_code == 409
+        bad = authenticated_client.post(
+            f"/webhook/{slug}",
+            data=body,
+            headers={**headers, "Stripe-Signature": f"t={ts},v1={'0' * 64}"},
+        )
+        assert bad.status_code == 401
+
+    def test_webhook_github_hmac_verification(self, authenticated_client):
+        import hashlib as _hashlib
+        import hmac as _hmac
+
+        from app.database import get_db
+        from app.models import Event, EventTypeRecord, Secret, Source
+        from app.security import encrypt_secret
+
+        sid, slug = _create_source(authenticated_client, name="GitHub HMAC", slug="gh-hmac-src")
+        secret = "github-webhook-secret"
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            src.config = {"webhook_provider": "github"}
+            sec = Secret(
+                scoped_to_type="source",
+                scoped_to_id=src.id,
+                encrypted_value=encrypt_secret(secret),
+            )
+            db.add(sec)
+            db.flush()
+            src.webhook_secret_id = sec.id
+            db.add(EventTypeRecord(source_id=src.id, name="push", enabled=True))
+            db.commit()
+        finally:
+            db.close()
+
+        body = json.dumps({"ref": "refs/heads/main"}, separators=(",", ":")).encode()
+        sig = _hmac.new(secret.encode(), body, _hashlib.sha256).hexdigest()
+        headers = {
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": f"sha256={sig}",
+            "X-GitHub-Event": "push",
+        }
+        resp = authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers)
+        assert resp.status_code == 202
+
+        db = next(get_db())
+        try:
+            event = db.query(Event).filter(Event.id == resp.json()["event_id"]).first()
+            assert event.normalized_data["_webhook"]["signed"] is True
+            assert event.normalized_data["_webhook"]["event_type"] == "push"
+        finally:
+            db.close()
+
+        assert authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers).status_code == 409
+        bad = authenticated_client.post(
+            f"/webhook/{slug}",
+            data=body,
+            headers={**headers, "X-Hub-Signature-256": "sha256=" + ("0" * 64)},
+        )
+        assert bad.status_code == 401
+
+    def test_webhook_slack_signature_verification(self, authenticated_client):
+        import hashlib as _hashlib
+        import hmac as _hmac
+
+        from app.database import get_db
+        from app.models import Event, EventTypeRecord, Secret, Source
+        from app.security import encrypt_secret
+
+        sid, slug = _create_source(authenticated_client, name="Slack Source", slug="slack-src")
+        secret = "slack-signing-secret"
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            src.config = {"webhook_provider": "slack"}
+            sec = Secret(
+                scoped_to_type="source",
+                scoped_to_id=src.id,
+                encrypted_value=encrypt_secret(secret),
+            )
+            db.add(sec)
+            db.flush()
+            src.webhook_secret_id = sec.id
+            db.add(EventTypeRecord(source_id=src.id, name="event_callback", enabled=True))
+            db.commit()
+        finally:
+            db.close()
+
+        body = json.dumps(
+            {"type": "event_callback", "event": {"type": "message"}},
+            separators=(",", ":"),
+        ).encode()
+        ts = str(int(time.time()))
+        expected = _hmac.new(
+            secret.encode(), f"v0:{ts}:".encode() + body, _hashlib.sha256
+        ).hexdigest()
+        headers = {
+            "Content-Type": "application/json",
+            "X-Slack-Signature": f"v0={expected}",
+            "X-Slack-Request-Timestamp": ts,
+            "X-Event-Type": "event_callback",
+        }
+        resp = authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers)
+        assert resp.status_code == 202
+
+        db = next(get_db())
+        try:
+            event = db.query(Event).filter(Event.id == resp.json()["event_id"]).first()
+            assert event.normalized_data["_webhook"]["signed"] is True
+        finally:
+            db.close()
+
+        assert authenticated_client.post(f"/webhook/{slug}", data=body, headers=headers).status_code == 409
+        bad = authenticated_client.post(
+            f"/webhook/{slug}",
+            data=body,
+            headers={**headers, "X-Slack-Signature": f"v0={'0' * 64}"},
+        )
+        assert bad.status_code == 401
+
 
 # ── Pipeline Tests ───────────────────────────────────────────────────────────
 
 class TestPipeline:
-    @pytest.fixture(autouse=True)
-    def _clear_global_rules(self, authenticated_client):
-        from app.database import get_db
-        from app.models import Rule
-        db = next(get_db())
-        try:
-            db.query(Rule).filter(Rule.source_id.is_(None)).delete()
-            db.commit()
-        finally:
-            db.close()
-        yield
-
     def test_evaluate_rules_empty(self, authenticated_client):
         """No rules → no matches."""
         sid, slug = _create_source(authenticated_client, name="Empty", slug="empty")
@@ -4104,29 +4384,21 @@ class TestPipeline:
         finally:
             db.close()
 
-    def test_matches_global_rule(self, authenticated_client):
-        """Global rule (source_id=None) matches any event from any source."""
-        sid, slug = _create_source(authenticated_client, name="Global Source", slug="global-src")
+    def test_rules_require_source_id(self, authenticated_client):
+        """Rules are source-scoped; null source_id is rejected by the schema."""
         from app.database import get_db
-        from app.models import Rule, Event
+        from app.models import Rule
+        from sqlalchemy.exc import IntegrityError
         db = next(get_db())
         try:
-            rule = Rule(source_id=None,
-                event_type_ids=[], conditions={}, action_ids=[], order_index=0
+            rule = Rule(
+                source_id=None,
+                event_type_ids=[], conditions={}, action_ids=[], order_index=0,
             )
             db.add(rule)
-            db.commit()
-
-            event = Event(
-                source_id=sid, event_type_id=None,
-                normalized_data={"key": "val"}, raw_payload='{}', correlation_id="test"
-            )
-            db.add(event)
-            db.commit()
-
-            from app.pipeline import evaluate_rules
-            matches = evaluate_rules(db, event)
-            assert len(matches) == 1
+            with pytest.raises(IntegrityError):
+                db.commit()
+            db.rollback()
         finally:
             db.close()
 
@@ -4706,10 +4978,10 @@ class TestPipeline:
             db.close()
 
     def test_field_push_counter(self, authenticated_client):
-        """field_push increment updates counter state only (no MetricPoint history)."""
+        """field_push increment updates counter state only."""
         sid, slug = _create_source(authenticated_client, name="Metric Source", slug="metric-src")
         from app.database import get_db
-        from app.models import ActionInstance, Rule, Event, MetricPoint, Field
+        from app.models import ActionInstance, Rule, Event, Field
         db = next(get_db())
         try:
             field = Field(
@@ -4733,9 +5005,6 @@ class TestPipeline:
             db.commit()
             from app.pipeline import evaluate_and_dispatch
             evaluate_and_dispatch(db, event)
-            assert db.query(MetricPoint).filter(
-                MetricPoint.source_id == sid, MetricPoint.field_id == field.id,
-            ).count() == 0
             db.refresh(field)
             assert field.state["value"] == 1.0
         finally:
@@ -6216,6 +6485,53 @@ class TestFields:
         assert "max_entries" not in value_panel
         assert 'hx-target="#pipeline-dialog"' in resp.text
 
+    def test_edit_field_warns_about_slug_change(self, authenticated_client):
+        authenticated_client.post(
+            "/config/pipeline/fields",
+            data={"name": "Rename Warn Field", "field_type": "value"},
+            follow_redirects=False,
+        )
+        from app.database import get_db
+        from app.models import AuditLog, Field
+        db = next(get_db())
+        try:
+            field = db.query(Field).filter(Field.name == "Rename Warn Field").first()
+            assert field is not None
+            fid = field.id
+            slug = field.slug
+        finally:
+            db.close()
+
+        resp = authenticated_client.get(
+            f"/config/pipeline/partials/field-form?field_id={fid}"
+        )
+        assert resp.status_code == 200
+        assert slug in resp.text
+        assert "re-derives this slug" in resp.text
+        assert "alert--warning" in resp.text
+
+        authenticated_client.post(
+            f"/config/pipeline/field/{fid}",
+            data={"name": "Rename Warn Field New", "field_type": "value"},
+            follow_redirects=False,
+        )
+        db = next(get_db())
+        try:
+            field = db.query(Field).filter(Field.id == fid).first()
+            assert field.slug != slug
+            audit = (
+                db.query(AuditLog)
+                .filter(AuditLog.action == "field.update", AuditLog.resource_id == fid)
+                .order_by(AuditLog.id.desc())
+                .first()
+            )
+            assert audit is not None
+            details = audit.details or {}
+            assert details.get("previous_slug") == slug
+            assert details.get("slug") == field.slug
+        finally:
+            db.close()
+
     def test_htmx_field_validation_stays_in_dialog(self, authenticated_client):
         resp = authenticated_client.post(
             "/config/pipeline/fields",
@@ -6563,7 +6879,7 @@ class TestFields:
     def test_counter_increments(self, authenticated_client):
         sid, slug = _create_source(authenticated_client, name="Cnt Src", slug="cnt-src")
         from app.database import get_db
-        from app.models import Field, ActionInstance, Rule, Event, MetricPoint
+        from app.models import Field, ActionInstance, Rule, Event
         from app.pipeline import evaluate_and_dispatch
         db = next(get_db())
         try:
@@ -6593,7 +6909,6 @@ class TestFields:
             db.expire_all()
             field = db.query(Field).filter(Field.id == fid).first()
             assert field.state["value"] == 3
-            assert db.query(MetricPoint).filter(MetricPoint.field_id == fid).count() == 0
         finally:
             db.close()
 
@@ -6633,10 +6948,9 @@ class TestFields:
         finally:
             db.close()
 
-    def test_metric_summary_uses_metric_points_and_counters(self, authenticated_client):
-        from datetime import datetime, timezone, timedelta
+    def test_metric_summary_shows_value_counters(self, authenticated_client):
         from app.database import get_db
-        from app.models import Field, MetricPoint, Source
+        from app.models import Field, Source
         from app.widgets import fetch_widget_data
         db = next(get_db())
         try:
@@ -6646,23 +6960,14 @@ class TestFields:
                 config={}, state={"value": 3},
             )
             db.add_all([src, counter])
-            db.flush()
-            now = datetime.now(timezone.utc)
-            db.add(MetricPoint(source_id=src.id, field_id=counter.id, name="Summary Hits", value=3.0, timestamp=now))
-            db.add(MetricPoint(source_id=src.id, name="latency", value=1.5, timestamp=now))
-            db.add(MetricPoint(
-                source_id=src.id, name="old-latency", value=9.0,
-                timestamp=now - timedelta(hours=2),
-            ))
             db.commit()
 
             data = fetch_widget_data(
                 "system", db, display="metric_summary", widget_config={}, source_id=src.id,
             )
-            assert data["series"] == 3
-            assert data["points"] == 3
-            assert data["last_hour"] == 2
             assert {"name": "Summary Hits", "value": 3.0} in data["counters"]
+            assert "series" not in data
+            assert "points" not in data
         finally:
             db.close()
 

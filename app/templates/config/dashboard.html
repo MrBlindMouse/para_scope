@@ -39,7 +39,7 @@
       <h2 class="dialog__title">Field slugs</h2>
       <button type="button" class="btn" data-fields-dialog-close>Close</button>
     </header>
-    <p class="text-muted text-xs">Use in templates as <code>{{ '{{ slug.value }}' }}</code> for value/text/toggle, <code>{{ '{{ slug.key }}' }}</code> for data fields, and logbook paths into the latest entry. Series: <code>slug.path</code>; bare number entries use <code>slug.value</code>.</p>
+    <p class="text-muted text-xs">Use in templates as <code>{{ '{{ slug.value }}' }}</code> for value/text/toggle, <code>{{ '{{ slug.key }}' }}</code> for data fields, and logbook paths into the latest entry. Series: <code>slug.path</code>; bare number entries use <code>slug.value</code>. Widget titles, labels, units, and link URLs also accept <code>{{ '{{ … }}' }}</code> (same Field namespace).</p>
     <div id="fields-slug-list" class="stack stack--dense"></div>
   </div>
 </dialog>
@@ -58,6 +58,7 @@
     {id: {{ f.id }}, name: {{ f.name | tojson }}, slug: {{ f.slug | tojson }}, field_type: {{ f.field_type | tojson }}}{% if not loop.last %},{% endif %}
     {% endfor %}
   ];
+  var TRIGGER_TARGETS = {{ trigger_targets | tojson }};
   var initial = {{ current_widgets | tojson }};
 
   var listEl = document.getElementById("widget-instances");
@@ -353,7 +354,8 @@
   }
 
   function toneSelectHtml(type, disp, selected) {
-    if (type === "series" || type === "chart" || type === "clock" || type === "system") return "";
+    if (type === "series" || type === "chart" || type === "clock" ||
+        type === "system" || type === "links" || type === "triggers") return "";
     var cur = normalizeTone(selected, type, disp);
     var opts = [
       ["none", "No background"],
@@ -371,17 +373,17 @@
 
   function toneRulesHtml(rules) {
     rules = Array.isArray(rules) ? rules : [];
-    if (!rules.length) rules = [{expr: "value", op: "gt", compare: "0", tone: "positive"}];
+    if (!rules.length) rules = [{expr: "slug.value", op: "gt", compare: "0", tone: "positive"}];
     var html = '<div class="stack stack--dense" data-tone-rules>' +
-      '<span class="text-muted">Background rules (first match wins). Use field paths and maths, e.g. <code>1/value</code>. ' +
+      '<span class="text-muted">Background rules (first match wins). Use Field slug paths and maths, e.g. <code>1/temp.value</code>. ' +
       '<code>=</code> / <code>≠</code> also accept strings, e.g. <code>service.status</code> / <code>ok</code>.</span>';
     rules.forEach(function (r, i) {
-      var expr = (r && r.expr) || "value";
+      var expr = (r && r.expr) || "slug.value";
       var op = (r && r.op) || "gt";
       var compare = (r && r.compare != null) ? r.compare : "0";
       var tone = (r && r.tone) || "positive";
       html += '<div class="flex items-center gap flex-wrap" data-tone-rule-row>' +
-        '<input type="text" class="input form-field--md" data-trule="expr" placeholder="value" value="' +
+        '<input type="text" class="input form-field--md" data-trule="expr" placeholder="slug.value" value="' +
           escapeAttr(expr) + '">' +
         '<select class="input form-field--sm" data-trule="op">' +
           TONE_RULE_OPS.map(function (o) {
@@ -414,7 +416,7 @@
       expr = String(expr).trim();
       compare = String(compare).trim();
       if (!expr && !compare) return;
-      out.push({expr: expr || "value", op: op, compare: compare || "0", tone: tone});
+      out.push({expr: expr || "slug.value", op: op, compare: compare || "0", tone: tone});
     });
     return out;
   }
@@ -504,9 +506,8 @@
       }
     } else if (disp === "metric_summary") {
       inner = '<div class="grid-auto widget-preview__mini" style="--grid-min: 4em; --grid-gap: 0.25rem;">' +
-        '<div class="stat"><div class="stat__label">Series</div><div class="stat__value">2</div></div>' +
-        '<div class="stat"><div class="stat__label">Points</div><div class="stat__value">48</div></div>' +
         '<div class="stat"><div class="stat__label">Hits</div><div class="stat__value">12</div></div>' +
+        '<div class="stat"><div class="stat__label">Errors</div><div class="stat__value">0</div></div>' +
         "</div>";
     } else if (disp === "source_health" || disp === "recent_events" || disp === "poller_status") {
       if (style === "cards") {
@@ -638,6 +639,68 @@
       "</div>";
     });
     html += '<button type="button" class="btn" data-action="link-add">Add link</button></div>';
+    return html;
+  }
+
+  function triggerTargetValue(it) {
+    if (!it) return "";
+    if (it.kind === "poll") return "poll:" + it.source_id;
+    if (it.kind === "webhook") return "webhook:" + it.source_id + ":" + it.event_type_id;
+    return "";
+  }
+
+  function triggerTargetOptionsHtml(selected) {
+    var html = '<option value="">— choose target —</option>';
+    (TRIGGER_TARGETS || []).forEach(function (t) {
+      var val = triggerTargetValue(t);
+      html += '<option value="' + escapeAttr(val) + '"' +
+        (val === selected ? " selected" : "") + ">" +
+        escapeAttr(t.label) + "</option>";
+    });
+    return html;
+  }
+
+  function triggerPayloadText(it) {
+    if (!it) return "";
+    if (typeof it.payload_text === "string" && it.payload_text) return it.payload_text;
+    if (it.payload && typeof it.payload === "object" && !Array.isArray(it.payload)) {
+      try { return JSON.stringify(it.payload, null, 2); } catch (e) { return ""; }
+    }
+    return "";
+  }
+
+  function escapeTextarea(s) {
+    return String(s || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function triggerItemsHtml(items) {
+    items = Array.isArray(items) ? items : [];
+    if (!items.length) items = [{label: "", kind: "", source_id: "", event_type_id: ""}];
+    var html = '<div class="stack stack--dense" data-trigger-items><span class="text-muted">Trigger buttons</span>';
+    items.forEach(function (it, i) {
+      var target = triggerTargetValue(it);
+      var isWebhook = target.indexOf("webhook:") === 0;
+      html += '<div class="stack stack--tight" data-trigger-row>' +
+        '<div class="flex items-center gap flex-wrap">' +
+          '<input type="text" class="input form-field--md" data-trigger="label" placeholder="Label" value="' + escapeAttr(it.label || "") + '">' +
+          '<select class="input form-field--grow" data-trigger="target">' +
+            triggerTargetOptionsHtml(target) +
+          '</select>' +
+          reorderButtonsHtml("trigger", i, items.length) +
+          '<button type="button" class="btn" data-action="trigger-remove">−</button>' +
+        '</div>' +
+        '<label class="stack"' + (isWebhook ? "" : " hidden") + ' data-trigger-payload-wrap>' +
+          '<span class="text-muted">Payload (JSON; templates use Field slugs, e.g. <code>{{ '{{ temp.value }}' }}</code>)</span>' +
+          '<textarea class="input" rows="3" data-trigger="payload" spellcheck="false" placeholder=\'{"key": "value"}\'>' +
+            escapeTextarea(triggerPayloadText(it)) +
+          '</textarea>' +
+        '</label>' +
+      "</div>";
+    });
+    html += '<button type="button" class="btn" data-action="trigger-add">Add trigger</button></div>';
     return html;
   }
 
@@ -845,6 +908,10 @@
       html += linkItemsHtml(cfg.items);
     }
 
+    if (w.type === "triggers") {
+      html += triggerItemsHtml(cfg.items);
+    }
+
     if (w.type === "notes") {
       if (tone === "conditional") {
         html += toneRulesHtml(cfg.tone_rules);
@@ -1001,6 +1068,44 @@
         if (raw) it[key] = raw;
       });
       if (it.label && it.url) items.push(it);
+    });
+    return items;
+  }
+
+  function readTriggerItems(card) {
+    var items = [];
+    card.querySelectorAll("[data-trigger-row]").forEach(function (row) {
+      var labelEl = row.querySelector('[data-trigger="label"]');
+      var targetEl = row.querySelector('[data-trigger="target"]');
+      var payloadEl = row.querySelector('[data-trigger="payload"]');
+      var label = labelEl ? (labelEl.value || "").trim() : "";
+      var target = targetEl ? (targetEl.value || "").trim() : "";
+      if (!label || !target) return;
+      var parts = target.split(":");
+      var item = null;
+      if (parts[0] === "poll" && parts.length === 2) {
+        var sid = parseInt(parts[1], 10);
+        if (sid) item = {label: label, kind: "poll", source_id: sid};
+      } else if (parts[0] === "webhook" && parts.length === 3) {
+        var sid2 = parseInt(parts[1], 10);
+        var et = parseInt(parts[2], 10);
+        if (sid2 && et) {
+          item = {label: label, kind: "webhook", source_id: sid2, event_type_id: et};
+          var payloadRaw = payloadEl ? (payloadEl.value || "").trim() : "";
+          if (payloadRaw) {
+            item.payload_text = payloadRaw;
+            try {
+              var parsed = JSON.parse(payloadRaw);
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                item.payload = parsed;
+              }
+            } catch (e) {
+              /* keep payload_text for editor; omit payload until valid */
+            }
+          }
+        }
+      }
+      if (item) items.push(item);
     });
     return items;
   }
@@ -1169,6 +1274,10 @@
       if (type === "links") {
         var items = readLinkItems(card);
         if (items.length) config.items = items;
+      }
+      if (type === "triggers") {
+        var titems = readTriggerItems(card);
+        if (titems.length) config.items = titems;
       }
       if (type === "clock") {
         var secondsEl = card.querySelector('[data-cfg="show_seconds"]');
@@ -1723,8 +1832,32 @@
       syncJson();
       return;
     }
+    if (action === "trigger-add") {
+      var tw = readFromDom();
+      var tc = btn.closest(".card");
+      var ti = parseInt(tc.dataset.index, 10);
+      if (!tw[ti]) return;
+      tw[ti].config = tw[ti].config || {};
+      tw[ti].config.items = tw[ti].config.items || [];
+      tw[ti].config.items.push({label: "", kind: "", source_id: ""});
+      setWidgets(tw);
+      return;
+    }
+    if (action === "trigger-remove") {
+      var tr = btn.closest("[data-trigger-row]");
+      if (!tr) return;
+      var trWrap = tr.parentElement;
+      tr.remove();
+      refreshReorderButtons(trWrap, "[data-trigger-row]", "trigger");
+      syncJson();
+      return;
+    }
     if (action === "link-up" || action === "link-down") {
       moveReorderRow(btn, "[data-link-row]", "link", action === "link-up" ? "up" : "down");
+      return;
+    }
+    if (action === "trigger-up" || action === "trigger-down") {
+      moveReorderRow(btn, "[data-trigger-row]", "trigger", action === "trigger-up" ? "up" : "down");
       return;
     }
     if (action === "world-clock-add") {
@@ -1766,8 +1899,14 @@
     clearWidgetValidation();
     syncJson();
   });
-  listEl.addEventListener("change", function () {
+  listEl.addEventListener("change", function (e) {
     clearWidgetValidation();
+    var tsel = e.target && e.target.closest ? e.target.closest('[data-trigger="target"]') : null;
+    if (tsel) {
+      var row = tsel.closest("[data-trigger-row]");
+      var wrap = row && row.querySelector("[data-trigger-payload-wrap]");
+      if (wrap) wrap.hidden = (tsel.value || "").indexOf("webhook:") !== 0;
+    }
     syncJson();
   });
   form.addEventListener("submit", function (e) {

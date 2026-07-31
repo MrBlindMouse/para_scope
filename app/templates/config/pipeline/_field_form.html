@@ -16,6 +16,18 @@
   {% if error %}
     <p class="alert alert--danger" role="alert">{{ error }}</p>
   {% endif %}
+  {% if is_edit %}
+    <p class="text-muted">
+      Widget and template references use slug <code>{{ field.slug }}</code>.
+    </p>
+    <p class="alert alert--warning" role="note">
+      Changing the field name re-derives this slug. Reserved names
+      ({% for s in RESERVED_FIELD_SLUGS %}<code>{{ s }}</code>{% if not loop.last %}, {% endif %}{% endfor %})
+      are skipped, so a rename can produce a numbered slug (e.g. <code>fields_2</code>).
+      Update dashboard templates, action expressions, and rule conditions that use
+      <code>fields.{{ field.slug }}</code> if the slug changes.
+    </p>
+  {% endif %}
 
   <label class="stack">
     <span class="field-label">

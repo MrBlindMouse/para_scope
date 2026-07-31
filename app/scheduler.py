@@ -137,6 +137,8 @@ def _job_wrapper(schedule_id: int):
     """Wrapper that runs the poll, updates backoff, then refreshes next_run_at."""
     try:
         ok = run_schedule(schedule_id)
+        if ok is None:
+            return
         record_poll_outcome(schedule_id, ok)
         # Re-register so the next interval reflects the updated backoff multiplier.
         db = SessionLocal()
@@ -161,6 +163,24 @@ def add_or_update_job(schedule: PollingSchedule):
 
     if not schedule.enabled:
         clear_consecutive_failures(schedule.id)
+        return
+
+    st_value = (
+        schedule.schedule_type.value
+        if hasattr(schedule.schedule_type, "value")
+        else str(schedule.schedule_type)
+    )
+    if st_value == ScheduleType.NEVER.value or st_value == "never":
+        # Trigger-only: keep schedule.enabled so Run now / trigger_source work.
+        clear_consecutive_failures(schedule.id)
+        db = SessionLocal()
+        try:
+            row = db.query(PollingSchedule).filter(PollingSchedule.id == schedule.id).first()
+            if row:
+                row.next_run_at = None
+                db.commit()
+        finally:
+            db.close()
         return
 
     try:

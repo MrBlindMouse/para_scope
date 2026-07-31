@@ -49,11 +49,12 @@
     <label class="stack">
       Schedule type
       <select name="schedule_type" class="input" id="sched-type">
-        <option value="interval" {% if sched_type != 'cron' %}selected{% endif %}>Interval</option>
+        <option value="interval" {% if sched_type != 'cron' and sched_type != 'never' %}selected{% endif %}>Interval</option>
         <option value="cron" {% if sched_type == 'cron' %}selected{% endif %}>Cron Expression</option>
+        <option value="never" {% if sched_type == 'never' %}selected{% endif %}>Trigger only</option>
       </select>
     </label>
-    <div id="interval-fields" class="stack" {% if sched_type == 'cron' %}style="display:none"{% endif %}>
+    <div id="interval-fields" class="stack" {% if sched_type == 'cron' or sched_type == 'never' %}style="display:none"{% endif %}>
       <label class="stack">
         Interval (seconds) *
         <input name="interval_seconds" type="number" min="1" class="input" placeholder="3600"

@@ -12,7 +12,7 @@ FastAPI `APIRouter` modules included from `app/main.py`. Handlers stay thin over
 | `webhook.py` | Public `/webhook/{slug}`, `/health`, `/sw.js` |
 | `dashboard.py` | `/`, widgets, layout/notes APIs, push subscribe, `/config/dashboard` |
 | `pipeline.py` | Pipeline config CRUD + HTMX dialogs (large — extend carefully) |
-| `system.py` | Style/users/secrets/audit, events, metrics, help, system status |
+| `system.py` | Style/users/audit, events, SSE stream, help, system status |
 
 Include order in `main.py`: auth → dashboard → pipeline → system → webhook.
 

@@ -1,4 +1,4 @@
-<tr>
+<tr data-event-id="{{ item.id }}">
   <td><a href="/event/{{ item.id }}">{{ item.id }}</a></td>
   <td>{{ item.timestamp|display_dt('%Y-%m-%d %H:%M', '') }}</td>
   <td>{{ item.source.name if item.source else '-' }}</td>

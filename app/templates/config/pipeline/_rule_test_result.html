@@ -1,0 +1,106 @@
+{% if standalone %}
+<div class="stack dialog__form">
+  <header class="dialog__header flex items-center gap">
+    <h2 class="dialog__title">Rule test — {{ source.name }}</h2>
+    <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+  </header>
+{% endif %}
+{% if error %}
+  <p class="alert alert--danger" role="alert">{{ error }}</p>
+{% elif no_sample %}
+  <p class="alert alert--warning" role="status">
+    No sample event found for this source{% if conditions %} / selected types{% endif %}.
+    Deliver an event first, then test again.
+  </p>
+{% else %}
+  <div class="stack stack--dense{% if not standalone %} mt{% endif %}">
+    <p>
+      {% if matched %}
+        <span class="badge badge--success">Would match</span>
+      {% else %}
+        <span class="badge badge--warning">Would not match</span>
+      {% endif %}
+      against event <a href="/event/{{ event.id }}">#{{ event.id }}</a>
+      {% if event_type_name %}(<code>{{ event_type_name }}</code>){% endif %}
+    </p>
+
+    <ul class="stack stack--tight text-muted">
+      <li>
+        Event-type gate:
+        {% if type_gate == 'all' %}matches all types
+        {% elif type_gate == 'paused' %}<strong class="text-danger">event type is paused — rules are skipped</strong>
+        {% elif type_gate_ok %}selected types include this event
+        {% else %}<strong>selected types do not include this event</strong>
+        {% endif %}
+      </li>
+      {% if not rule_enabled %}
+      <li><strong class="text-danger">Rule is paused</strong></li>
+      {% endif %}
+      <li>
+        Conditions:
+        {% if not rows %}(none — always true)
+        {% elif conditions_matched %}all passed
+        {% else %}failed
+        {% endif %}
+      </li>
+    </ul>
+
+    {% if rows %}
+    <table class="table">
+      <thead><tr><th>Path</th><th>Actual</th><th>Result</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            <code>{{ r.key }}</code>
+            {% if r.correlated %}
+              <span class="text-muted"> (correlated *)</span>
+            {% endif %}
+          </td>
+          <td><code>{{ r.actual | tojson }}</code></td>
+          <td>
+            {% if r.ok %}
+              <span class="text-success">pass</span>
+            {% else %}
+              <span class="text-danger">fail</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if bindings %}
+    <p class="text-muted">
+      Star bindings (same list item for correlated keys):
+      {% for path, idx in bindings.items() %}
+        <code>{{ path }}[{{ idx }}]</code>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+    {% endif %}
+
+    <div>
+      <strong>Sample event data</strong>
+      {% if uses_fields %}
+      <p class="text-muted">Conditions reference <code>fields.*</code> — matching used a live Field snapshot (not shown below).</p>
+      {% endif %}
+      <pre class="code-block">{{ sample_json }}</pre>
+    </div>
+
+    <div>
+      <strong>Actions that would run</strong>
+      {% if would_run %}
+      <ul class="stack stack--tight">
+        {% for a in would_run %}
+        <li>{{ a.label }}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="text-muted">None (no matching enabled actions, or rule/gate failed).</p>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+{% if standalone %}
+</div>
+{% endif %}

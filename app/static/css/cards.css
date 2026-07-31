@@ -10,6 +10,17 @@
     padding: var(--card-padding);
   }
 
+  .card.is-resizing {
+    transition: width 0.2s ease, height 0.2s ease;
+    overflow: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card.is-resizing {
+      transition: none;
+    }
+  }
+
   .card__header {
     display: flex;
     align-items: center;

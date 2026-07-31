@@ -12,6 +12,7 @@ def test_action_types_registered():
     types = get_action_types()
     assert types == [
         "field_push", "http_forward", "notify", "web_push", "local_script",
+        "trigger_source",
     ]
 
 
@@ -244,6 +245,7 @@ def test_http_forward_hmac_signing_headers(db_session_factory):
         req = captured[0]
         assert req.headers.get("X-Call-Timestamp") == str(fixed_ts)
         assert req.headers.get("X-Call-Signature") == expected_sig
+        assert req.content == expected_body_str.encode("utf-8")
     finally:
         db.close()
 

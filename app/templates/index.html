@@ -61,7 +61,7 @@
           </div>
           {% endif %}
           <div class="card__body"
-               {% if widget.type not in ('links', 'notes', 'clock') %}
+               {% if widget.type not in ('links', 'notes', 'clock', 'triggers') %}
                hx-get="/widgets/{{ widget.type }}?id={{ wid }}"
                hx-trigger="every 30s"
                hx-swap="innerHTML"
@@ -79,6 +79,7 @@
 <script src="/static/js/widget-charts.js"></script>
 <script src="/static/js/widget-clock.js"></script>
 <script src="/static/js/widget-notes.js"></script>
+<script src="/static/js/triggers.js"></script>
 <script src="/static/js/dashboard-grid.js"></script>
 {% else %}
 <div class="card">

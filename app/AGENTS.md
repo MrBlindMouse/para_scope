@@ -14,10 +14,12 @@ Single-process domain layer: SQLite models, auth/secrets, webhook/poll ingress, 
 | `security.py` | bcrypt, CSRF mint, timed session tokens, Fernet encrypt/decrypt |
 | `webctx.py` | Auth/CSRF middleware, templates+filters, form parsers, rate/replay, audit, webhook BG hook |
 | `ingest.py` / `event_store.py` | Persist events + prune (never deletes `pending`) |
-| `pipeline.py` | Rule match + conditions + `evaluate_and_dispatch` |
-| `actions.py` | Action registry: field_push, http_forward, notify, web_push, local_script |
+| `event_stream.py` | In-process SSE broadcaster for `/events/stream` |
+| `pipeline.py` | Rule match + conditions + `evaluate_and_dispatch` (cascade depth 3) |
+| `actions.py` | Action registry: field_push, http_forward, notify, web_push, local_script, trigger_source |
 | `fields.py` | Field helpers, path access, star-binding ContextVar |
 | `widgets.py` / `widget_transforms.py` / `dashboard_layout.py` | Widget registry, series/maths/templates, GridStack layout |
+| `source_templates.py` | Full-stack source+fields+rules+widgets recipes (prefill / apply) |
 | `pollers.py` / `scheduler.py` | Poller registry + `run_schedule`; APScheduler lifecycle |
 | `webhook_verifiers.py` | Provider signature / replay verification |
 | `themes.py` / `labels.py` / `webpush_util.py` | Appearance, UI labels, VAPID config |
@@ -33,7 +35,10 @@ dashboard → widgets.fetch_widget_data ← Fields (+ system tables)
 
 - Schema = models + `create_all` only. Wipe DB on model change; **warn the user**.
 - `PRAGMA foreign_keys=ON` via `database.py`. Single worker for rate limits, replay cache, scheduler, token caches.
-- Soft JSON FKs on `Rule.action_ids` / `event_type_ids` — scrub on delete via webctx helpers.
+- Soft JSON FKs on `Rule.action_ids` / `event_type_ids` — scrub on delete via webctx helpers. Pipeline deletes cascade forward only: source → event types → rules → actions (rule owns its actions). Inbound `trigger_source` configs pointing at a deleted source/type are scrubbed.
+- `Rule.source_id` is required (no global rules).
+- Nested trigger cascades capped at depth 3 (`pipeline._CASCADE_MAX`).
+- Dashboard widget titles/labels/units/link URLs: display-time `{{templates}}` via `fields_snapshot` (notes stay literal).
 - Paused `EventTypeRecord`: still ingest; rules skip.
 - Event prune keeps `pending` (BackgroundTasks rely on it).
 - CSRF exempt: `/webhook`, `/static`, `/sw.js`. Local scripts need `PARA_SCOPE_ALLOW_LOCAL_ACTIONS`.
@@ -44,7 +49,7 @@ dashboard → widgets.fetch_widget_data ← Fields (+ system tables)
 
 - **Prefer:** `register_action`, `register_poller`, `KIND_*` / binding tables; `ingest_event` for all Event writes; shared path/template helpers in `fields` + `widget_transforms`.
 - **Prefer:** extend `actions` / `fields` / `pollers` / `widgets` over growing `webctx` unless the change is HTTP/middleware/forms.
-- **Avoid:** new frameworks, Alembic, multi-worker assumptions, MetricPoint write paths for charts (Field logbooks drive series today).
+- **Avoid:** new frameworks, PostgreSQL/Alembic, alternate auth stacks, stateful rule windows, durable/dead-letter queues, plugin loading, and multi-worker assumptions; charts/series use Field logbooks/data.
 - Large modules (`webctx`, `widgets`, `pollers`): extend carefully; split only when actively touching that area.
 
 ## See also

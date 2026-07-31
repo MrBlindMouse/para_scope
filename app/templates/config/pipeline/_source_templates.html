@@ -1,0 +1,31 @@
+<header class="dialog__header flex items-center gap">
+  <h2 class="dialog__title">From template</h2>
+  <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
+</header>
+<p class="text-muted">
+  One click creates the poll source, Fields, rules, and dashboard widgets.
+</p>
+{% if error %}
+<p class="alert alert--danger" role="alert">{{ error }}</p>
+{% endif %}
+<div class="stack">
+  {% for t in templates %}
+  <form method="post"
+        action="/config/pipeline/templates/{{ t.slug }}/apply"
+        hx-post="/config/pipeline/templates/{{ t.slug }}/apply"
+        hx-target="#pipeline-dialog"
+        hx-swap="innerHTML"
+        class="stack">
+    {% include "components/csrf.html" %}
+    <button type="submit" class="btn">
+      <strong>{{ t.title }}</strong>
+      <span class="text-muted"> — {{ t.summary }}</span>
+      {% if t.creates %}
+      <span class="text-muted block">Creates: {{ t.creates }}</span>
+      {% endif %}
+    </button>
+  </form>
+  {% else %}
+  <p class="text-muted">No templates available.</p>
+  {% endfor %}
+</div>

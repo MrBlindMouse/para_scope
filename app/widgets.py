@@ -5,8 +5,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func as sql_func
-
+from app.fields import get_by_path
 from app.widget_transforms import (
     extract_number,
     render_data_template,
@@ -27,6 +26,7 @@ KIND_DISPLAYS = {
     "display": ("logbook_list", "kv_text", "toggle", "board", "table"),
     "clock": ("digital", "analog", "compact", "world_clock"),
     "links": ("list", "button_row", "icon_grid"),
+    "triggers": ("button_row", "list"),
     "notes": ("notes",),
     "system": ("source_health", "recent_events", "poller_status", "metric_summary"),
 }
@@ -37,6 +37,7 @@ KIND_TITLES = {
     "display": "Display",
     "clock": "Clock",
     "links": "Links",
+    "triggers": "Triggers",
     "notes": "Notes",
     "system": "System",
 }
@@ -65,7 +66,7 @@ DISPLAY_TITLES = {
     "source_health": "Source Health",
     "recent_events": "Recent Events",
     "poller_status": "Poll status",
-    "metric_summary": "Metric Summary",
+    "metric_summary": "Value counters",
 }
 
 # Visual style variants per display mode (config.style)
@@ -225,6 +226,7 @@ WIDGET_BINDINGS = {
     },
     "clock": _BINDING_NONE,
     "links": _BINDING_NONE,
+    "triggers": _BINDING_NONE,
     "notes": _BINDING_NONE,
     "system": _BINDING_NONE,
 }
@@ -355,7 +357,7 @@ def resolve_widget_tone(
     Board with kv_text cells uses per-row tones only (no widget wrapper tone).
     Series/chart never use rule-based backgrounds.
     """
-    if widget_type in ("series", "chart"):
+    if widget_type in ("series", "chart", "links", "triggers", "system", "clock"):
         return None
     cfg = config or {}
     raw = (cfg.get("tone") or "").strip().lower()
@@ -364,12 +366,14 @@ def resolve_widget_tone(
     if raw == "none":
         return None
     data = data or {}
+    rules = _config_tone_rules(cfg)
+    tone_data = data.get("_tone_data") or {}
     if display == "toggle":
+        if rules:
+            return resolve_tone_rules(rules, tone_data)
         return "positive" if data.get("value") else "negative"
     if display in ("kv_text", "logbook_list", "notes"):
-        return resolve_tone_rules(
-            _config_tone_rules(cfg), data.get("_tone_data") or {},
-        )
+        return resolve_tone_rules(rules, tone_data)
     if display == "board":
         cell_kind = _board_cell_kind(cfg)
         if cell_kind == "kv_text":
@@ -378,6 +382,9 @@ def resolve_widget_tone(
         items = data.get("items") or []
         if not items:
             return "neutral"
+        # Board toggle: use widget-level rules when present, else boolean aggregate.
+        if rules:
+            return resolve_tone_rules(rules, tone_data or dict(data))
         tones = [_cell_tone(it) for it in items]
         if all(t == "positive" for t in tones):
             return "positive"
@@ -387,8 +394,8 @@ def resolve_widget_tone(
     return None
 
 
-def widget_referenced_field_ids(db, config: dict | None) -> set[int]:
-    """Field PKs referenced by a widget config (slugs on config / sources / cells)."""
+def widget_referenced_field_ids(db, config: dict | None, *, title: str = "") -> set[int]:
+    """Field PKs referenced by a widget config (slugs on config / sources / cells / text templates)."""
     from app.models import Field
 
     cfg = config or {}
@@ -407,11 +414,23 @@ def widget_referenced_field_ids(db, config: dict | None) -> set[int]:
     if "{{" in tmpl:
         for head in _slug_heads_from_template(tmpl):
             _add(head)
+    _add_template_slug_heads(slugs, title)
+    _add_template_slug_heads(slugs, cfg.get("unit"))
+    for rule in _config_tone_rules(cfg):
+        if not isinstance(rule, dict):
+            continue
+        for key in ("expr", "compare"):
+            raw = str(rule.get(key) or "").strip()
+            if raw:
+                im = re.match(r"[a-zA-Z_][a-zA-Z0-9_]*", raw)
+                if im:
+                    _add(im.group(0))
     sources = cfg.get("sources")
     if isinstance(sources, list):
         for src in sources:
             if isinstance(src, dict):
                 _add((src.get("field_slug") or "").strip())
+                _add_template_slug_heads(slugs, src.get("label"))
     cells = cfg.get("cells")
     if isinstance(cells, list):
         for cell in cells:
@@ -421,6 +440,27 @@ def widget_referenced_field_ids(db, config: dict | None) -> set[int]:
                 if "{{" in ct:
                     for head in _slug_heads_from_template(ct):
                         _add(head)
+                _add_template_slug_heads(slugs, cell.get("unit"))
+                cell_rules = cell.get("tone_rules")
+                if isinstance(cell_rules, list):
+                    for rule in cell_rules:
+                        if not isinstance(rule, dict):
+                            continue
+                        for key in ("expr", "compare"):
+                            raw = str(rule.get(key) or "").strip()
+                            if raw:
+                                im = re.match(r"[a-zA-Z_][a-zA-Z0-9_]*", raw)
+                                if im:
+                                    _add(im.group(0))
+    items = cfg.get("items")
+    if isinstance(items, list):
+        for it in items:
+            if isinstance(it, dict):
+                _add_template_slug_heads(slugs, it.get("label"))
+                _add_template_slug_heads(slugs, it.get("url"))
+    for row in cfg.get("world_clocks") or []:
+        if isinstance(row, dict):
+            _add_template_slug_heads(slugs, row.get("label"))
     if not slugs:
         return set()
     rows = db.query(Field.id).filter(Field.slug.in_(slugs)).all()
@@ -502,6 +542,16 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
                     return f"{label}: “{field.name}” isn’t the right field type"
                 if field.field_type in ("logbook", "data") and not path:
                     return f"{label}: append a path (e.g. {slug}.response_time_ms)"
+            max_raw = (cfg.get("max_field_slug") or "").strip()
+            if max_raw:
+                max_slug, max_path = split_slug_path(max_raw)
+                max_field = fields_by_slug.get(max_slug)
+                if max_field is None:
+                    return f"{label}: max field wasn’t found"
+                if max_field.field_type not in ("value", "text", "logbook", "data"):
+                    return f"{label}: max field isn’t a compatible field type"
+                if max_field.field_type in ("logbook", "data") and not max_path:
+                    return f"{label}: append a path on the max field (e.g. {max_slug}.response_time_ms)"
             continue
 
         if key == "cells":
@@ -560,6 +610,7 @@ def fetch_widget_data(widget_type, db, widget_config=None, source_id=None, displ
         "display": _display_data,
         "clock": _clock_data,
         "links": _links_data,
+        "triggers": _triggers_data,
         "notes": _notes_data,
         "system": _system_data,
     }.get(widget_type)
@@ -633,6 +684,9 @@ def _resolve_logbook_list_field(db, config, fields_by_slug: dict | None = None):
 
     if not slug:
         return None, "choose a field"
+    slug, _ = split_slug_path(slug)
+    if not slug:
+        return None, "choose a field"
     if fields_by_slug is not None:
         field = fields_by_slug.get(slug)
     else:
@@ -645,7 +699,7 @@ def _resolve_logbook_list_field(db, config, fields_by_slug: dict | None = None):
 
 
 def resolve_field(db, config) -> object | None:
-    """Resolve a Field by field_slug (path after first `.` is ignored)."""
+    """Resolve a Field by the leading segment of field_slug."""
     from app.models import Field
 
     slug, _ = split_slug_path(_config_field_slug(config))
@@ -693,9 +747,32 @@ def fields_snapshot(db) -> dict:
     return snap
 
 
-def _merge_template_data(snap: dict | None, bound: dict | None) -> dict:
-    """Global slug namespace under snap; bound Field data wins on key clash."""
-    return {**(snap or {}), **(bound or {})}
+def trigger_targets(db) -> list[dict]:
+    """Flat list of poll sources and webhook event types for trigger UIs."""
+    from app.models import EventTypeRecord, Source
+
+    out: list[dict] = []
+    for src in db.query(Source).order_by(Source.name).all():
+        if src.source_type == "poll":
+            out.append({
+                "kind": "poll",
+                "source_id": src.id,
+                "label": f"Poll · {src.name}",
+            })
+        elif src.source_type == "webhook":
+            for et in (
+                db.query(EventTypeRecord)
+                .filter(EventTypeRecord.source_id == src.id)
+                .order_by(EventTypeRecord.name)
+                .all()
+            ):
+                out.append({
+                    "kind": "webhook",
+                    "source_id": src.id,
+                    "event_type_id": et.id,
+                    "label": f"{src.name} · {et.name}",
+                })
+    return out
 
 
 def _config_field_slugs(config) -> list[str]:
@@ -942,11 +1019,14 @@ def _series_source_rows(config) -> list[dict]:
     ]
 
 
-def _series_points_for_source(db, src, *, range_mode, range_hours, range_entries, cutoff, source_id=None):
+def _series_points_for_source(
+    db, src, *, range_mode, range_hours, range_entries, cutoff, source_id=None,
+    fields_snap=None,
+):
     """Return (name, points[{ts,v}]) for one series source row."""
     from app.models import FieldLogEntry
 
-    label = (src.get("label") or "").strip()
+    label = _render_widget_text((src.get("label") or "").strip(), fields_snap)
 
     def _apply_range(query, ts_col, id_col):
         if range_mode == "entries":
@@ -999,7 +1079,7 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
     range_hours = _range_hours(config)
     range_entries = _range_entries(config)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=range_hours)
-    unit = (config.get("unit") or "").strip()
+    unit = _render_widget_text((config.get("unit") or "").strip(), fields_snap)
     base = {
         "display": display,
         "range_mode": range_mode,
@@ -1022,6 +1102,7 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
             range_entries=range_entries,
             cutoff=cutoff,
             source_id=source_id,
+            fields_snap=fields_snap,
         )
         if err and not points:
             errors.append(err)
@@ -1058,9 +1139,9 @@ def _latest_chart_source_payload(db, field, *, source_id=None):
     return state.get("value", 0 if field.field_type == "value" else "")
 
 
-def _chart_source_value(db, src, source_id=None):
+def _chart_source_value(db, src, source_id=None, fields_snap=None):
     """Return (label, numeric_value) for one chart source."""
-    label = (src.get("label") or "").strip()
+    label = _render_widget_text((src.get("label") or "").strip(), fields_snap)
     field = resolve_field(db, src)
     if field is None:
         return None
@@ -1070,15 +1151,15 @@ def _chart_source_value(db, src, source_id=None):
         return None
     _, value_path = split_slug_path(_config_field_slug(src))
     raw = _latest_chart_source_payload(db, field, source_id=source_id)
-    if field.field_type == "value":
+    if field.field_type in ("value", "text"):
+        if value_path:
+            if isinstance(raw, dict):
+                v = extract_number(raw, value_path)
+            else:
+                v = extract_number({"value": raw}, value_path)
+            return label, 0.0 if v is None else v
         try:
-            v = float(raw or 0)
-        except (TypeError, ValueError):
-            v = 0.0
-        return label, v
-    if field.field_type == "text":
-        try:
-            v = float(raw)
+            v = float(raw or 0) if field.field_type == "value" else float(raw)
         except (TypeError, ValueError):
             v = 0.0
         return label, v
@@ -1129,7 +1210,7 @@ def _chart_data(db, config, display="pie", source_id=None, fields_snap=None):
     for src in sources:
         if not isinstance(src, dict):
             continue
-        pair = _chart_source_value(db, src, source_id=source_id)
+        pair = _chart_source_value(db, src, source_id=source_id, fields_snap=fields_snap)
         if pair is None:
             continue
         labels.append(pair[0])
@@ -1140,7 +1221,7 @@ def _chart_data(db, config, display="pie", source_id=None, fields_snap=None):
         "display": display,
         "labels": labels,
         "values": values,
-        "unit": (config.get("unit") or "").strip(),
+        "unit": _render_widget_text((config.get("unit") or "").strip(), fields_snap),
     }
     keys = set(sc.get("keys") or ())
     if "max" in keys or "max_field_slug" in keys:
@@ -1180,8 +1261,9 @@ def _clock_data(db, config, display="digital", source_id=None, fields_snap=None)
                 timezone_name = _clock_timezone_name(row["timezone"])
             except ValueError:
                 continue
+            label = _render_widget_text(row["label"], fields_snap)
             world_rows.append(_clock_face_payload(
-                label=_clock_label(row["label"], timezone_name, "Clock"),
+                label=_clock_label(label, timezone_name, "Clock"),
                 timezone_name=timezone_name,
                 now_utc=now_utc,
                 show_seconds=show_seconds,
@@ -1208,15 +1290,21 @@ def _render_kv_template(template: str, data) -> str:
     return render_data_template(template, data if isinstance(data, dict) else {})
 
 
-def _kv_field_data(field, entry_value=None) -> dict:
-    """Build template/tone data dict from a Field."""
-    if field.field_type == "logbook":
-        data = entry_value if isinstance(entry_value, dict) else (
-            {"value": entry_value} if entry_value is not None else {}
-        )
-    else:
-        data = dict(field.state or {})
-    return data
+def _render_widget_text(text: str | None, fields_snap) -> str:
+    """Display-time ``{{templates}}`` against Field snapshot. Literal if no braces."""
+    s = text if isinstance(text, str) else ("" if text is None else str(text))
+    if "{{" not in s:
+        return s
+    return render_data_template(s, fields_snap if isinstance(fields_snap, dict) else {})
+
+
+def _add_template_slug_heads(slugs: set[str], text: str | None) -> None:
+    raw = (text or "").strip()
+    if "{{" not in raw:
+        return
+    for head in _slug_heads_from_template(raw):
+        if head:
+            slugs.add(head)
 
 
 def _display_data(db, config, display="logbook_list", source_id=None, fields_snap=None):
@@ -1225,9 +1313,25 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
     snap = fields_snap if isinstance(fields_snap, dict) else {}
 
     if display == "logbook_list":
-        return _display_logbook_list(db, config, source_id=source_id)
+        return _display_logbook_list(db, config, source_id=source_id, fields_snap=snap)
     if display == "kv_text":
-        template = (config.get("template") or "").strip() or "{{value}}"
+        template = (config.get("template") or "").strip()
+        if not template:
+            slug = ""
+            slug_raw = _config_field_slug(config)
+            if slug_raw:
+                slug, _ = split_slug_path(slug_raw)
+            if slug:
+                template = f"{{{{ {slug}.value }}}}"
+            else:
+                return {
+                    "display": "kv_text",
+                    "error": "Add a template",
+                    "text": "",
+                    "name": "",
+                    "template": "",
+                    "_tone_data": dict(snap),
+                }
         data = dict(snap)
         text = _render_kv_template(template, data)
         return {
@@ -1244,10 +1348,17 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
             return {"display": display, "error": "Choose a field"}
         if field.field_type != "toggle":
             return {"display": display, "error": "This display needs a toggle field", "name": field.name}
+        _, path = split_slug_path(_config_field_slug(config))
+        state = field.state or {}
+        if path:
+            raw = get_by_path(state, path)
+        else:
+            raw = state.get("value", False)
         return {
             "display": display, "name": field.name,
-            "value": bool((field.state or {}).get("value", False)),
+            "value": bool(raw),
             "field_id": field.id,
+            "_tone_data": dict(snap),
         }
 
     if display == "board":
@@ -1256,7 +1367,8 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
     if display == "table":
         rows = []
         seen = set()
-        for slug in _config_field_slugs(config):
+        for raw in _config_field_slugs(config):
+            slug, path = split_slug_path(raw)
             field = db.query(Field).filter(Field.slug == slug).first()
             if not field or field.id in seen:
                 continue
@@ -1269,9 +1381,22 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
                     .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
                     .first()
                 )
-                value = entry.value if entry else None
+                payload = entry.value if entry else None
             else:
-                value = state if field.field_type == "data" else state.get("value")
+                payload = state
+            if path:
+                if isinstance(payload, dict):
+                    value = get_by_path(payload, path)
+                elif field.field_type == "logbook" and path == "value" and not isinstance(payload, (dict, list)):
+                    value = payload
+                else:
+                    value = get_by_path({"value": payload}, path) if payload is not None else None
+            elif field.field_type == "data":
+                value = payload
+            elif field.field_type == "logbook":
+                value = payload
+            else:
+                value = (payload or {}).get("value") if isinstance(payload, dict) else payload
             rows.append({
                 "field_id": field.id, "name": field.name,
                 "field_type": field.field_type, "value": value,
@@ -1282,8 +1407,6 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
 
 
 def _display_board(db, config, fields_snap=None):
-    from app.models import FieldLogEntry
-
     snap = fields_snap if isinstance(fields_snap, dict) else {}
 
     cell_kind = _board_cell_kind(config)
@@ -1306,34 +1429,32 @@ def _display_board(db, config, fields_snap=None):
         if cell_kind == "toggle":
             if field is None or field.field_type != "toggle":
                 continue
+            _, path = split_slug_path(_config_field_slug(cell))
+            state = field.state or {}
+            if path:
+                raw = get_by_path(state, path)
+            else:
+                raw = state.get("value", False)
             items.append({
                 "kind": "toggle",
                 "field_id": field.id,
                 "name": field.name,
                 "style": style,
-                "value": bool((field.state or {}).get("value", False)),
+                "value": bool(raw),
             })
             continue
 
         name = field.name if field else ""
-        bound = {}
-        if field is not None:
-            entry_val = None
-            if field.field_type == "logbook":
-                entry = (
-                    db.query(FieldLogEntry)
-                    .filter(FieldLogEntry.field_id == field.id)
-                    .order_by(FieldLogEntry.timestamp.desc(), FieldLogEntry.id.desc())
-                    .first()
-                )
-                entry_val = entry.value if entry else None
-            bound = _kv_field_data(field, entry_val)
-        data = _merge_template_data(snap, bound)
+        slug = (field.slug or "").strip() if field else ""
+        data = dict(snap)
         if not template:
-            template = f"{{{{value}}}} {unit}".rstrip() if unit else "{{value}}"
+            if slug:
+                template = f"{{{{ {slug}.value }}}} {unit}".rstrip() if unit else f"{{{{ {slug}.value }}}}"
+            else:
+                continue  # template-only cell with no template
         text = _render_kv_template(template, data)
-        if not text and data.get("value") is not None:
-            text = str(data.get("value"))
+        if not text and slug and isinstance(data.get(slug), dict) and data[slug].get("value") is not None:
+            text = str(data[slug].get("value"))
         elif not text:
             text = name
         cell_rules = cell.get("tone_rules") if isinstance(cell.get("tone_rules"), list) else []
@@ -1351,12 +1472,18 @@ def _display_board(db, config, fields_snap=None):
 
     if not items:
         return {"display": "board", "error": "No valid board fields", "items": [], "cell_kind": cell_kind}
-    return {"display": "board", "items": items, "cell_kind": cell_kind}
+    return {
+        "display": "board",
+        "items": items,
+        "cell_kind": cell_kind,
+        "_tone_data": dict(snap),
+    }
 
 
-def _display_logbook_list(db, config, source_id=None):
+def _display_logbook_list(db, config, source_id=None, fields_snap=None):
     from app.models import FieldLogEntry
 
+    snap = fields_snap if isinstance(fields_snap, dict) else {}
     field, err = _resolve_logbook_list_field(db, config)
     if field is None:
         msg = {
@@ -1393,18 +1520,19 @@ def _display_logbook_list(db, config, source_id=None):
         }
         if template and slug:
             if isinstance(e.value, dict):
-                data = {slug: e.value}
+                entry_data = e.value
             else:
-                data = {slug: {"value": e.value}}
+                entry_data = {"value": e.value}
+            data = {**snap, slug: entry_data}
             row["text"] = _render_kv_template(template, data)
         entries.append(row)
-    tone_data = {}
+    tone_data = dict(snap)
     if entries and slug:
         latest = entries[0].get("value")
         if isinstance(latest, dict):
-            tone_data = {slug: latest}
+            tone_data = {**snap, slug: latest}
         else:
-            tone_data = {slug: {"value": latest}}
+            tone_data = {**snap, slug: {"value": latest}}
     return {
         "display": "logbook_list",
         "name": field.name,
@@ -1441,14 +1569,82 @@ def _links_data(db, config, display="list", source_id=None, fields_snap=None):
     for it in items:
         if not isinstance(it, dict):
             continue
-        label = (it.get("label") or "").strip()
-        url = (it.get("url") or "").strip()
+        label = _render_widget_text((it.get("label") or "").strip(), fields_snap)
+        url = _render_widget_text((it.get("url") or "").strip(), fields_snap)
         if not label or not url:
             continue
         cleaned.append({
             "label": label,
             "url": url,
             "favicon": _favicon_for_url(url),
+        })
+    return {"display": display, "items": cleaned}
+
+
+def _triggers_data(db, config, display="button_row", source_id=None, fields_snap=None):
+    """Resolve configured trigger buttons against live sources/event types."""
+    import json as _json
+    from app.models import EventTypeRecord, Source
+
+    items = config.get("items")
+    if not isinstance(items, list):
+        items = []
+    sources = {s.id: s for s in db.query(Source).all()}
+    event_types = {et.id: et for et in db.query(EventTypeRecord).all()}
+    cleaned = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        label = _render_widget_text((it.get("label") or "").strip(), fields_snap)
+        kind = (it.get("kind") or "").strip()
+        if not label or kind not in ("webhook", "poll"):
+            continue
+        try:
+            sid = int(it.get("source_id"))
+        except (TypeError, ValueError):
+            continue
+        src = sources.get(sid)
+        if not src:
+            continue
+        if kind == "poll":
+            if src.source_type != "poll":
+                continue
+            cleaned.append({
+                "label": label,
+                "kind": "poll",
+                "source_id": sid,
+                "source_name": src.name,
+                "enabled": bool(src.enabled),
+            })
+            continue
+        try:
+            et_id = int(it.get("event_type_id"))
+        except (TypeError, ValueError):
+            continue
+        et = event_types.get(et_id)
+        if not et or et.source_id != sid or src.source_type != "webhook":
+            continue
+        payload = it.get("payload")
+        if not isinstance(payload, dict):
+            raw = (it.get("payload_text") or "").strip()
+            if raw:
+                try:
+                    parsed = _json.loads(raw)
+                    payload = parsed if isinstance(parsed, dict) else {}
+                except (TypeError, ValueError):
+                    payload = {}
+            else:
+                payload = {}
+        cleaned.append({
+            "label": label,
+            "kind": "webhook",
+            "source_id": sid,
+            "event_type_id": et_id,
+            "source_name": src.name,
+            "event_type_name": et.name,
+            "enabled": bool(src.enabled and et.enabled),
+            "payload": payload,
+            "payload_json": _json.dumps(payload),
         })
     return {"display": display, "items": cleaned}
 
@@ -1551,17 +1747,7 @@ def _recent_events_data(db, config, source_id=None):
 
 
 def _metric_summary_data(db, config, source_id=None):
-    from app.models import Field, MetricPoint
-    q = db.query(MetricPoint)
-    if source_id:
-        q = q.filter(MetricPoint.source_id == source_id)
-    points = q.count()
-    series_q = db.query(sql_func.count(sql_func.distinct(MetricPoint.name)))
-    if source_id:
-        series_q = series_q.filter(MetricPoint.source_id == source_id)
-    series = series_q.scalar() or 0
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
-    last_hour = q.filter(MetricPoint.timestamp >= cutoff).count()
+    from app.models import Field
     counters = []
     for f in db.query(Field).filter(Field.field_type == "value").order_by(Field.name).all():
         raw = (f.state or {}).get("value", 0)
@@ -1570,7 +1756,7 @@ def _metric_summary_data(db, config, source_id=None):
         except (TypeError, ValueError):
             value = 0.0
         counters.append({"name": f.name, "value": value})
-    return {"series": series, "points": points, "last_hour": last_hour, "counters": counters}
+    return {"counters": counters}
 
 
 def _poller_status_data(db, config, source_id=None):

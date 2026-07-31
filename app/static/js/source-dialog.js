@@ -181,6 +181,9 @@
       if (schedType.value === "cron") {
         intervalFields.style.display = "none";
         cronFields.style.display = "";
+      } else if (schedType.value === "never") {
+        intervalFields.style.display = "none";
+        cronFields.style.display = "none";
       } else {
         intervalFields.style.display = "";
         cronFields.style.display = "none";

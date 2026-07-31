@@ -10,6 +10,7 @@ Underscore-prefixed partials for the pipeline dialog and source-chain SSR. Serve
 |---------|--------|
 | Forms | `_source_form`, `_source_edit_form`, `_event_form`, `_rule_form`, `_action_form`, `_field_form` |
 | Chain | `_source_chain`, `_fields_section` |
+| Recipes / dry-run | `_source_templates`, `_rule_test_result` |
 | Shared fieldsets | `_webhook_provider_fields`, `_poll_schedule_fields`, `_conditions_builder` |
 | Read-only dialogs | `_recent_events`, `_recent_logbook`, `_latest_event` |
 

@@ -1,6 +1,6 @@
 Version: 0.1  
 
-Date: 2026-07-17 (updated 2026-07-29: planned on-demand polling docs)  
+Date: 2026-07-17 (updated 2026-07-30: fixed SQLite/auth/rule scope and dashboard-trigger design)
 
 Status: Living design. **AGENTS.md** is the ops contract for agents; this document is vision plus an explicit shipped-vs-planned split below.
 
@@ -12,12 +12,13 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 - Cookie sessions, CSRF, Fernet-encrypted secrets, login rate limit
 - Sources (webhook + poll), event types, one polling schedule per poll source, rules, actions (`field_push`, `http_forward`, `notify`, `web_push`, `local_script`)
 - Poll categories + typed poller subtypes for URL/HTTP, system, connectivity, storage, application, and external checks
-- Field sinks (logbook / value / text / toggle) + MetricPoint + AuditLog + DashboardLayout widgets
+- Field sinks (logbook / value / text / toggle / data) + AuditLog + DashboardLayout widgets
 - Webhook HMAC when a secret is configured (`X-Webhook-Timestamp` + HMAC over `{timestamp}.{body}`); unsigned sources allowed for local/dev
 - In-memory login and webhook rate limits (single-process ceiling)
-- In-process APScheduler pollers; HTMX dashboard refresh (not SSE)
+- In-process APScheduler pollers; HTMX dashboard refresh; SSE live event tail on `/events/stream`
 - Action/poller registries in-process (not a plugin directory)
 - Shared Fields as first-class sinks used by both actions and widgets
+- Dashboard Triggers widget + `trigger_source` action; self-metrics on `/system`
 - Vanilla CSS (37signals/Fizzy-inspired, OKLCH tokens, cascade layers)
 - GridStack layout + ApexCharts widgets
 - Web Push via VAPID (optional env keys)
@@ -25,20 +26,9 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 
 **Planned / not in v0.1 (do not treat as implemented):**
 
-- Durable queue / dead-letter
-- SSE live event tail
-- TOTP / WebAuthn / OIDC
-- API tokens
-- Condition rate limits / time windows
-- Formal plugin/adapter packaging and “Writing a Source Adapter” guides
 - Phase-2 poll integrations: Docker/runtime snapshots, SMART health, ZFS/Btrfs pool health, MQTT broker checks, deeper queue integrations
-- Dashboard actions source type: authenticated dashboard controls emit pipeline events (manual / UI-triggered ingress)
-- Trigger poll pipeline action (`trigger_poll`): run a chosen poll source once when a rule fires (same path as Run now)
-- Never-run / trigger-only poll schedule mode: no APScheduler interval/cron tick; only Run now or Trigger poll
-- Expanded maths functions in field/action expressions (e.g. `trunc`, and further helpers beyond today’s `abs` / `round` / `min` / `max`)
 - Mandatory webhook secrets in production (operator guidance only today)
-- Multi-role auth (admin vs viewer)
-- Migrations (Alembic or equivalent)
+- Heatmap / calendar heatmap / range-column widgets; markdown notes display
 
 ---
 
@@ -48,7 +38,9 @@ A self-hosted, single-process Python application that acts as a unified event hu
 
 Users register **Sources**. Each source can emit events via verified webhooks or be actively polled on a configurable schedule. Incoming events are normalized, filtered by **Rules** (with conditions), and routed to one or more **Actions**. Shared **Fields** act as durable sinks (logbooks, values, text, toggles). A modular web dashboard provides status tiles, graphs, event logs, and configuration surfaces.
 
-A planned third source type — **dashboard actions** — will let authenticated dashboard controls emit named events into the same pipeline.
+The authenticated dashboard **Triggers** widget and the `trigger_source` action can fire a poll (Run now) or ingest a webhook event type with an optional templated payload. They do not introduce a third source type or make a loopback HTTP request. Nested trigger cascades are capped at depth 3.
+
+Dashboard templates use bare Field slugs (`{{ temperature.value }}`), including widget titles, labels, units, and link URLs at display time (notes stay literal). Pipeline templates and rule condition keys use event payload paths plus reserved `fields.<slug>.<path>`; Update Field also exposes reserved `field`. Field slugs cannot be any name in `RESERVED_FIELD_SLUGS` (`field`, `fields`, `value`, `source`, `_poll`, `dt`, `system`, `ts`).
 
 The system prioritizes:
 
@@ -80,6 +72,12 @@ It is deliberately *not* a full observability platform (Prometheus/Grafana repla
 - Native mobile apps (responsive web is sufficient).
 - Mandatory cloud dependencies or telemetry.
 - Docker / container-first packaging (git + Python environment is the primary distribution method).
+- PostgreSQL support or migration tooling; SQLite + wipe/recreate remains the storage contract.
+- Alternative authentication stacks, API tokens, or user roles; authenticated users retain full access.
+- Stateful rule rate limits or time windows; conditions remain simple payload matching.
+- Configuration import/export UI; backups remain the SQLite database plus its matching secret key.
+- Durable queues, dead-letter processing, or delivery guarantees; actions remain immediate and in-process.
+- Plugin discovery or Python entry-point loading; extensions stay built into the app through its existing registries.
 
 ### 4. Core Domain Concepts
 
@@ -87,11 +85,11 @@ It is deliberately *not* a full observability platform (Prometheus/Grafana repla
 
 A registered origin of events. Examples: Flit PKM, trading bots, e-commerce/payment providers, Uptime Kuma, custom services, system metrics collectors, etc.
 
-Shipped `source_type` values: `webhook` | `poll`. Planned: `dashboard` (layout controls that POST authenticated events into the pipeline).
+Shipped and intended `source_type` values: `webhook` | `poll`. Dashboard controls reuse an existing webhook source/event type.
 
 A source owns:
 
-- Identity and metadata (name, slug, description, tags, icon)
+- Identity and metadata (name, slug, description)
 - Authentication / verification material for webhooks (optional secret)
 - Zero or more webhook event type definitions
 - Exactly one polling schedule when `source_type` is poll (none for webhooks)
@@ -102,7 +100,7 @@ A source owns:
 
 A named kind of occurrence belonging to a source (e.g. `on_success`, `on_failure`, `client.created`, `monitor.down`).  
 
-Carries optional schema hints. Poll sources automatically receive `on_success` / `on_failure`. An optional `always` type can be added on poll or webhook sources and fires on every poll run / accepted webhook.
+Poll sources automatically receive `on_success` / `on_failure`. An optional `always` type can be added on poll or webhook sources and fires on every poll run / accepted webhook.
 
 **Event**  
 
@@ -110,21 +108,20 @@ A concrete occurrence. Normalized internal representation plus the original payl
 
 **Polling Schedule**  
 
-A timing/job row attached to a poll source: interval or cron (shipped), handler type (for example `http_get`, `system_snapshot`, `dns_resolve`, `backup_age`), typed handler parameters, timeout, and retry count. Each poll source has exactly one schedule. Jobs run in-process via APScheduler with jitter and consecutive-failure backoff. Planned: a **never** (trigger-only) mode that does not register an automatic tick — the poll stays enabled and runs only via Run now or a Trigger poll action.
+A timing/job row attached to a poll source: interval, cron, or **never** (trigger-only — no APScheduler tick; Run now / `trigger_source` only). Handler type (for example `http_get`, `system_snapshot`, `dns_resolve`, `backup_age`), typed handler parameters, timeout, and retry count. Each poll source has exactly one schedule. Jobs run in-process via APScheduler with jitter and consecutive-failure backoff.
 
 **Action**  
 
 A side-effect attached to rules. Built-in types:
 
-- `field_push` — write to a shared Field (logbook append, value ops, text template, toggle Fixed/Switch); skips when the computed value is unchanged. Logbook **Value from event** resolves a dotted path, a safe maths expression (`+ - * / %`, `abs`, `round`, `min`, `max`), or a JSON shape (string leaves = path / maths / literal) into a typed value. **Templates** (`{{ }}`) are string interpolation only (actions and text fields).
+- `field_push` — write to a shared Field (logbook append, value ops, text template, toggle Fixed/Switch); skips when the computed value is unchanged. Logbook **Value from event** resolves a dotted path, a safe maths expression (`+ - * / %`, `abs`, `round`, `min`, `max`, `trunc`, `sum`, `avg`), or a JSON shape (string leaves = path / maths / literal) into a typed value. **Templates** (`{{ }}`) are string interpolation only (actions and text fields). Pipeline actions and rule conditions may read any Field via `fields.<slug>.<path>`.
 - `http_forward` — outbound HTTP request (templated URL/headers/body, auth secrets, presets for ntfy/Gotify/Discord, optional HMAC)
 - `notify` — thin convenience wrapper over HTTP for ntfy / Gotify / Discord (title/body templates)
 - `web_push` — browser push notification via VAPID
 - `local_script` — run a local command or argv list (gated by `PARA_SCOPE_ALLOW_LOCAL_ACTIONS`; optional path allowlist)
+- `trigger_source` — run a poll once (Run now) or ingest a webhook event type with an optional templated payload; nested cascades capped at depth 3
 
-Planned (not shipped): `trigger_poll` — when a rule fires, run a chosen poll source once (same execution path as Run now). Pairs with never-run schedules and dashboard-action sources; recursive trigger loops are an open design concern. Also planned: expanded maths helpers in expressions (e.g. `trunc` and similar) beyond the shipped `abs` / `round` / `min` / `max`.
-
-Actions are dispatched by rules. Rules support field-match conditions (exact, not, gt/lt, contains, regex) on dotted paths. List segment `*` means “any element” in conditions (correlated across fields that share the same list); when those conditions match, the same indexes apply to `*` in that rule’s action/template paths. Without starred conditions, `*` is the first element. Rate limiting and time windows are planned, not shipped.
+Actions are dispatched by rules. Rules support field-match conditions (exact, not, gt/lt, contains, regex) on dotted paths, including `fields.<slug>.…`. List segment `*` means “any element” in conditions (correlated across fields that share the same list); when those conditions match, the same indexes apply to `*` in that rule’s action/template paths. Without starred conditions, `*` is the first element. Stateful rate limits and time windows are intentionally outside the rule language.
 
 **Rule**  
 
@@ -155,13 +152,13 @@ Single primary process (FastAPI application) that hosts:
 - HTTP server (dashboard + webhook ingress endpoints)
 - Background scheduler for polling jobs (APScheduler)
 - Event processing pipeline (receive → normalize → filter → execute actions → persist)
-- In-process background work (no durable queue yet)
+- In-process background work (intentional; no durable queue)
 - Auth middleware and session management
 - Static file serving for CSS, HTMX, ApexCharts, GridStack
 
-Storage defaults to SQLite for zero-config simplicity. PostgreSQL is planned, not a supported path in v0.1.
+Storage is SQLite-only for zero-config simplicity. PostgreSQL and migration tooling are not planned.
 
-Runtime configuration (sources, rules, schedules, dashboard layouts, fields) lives in the database. YAML/JSON export/import is planned. The git repository contains the application code, templates, static assets, and documentation.
+Runtime configuration (sources, rules, schedules, dashboard layouts, fields) lives in the database. The git repository contains the application code, templates, static assets, and documentation.
 
 Data flow (simplified):
 
@@ -169,7 +166,7 @@ Data flow (simplified):
 2. Ingress / Poller produces a raw result
 3. Normalization produces a canonical Event (via `ingest_event`)
 4. Rule engine evaluates matching rules and conditions (`evaluate_and_dispatch`)
-5. Matching Actions are executed (immediate; no dead-letter queue yet)
+5. Matching Actions are executed immediately in-process
 6. Event and any derived metrics / field updates are persisted
 7. Dashboard and HTMX-polled feeds consume the stores
 
@@ -219,8 +216,7 @@ Built-in actions cover field updates, HTTP egress, and Web Push. Custom actions 
 **Storage Layer**  
 
 - Event log (queryable by time, source, type, correlation ID)
-- MetricPoint time-series (linked to sources and/or fields)
-- Field state + FieldLogEntry (for logbooks)
+- Field state + FieldLogEntry (for logbooks; series/charts use Fields)
 - AuditLog
 
 Schema is models + `Base.metadata.create_all()` (no Alembic). Wipe the SQLite file when the model changes.
@@ -233,7 +229,6 @@ Key surfaces:
 
 - `/` — modular widget dashboard (GridStack)
 - `/events` — event log
-- `/metrics` — metric views
 - `/system` — system / poller health
 - `/config/pipeline` — sources, events, rules, actions
 - `/config/dashboard` — widget layout
@@ -249,7 +244,7 @@ Widgets are modular partials refreshed independently via HTMX. Layout is shared 
 - CSRF protection
 - Optional `PARA_SCOPE_SECURE_COOKIES`
 - In-memory login rate limiting
-- Any authenticated user has full access (no admin/viewer split yet)
+- Any authenticated user has full access (intentional; no role split planned)
 - Secrets encrypted at rest with Fernet (`PARA_SCOPE_SECRET_KEY`)
 - Audit log of authentication and configuration changes
 
@@ -266,7 +261,6 @@ Core entities present in `app/models.py`:
 - `ActionInstance`
 - `Event`
 - `Field` + `FieldLogEntry`
-- `MetricPoint`
 - `AuditLog`
 - `DashboardLayout`
 - `AppSettings` (theme, font, background)
@@ -281,7 +275,7 @@ Today the system exposes simple in-process registration hooks:
 - `register_poller(handler_type, fn)` in `app/pollers.py`
 - `register_action(action_type, handler)` in `app/actions.py`
 
-A richer plugin directory or entry-point packaging is planned. Core stays unaware of specific integrations.
+Extensions are built-in modules imported by Para-Scope and registered through these hooks. Dynamic plugin directories and Python entry-point discovery are intentionally out of scope.
 
 New pollers only need to return a result dict (`ok`, `data`, optional `raw` / `response_time_ms`) and declare their config metadata. The rest of the pipeline (event creation, `on_success` / `on_failure` / optional `always`, rules, actions) remains identical.
 
@@ -289,7 +283,7 @@ New pollers only need to return a result dict (`ok`, `data`, optional `raw` / `r
 
 - Runtime configuration and state live in the database.
 - Environment variables (`.env`) handle bootstrap concerns (`PARA_SCOPE_SECRET_KEY`, secure cookies, VAPID keys, database URL, log level, uploads dir).
-- YAML/JSON export/import is planned but not shipped.
+- Backups copy the SQLite database together with the matching secret key.
 - No requirement for a complex configuration management system.
 
 ### 10. Deployment &amp; Operations (Pure Git Repository)
@@ -312,7 +306,7 @@ Production path (documented in README):
 
 No Dockerfiles are required or encouraged as the primary path.
 
-Backup strategy: database file + care with the secret key. Config export is planned.
+Backup strategy: copy the database file together with the matching secret key.
 
 ### 11. Security Considerations
 
@@ -327,27 +321,22 @@ Backup strategy: database file + care with the secret key. Config export is plan
 
 ### 12. Observability of the System Itself
 
-The dashboard includes a system section showing poller job status, recent runs, success/failure counts, and related health.  
+The dashboard includes a system section and `/system` page showing poller job status, recent runs, success/failure counts, DB size, failed events, and related health. Self-metrics use existing tables and Field sinks — there is no separate metrics store or `/metrics` page.
 
-Internal events can be treated like any other source so the same pipeline can alert on problems with the dashboard itself. Self-metrics (job lag, action failures, DB size) are a natural future extension.
+Internal events can be treated like any other source so the same pipeline can alert on problems with the dashboard itself.
 
 ### 13. Open Questions and Future Extensions
 
-- Exact metrics storage approach and retention/down-sampling.
 - Whether condition language needs OR groups or length ops.
-- Degree of multi-tenancy / workspace isolation (if any).- Outbound webhook signing and delivery guarantees.
+- Degree of multi-tenancy / workspace isolation (if any).
 - Long-term data retention and cold storage.
-- Official packaging (PyPI entry point, standalone binary, etc.).
-- Richer plugin packaging vs keeping simple in-process registration.
+- Official application distribution (PyPI package or standalone binary; not plugin loading).
 - Phase-2 / future poll integrations: Docker/runtime snapshots, SMART disk health, ZFS/Btrfs pool health, MQTT broker checks, and deeper Redis/RQ/Celery queue integrations.
-- Dashboard actions source type: widget or source-bound controls POST with auth/CSRF → ingest as events; reuse existing event types / rules / actions (no separate action engine).
-- Trigger poll action: config picks a target poll source; run once like Run now; avoid recursive trigger loops.
-- Never-run / trigger-only poll schedule: enabled but not registered on APScheduler; only Run now or Trigger poll.
-- Expanded maths in path/expression evaluation: additional functions such as `trunc` (and similar) on top of shipped `abs` / `round` / `min` / `max`.
-- Source templates / quick-add for common monitors.
-- Simple backup/export and event retention UI.
-- Test / dry-run of rules.
+- ✅ Dashboard Triggers widget + `trigger_source` action (poll Run now or webhook ingest with templated payload; cascade depth 3).
+- ✅ Never-run / trigger-only poll schedule.
+- ✅ Maths helpers `trunc` / `sum` / `avg`; source templates; rule dry-run; `fields.<slug>` in actions and rules.
 - ✅ Notify convenience action (`notify`: ntfy / Gotify / Discord) on top of shared HTTP forward.
+- ✅ SSE live event tail; self-metrics on `/system`.
 - Local script actions require `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1` (optional `PARA_SCOPE_LOCAL_ACTION_ALLOWLIST`).
 
 ### 14. Success Criteria for an Initial Usable Version (v0.1 status)
@@ -359,4 +348,3 @@ Internal events can be treated like any other source so the same pipeline can al
 - ✅ The entire system runs from a git clone + virtualenv with minimal ceremony.
 - ✅ Strong session authentication protects the dashboard.
 - ⏳ Adding a simple new action or poller is documented and straightforward (registration hooks exist; richer guides planned).
-- ⏳ Config export and PostgreSQL support remain future work.

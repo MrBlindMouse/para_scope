@@ -16,7 +16,6 @@ from app.models import (
     Rule,
     Secret,
     Event,
-    MetricPoint,
     Field,
     FieldLogEntry,
 )
@@ -229,6 +228,7 @@ def _build_field_dialog_context(*, field=None, form=None, error: str | None = No
         id=getattr(field, "id", None),
         field_type=field_type,
         name=((form.get("name") if form else None) or getattr(field, "name", "") or "").strip(),
+        slug=getattr(field, "slug", "") or "",
         config={"max_entries": max_entries} if field_type == "logbook" else {},
     )
     return {
@@ -263,7 +263,6 @@ def _build_rule_dialog_context(
     form=None,
     error: str | None = None,
 ) -> dict:
-    chosen_ids = list(selected_event_type_ids or [])
     conditions = getattr(rule, "conditions", {}) if rule else {}
     order_index = getattr(rule, "order_index", 0) if rule else 0
     enabled = getattr(rule, "enabled", True) if rule else True
@@ -276,6 +275,16 @@ def _build_rule_dialog_context(
             conditions = {}
         order_index = form.get("order_index") or 0
         enabled = form.get("enabled") in ("1", "on", "true", "True")
+    elif getattr(rule, "id", None) is not None:
+        # Edit load: use saved types (GET passes empty selected_event_type_ids).
+        chosen_ids = []
+        for i in (rule.event_type_ids or []):
+            try:
+                chosen_ids.append(int(i))
+            except (TypeError, ValueError):
+                continue
+    else:
+        chosen_ids = list(selected_event_type_ids or [])
     draft_rule = SimpleNamespace(
         id=getattr(rule, "id", None),
         event_type_ids=chosen_ids,
@@ -294,6 +303,11 @@ def _build_rule_dialog_context(
     }
 
 
+def _trigger_targets(db) -> list:
+    from app.widgets import trigger_targets
+    return trigger_targets(db)
+
+
 def _build_action_dialog_context(
     *,
     source: Source,
@@ -304,6 +318,7 @@ def _build_action_dialog_context(
     rule=None,
     form=None,
     error: str | None = None,
+    trigger_targets: list | None = None,
 ) -> dict:
     cfg = dict((action.config if action else None) or {})
     headers_text = "\n".join(f"{k}: {v}" for k, v in (cfg.get("headers") or {}).items()) if isinstance(cfg.get("headers"), dict) else ""
@@ -313,6 +328,20 @@ def _build_action_dialog_context(
         custom_body_text = json.dumps(custom_body, indent=2)
     elif isinstance(custom_body, str):
         custom_body_text = custom_body
+
+    trigger_payload_text = ""
+    payload = cfg.get("payload")
+    if isinstance(payload, dict):
+        trigger_payload_text = json.dumps(payload, indent=2) if payload else ""
+    elif isinstance(payload, str):
+        trigger_payload_text = payload
+
+    target_ref = ""
+    if cfg.get("target_source_id") is not None:
+        if cfg.get("event_type_id") is not None:
+            target_ref = f"webhook:{cfg['target_source_id']}:{cfg['event_type_id']}"
+        else:
+            target_ref = f"poll:{cfg['target_source_id']}"
 
     action_type = ((form.get("action_type") if form else None) or getattr(action, "action_type", None) or "field_push").strip()
     draft_rule = rule
@@ -402,6 +431,33 @@ def _build_action_dialog_context(
                 "signing_signature_header": form.get("signing_signature_header") or "X-Call-Signature",
                 "signing_timestamp_header": form.get("signing_timestamp_header") or "X-Call-Timestamp",
             })
+        elif action_type == "trigger_source":
+            ref = (form.get("target_ref") or "").strip()
+            if ref:
+                target_ref = ref
+                parts = ref.split(":")
+                if parts[0] == "poll" and len(parts) == 2:
+                    try:
+                        draft_cfg["target_source_id"] = int(parts[1])
+                    except ValueError:
+                        draft_cfg["target_source_id"] = parts[1]
+                    draft_cfg["event_type_id"] = None
+                elif parts[0] == "webhook" and len(parts) == 3:
+                    try:
+                        draft_cfg["target_source_id"] = int(parts[1])
+                        draft_cfg["event_type_id"] = int(parts[2])
+                    except ValueError:
+                        draft_cfg["target_source_id"] = parts[1]
+                        draft_cfg["event_type_id"] = parts[2]
+            trigger_payload_text = form.get("payload") if form.get("payload") is not None else trigger_payload_text
+            raw_payload = (form.get("payload") or "").strip()
+            if raw_payload:
+                try:
+                    draft_cfg["payload"] = json.loads(raw_payload)
+                except (json.JSONDecodeError, TypeError):
+                    draft_cfg["payload"] = raw_payload
+            else:
+                draft_cfg["payload"] = {}
         cfg = draft_cfg
 
     draft_action = SimpleNamespace(
@@ -419,6 +475,9 @@ def _build_action_dialog_context(
         "is_edit": getattr(action, "id", None) is not None,
         "rule": draft_rule,
         "fields": fields,
+        "trigger_targets": trigger_targets or [],
+        "target_ref": target_ref,
+        "trigger_payload_text": trigger_payload_text,
         "local_actions_enabled": local_actions_enabled,
         "headers_text": headers_text,
         "custom_body_text": custom_body_text,
@@ -486,6 +545,7 @@ async def config_pipeline(request: Request, db: Session = Depends(get_db)):
     field_ctx = ctx._fields_list_context(db)
     fields = field_ctx["fields"]
     fields_by_id = {f.id: f for f in fields}
+    sources_by_id = {s.id: s for s in sources}
     chains = []
     for source in sources:
         rules = (
@@ -508,15 +568,21 @@ async def config_pipeline(request: Request, db: Session = Depends(get_db)):
         )
         actions_by_id = ctx._action_map(actions)
         unbound = [a for a in actions if a.id not in ctx._bound_action_ids(rules)]
+        rules_by_event_type_id, orphan_rules = ctx._rules_grouped_by_event_type(
+            rules, event_types,
+        )
         chains.append({
             "source": source,
             "rules": rules,
+            "rules_by_event_type_id": rules_by_event_type_id,
+            "orphan_rules": orphan_rules,
             "actions": actions,
             "actions_by_id": actions_by_id,
             "unbound_actions": unbound,
             "event_types": event_types,
             "event_types_by_id": ctx._event_type_map(event_types),
             "fields_by_id": fields_by_id,
+            "sources_by_id": sources_by_id,
         })
     return ctx.templates.TemplateResponse(
         request, "config/pipeline.html", {
@@ -592,7 +658,7 @@ async def pipeline_create_field(request: Request, db: Session = Depends(get_db))
             ctx._fields_section_template(request, db),
             retarget="#pipeline-fields",
         )
-    return ctx._pipeline_redirect(success=f"Field '{field.name}' created")
+    return ctx._pipeline_redirect(success=f"Field '{field.name}' created", request=request)
 
 
 # route: /config/pipeline/field/{field_id}
@@ -602,7 +668,7 @@ async def pipeline_update_field(request: Request, field_id: int, db: Session = D
     if not field:
         if ctx._is_htmx(request):
             return HTMLResponse("Field not found", status_code=404)
-        return ctx._pipeline_redirect(error="Field not found")
+        return ctx._pipeline_redirect(error="Field not found", request=request)
 
     form = await request.form()
     kwargs, err = ctx._parse_field_form(form, existing=field)
@@ -631,18 +697,22 @@ async def pipeline_update_field(request: Request, field_id: int, db: Session = D
         return ctx._pipeline_redirect(error=msg, request=request)
 
     field.name = kwargs["name"]
+    previous_slug = field.slug
     field.slug = ctx._unique_field_slug(db, kwargs["name"], exclude_id=field_id)
     field.config = kwargs["config"]
     db.commit()
+    audit_details = {"name": field.name, "slug": field.slug}
+    if previous_slug != field.slug:
+        audit_details["previous_slug"] = previous_slug
     ctx._audit_log(db, request, "field.update", resource_type="field", resource_id=field.id,
-               details={"name": field.name})
+               details=audit_details)
 
     if ctx._is_htmx(request):
         return _dialog_success_response(
             ctx._fields_section_template(request, db),
             retarget="#pipeline-fields",
         )
-    return ctx._pipeline_redirect(success=f"Field '{field.name}' updated")
+    return ctx._pipeline_redirect(success=f"Field '{field.name}' updated", request=request)
 
 
 # route: /config/pipeline/field/{field_id}/delete
@@ -652,7 +722,7 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
     if not field:
         if ctx._is_htmx(request):
             return HTMLResponse("Field not found", status_code=404)
-        return ctx._pipeline_redirect(error="Field not found")
+        return ctx._pipeline_redirect(error="Field not found", request=request)
 
     reason = ctx._field_in_use(db, field_id)
     if reason:
@@ -663,9 +733,6 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
     db.query(FieldLogEntry).filter(FieldLogEntry.field_id == field_id).delete(
         synchronize_session=False
     )
-    db.query(MetricPoint).filter(MetricPoint.field_id == field_id).update(
-        {MetricPoint.field_id: None}, synchronize_session=False
-    )
     db.delete(field)
     db.commit()
     ctx._audit_log(db, request, "field.delete", resource_type="field", resource_id=field_id,
@@ -673,7 +740,7 @@ async def pipeline_delete_field(request: Request, field_id: int, db: Session = D
 
     if ctx._is_htmx(request):
         return ctx._fields_section_template(request, db)
-    return ctx._pipeline_redirect(success=f"Field '{name}' deleted")
+    return ctx._pipeline_redirect(success=f"Field '{name}' deleted", request=request)
 
 
 # route: /config/pipeline/field/{field_id}/partials/recent-entries
@@ -716,7 +783,7 @@ async def pipeline_clear_logbook(request: Request, field_id: int, db: Session = 
     if not field:
         if ctx._is_htmx(request):
             return HTMLResponse("Field not found", status_code=404)
-        return ctx._pipeline_redirect(error="Field not found")
+        return ctx._pipeline_redirect(error="Field not found", request=request)
     if field.field_type != "logbook":
         msg = "Only logbooks can be cleared"
         return ctx._pipeline_redirect(error=msg, request=request)
@@ -734,7 +801,60 @@ async def pipeline_clear_logbook(request: Request, field_id: int, db: Session = 
 
     if ctx._is_htmx(request):
         return ctx._fields_section_template(request, db)
-    return ctx._pipeline_redirect(success=f"Cleared {deleted} entries from '{field.name}'")
+    return ctx._pipeline_redirect(success=f"Cleared {deleted} entries from '{field.name}'", request=request)
+
+
+# route: /config/pipeline/partials/source-templates
+@router.get("/config/pipeline/partials/source-templates")
+async def pipeline_source_templates(request: Request):
+    from app.source_templates import list_source_templates
+    return ctx.templates.TemplateResponse(
+        request,
+        "config/pipeline/_source_templates.html",
+        {"templates": list_source_templates()},
+    )
+
+
+# route: /config/pipeline/templates/{slug}/apply
+@router.post("/config/pipeline/templates/{slug}/apply")
+async def pipeline_apply_template(
+    request: Request, slug: str, db: Session = Depends(get_db),
+):
+    from app.source_templates import apply_source_template, get_source_template, list_source_templates
+
+    def _err(msg: str):
+        if ctx._is_htmx(request):
+            return ctx.templates.TemplateResponse(
+                request,
+                "config/pipeline/_source_templates.html",
+                {"templates": list_source_templates(), "error": msg},
+            )
+        return ctx._pipeline_redirect(error=msg, request=request)
+
+    if not get_source_template(slug):
+        return _err(f"Unknown template '{slug}'")
+
+    try:
+        result = apply_source_template(db, slug)
+    except ValueError as e:
+        return _err(str(e))
+
+    ctx._audit_log(
+        db, request, "template.apply",
+        resource_type="source", resource_id=result["source_id"],
+        details={
+            "template": slug,
+            "name": result["source_name"],
+            "widgets": len(result["widget_ids"]),
+        },
+    )
+
+    if ctx._is_htmx(request):
+        return HTMLResponse("", headers={"HX-Redirect": "/config/pipeline"})
+    return ctx._pipeline_redirect(
+        success=f"Template '{result['title']}' applied — source '{result['source_name']}' created",
+        request=request,
+    )
 
 
 # route: /config/pipeline/partials/source-form
@@ -868,7 +988,7 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
         # 200 + HX-Redirect: a 303 would be followed transparently by the
         # browser's XHR, so htmx would never see the redirect header.
         return HTMLResponse("", headers={"HX-Redirect": "/config/pipeline"})
-    return ctx._pipeline_redirect(success=f"Source '{name}' created")
+    return ctx._pipeline_redirect(success=f"Source '{name}' created", request=request)
 
 
 # route: /config/pipeline/source/{source_id}/partials/event-form
@@ -979,7 +1099,7 @@ async def pipeline_create_event(request: Request, source_id: int, db: Session = 
     if not source:
         if ctx._is_htmx(request):
             return HTMLResponse("Source not found", status_code=404)
-        return ctx._pipeline_redirect(error="Source not found")
+        return ctx._pipeline_redirect(error="Source not found", request=request)
 
     form = await request.form()
     description = (form.get("description") or "").strip()
@@ -1003,7 +1123,7 @@ async def pipeline_create_event(request: Request, source_id: int, db: Session = 
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success=f"Event type '{name}' created")
+    return ctx._pipeline_redirect(success=f"Event type '{name}' created", request=request)
 
 
 # route: /config/pipeline/event/{et_id}
@@ -1013,7 +1133,7 @@ async def pipeline_update_event(request: Request, et_id: int, db: Session = Depe
     if not et:
         if ctx._is_htmx(request):
             return HTMLResponse("Event not found", status_code=404)
-        return ctx._pipeline_redirect(error="Event not found")
+        return ctx._pipeline_redirect(error="Event not found", request=request)
     source = db.query(Source).filter(Source.id == et.source_id).first()
     form = await request.form()
     description = (form.get("description") or "").strip()
@@ -1037,7 +1157,7 @@ async def pipeline_update_event(request: Request, et_id: int, db: Session = Depe
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success=f"Event type '{name}' updated")
+    return ctx._pipeline_redirect(success=f"Event type '{name}' updated", request=request)
 
 
 # route: /config/pipeline/source/{source_id}/partials/rule-form
@@ -1120,7 +1240,7 @@ async def pipeline_create_rule(request: Request, source_id: int, db: Session = D
     if not source:
         if ctx._is_htmx(request):
             return HTMLResponse("Source not found", status_code=404)
-        return ctx._pipeline_redirect(error="Source not found")
+        return ctx._pipeline_redirect(error="Source not found", request=request)
 
     form = await request.form()
     event_types = (
@@ -1178,7 +1298,7 @@ async def pipeline_create_rule(request: Request, source_id: int, db: Session = D
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success="Rule created")
+    return ctx._pipeline_redirect(success="Rule created", request=request)
 
 
 # route: /config/pipeline/rule/{rule_id}
@@ -1188,7 +1308,7 @@ async def pipeline_update_rule(request: Request, rule_id: int, db: Session = Dep
     if not rule or not rule.source_id:
         if ctx._is_htmx(request):
             return HTMLResponse("Rule not found", status_code=404)
-        return ctx._pipeline_redirect(error="Rule not found")
+        return ctx._pipeline_redirect(error="Rule not found", request=request)
     source = db.query(Source).filter(Source.id == rule.source_id).first()
     event_types = (
         db.query(EventTypeRecord)
@@ -1244,7 +1364,150 @@ async def pipeline_update_rule(request: Request, rule_id: int, db: Session = Dep
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success="Rule updated")
+    return ctx._pipeline_redirect(success="Rule updated", request=request)
+
+
+# route: /config/pipeline/source/{source_id}/rules/dry-run
+@router.post("/config/pipeline/source/{source_id}/rules/dry-run")
+async def pipeline_rule_dry_run(request: Request, source_id: int, db: Session = Depends(get_db)):
+    """Evaluate rule conditions against a sample event without running actions."""
+    import json as _json
+    from app.pipeline import match_conditions
+    from app.fields import get_by_path
+    from app.labels import action_label, operator_label
+
+    source = db.query(Source).filter(Source.id == source_id).first()
+    if not source:
+        return HTMLResponse("Source not found", status_code=404)
+
+    form = await request.form()
+    rule_id_raw = (form.get("rule_id") or "").strip()
+    saved_rule = None
+    if rule_id_raw.isdigit():
+        saved_rule = (
+            db.query(Rule)
+            .filter(Rule.id == int(rule_id_raw), Rule.source_id == source_id)
+            .first()
+        )
+
+    # Prefer form draft (mid-edit); fall back to saved rule.
+    data, err = ctx._parse_rule_form(form, for_update=bool(saved_rule))
+    if err and saved_rule is None:
+        return ctx.templates.TemplateResponse(
+            request,
+            "config/pipeline/_rule_test_result.html",
+            {"error": err, "matched": False, "standalone": False},
+        )
+    if saved_rule is not None and (err or not (form.get("conditions") or "").strip()):
+        conditions = saved_rule.conditions or {}
+        event_type_ids = list(saved_rule.event_type_ids or [])
+        action_ids = list(saved_rule.action_ids or [])
+        rule_enabled = bool(saved_rule.enabled)
+    else:
+        conditions = (data or {}).get("conditions") or {}
+        event_type_ids = (data or {}).get("event_type_ids") or []
+        action_ids = list(saved_rule.action_ids) if saved_rule else []
+        rule_enabled = bool(saved_rule.enabled) if saved_rule else True
+
+    # Sample event: explicit id, else newest for selected type(s), else newest for source.
+    event = None
+    event_id_raw = (form.get("event_id") or "").strip()
+    if event_id_raw.isdigit():
+        event = (
+            db.query(Event)
+            .filter(Event.id == int(event_id_raw), Event.source_id == source_id)
+            .first()
+        )
+    if event is None:
+        q = db.query(Event).filter(Event.source_id == source_id)
+        if event_type_ids:
+            q = q.filter(Event.event_type_id.in_(event_type_ids))
+        event = q.order_by(Event.timestamp.desc(), Event.id.desc()).first()
+
+    if event is None:
+        return ctx.templates.TemplateResponse(
+            request,
+            "config/pipeline/_rule_test_result.html",
+            {
+                "error": None,
+                "no_sample": True,
+                "matched": False,
+                "conditions": conditions,
+                "standalone": bool(saved_rule and not (form.get("conditions") or "").strip()),
+                "source": source,
+            },
+        )
+
+    sample_data = event.normalized_data or {}
+    from app.pipeline import _match_data
+    match_data = _match_data(db, sample_data, conditions)
+    uses_fields = match_data is not sample_data
+    et = event.event_type
+    type_gate = "all"
+    type_gate_ok = True
+    if event_type_ids:
+        type_gate = "selected"
+        type_gate_ok = event.event_type_id in event_type_ids
+    if et is not None and not et.enabled:
+        type_gate = "paused"
+        type_gate_ok = False
+
+    overall, bindings = match_conditions(match_data, conditions)
+    rows = []
+    for key, matcher in (conditions or {}).items():
+        ok, _ = match_conditions(match_data, {key: matcher})
+        actual = get_by_path(match_data, key)
+        correlated = "*" in key
+        rows.append({
+            "key": key,
+            "ok": ok,
+            "actual": actual,
+            "matcher": matcher,
+            "correlated": correlated,
+        })
+
+    would_run = []
+    fields_by_id = {f.id: f for f in db.query(Field).all()}
+    sources_by_id = {s.id: s for s in db.query(Source).all()}
+    if overall and type_gate_ok and rule_enabled:
+        for aid in action_ids:
+            action = (
+                db.query(ActionInstance)
+                .filter(ActionInstance.id == aid)
+                .first()
+            )
+            if not action or not action.enabled:
+                continue
+            if action.source_id is not None and action.source_id != source_id:
+                continue
+            would_run.append({
+                "id": action.id,
+                "label": action_label(action, fields_by_id, sources_by_id),
+            })
+
+    return ctx.templates.TemplateResponse(
+        request,
+        "config/pipeline/_rule_test_result.html",
+        {
+            "error": None,
+            "no_sample": False,
+            "matched": overall and type_gate_ok and rule_enabled,
+            "conditions_matched": overall,
+            "type_gate": type_gate,
+            "type_gate_ok": type_gate_ok,
+            "rule_enabled": rule_enabled,
+            "rows": rows,
+            "bindings": bindings,
+            "would_run": would_run,
+            "event": event,
+            "event_type_name": et.name if et else None,
+            "sample_json": _json.dumps(sample_data, indent=2, default=str),
+            "uses_fields": uses_fields,
+            "operator_label": operator_label,
+            "standalone": bool(saved_rule and not (form.get("conditions") or "").strip()),
+            "source": source,
+        },
+    )
 
 
 # route: /config/pipeline/source/{source_id}/partials/action-form
@@ -1297,6 +1560,7 @@ async def pipeline_action_form(request: Request, source_id: int, db: Session = D
             local_actions_enabled=local_actions_enabled(),
             action=action,
             rule=rule,
+            trigger_targets=_trigger_targets(db),
         ),
     )
 
@@ -1310,7 +1574,7 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
     if not source:
         if ctx._is_htmx(request):
             return HTMLResponse("Source not found", status_code=404)
-        return ctx._pipeline_redirect(error="Source not found")
+        return ctx._pipeline_redirect(error="Source not found", request=request)
 
     form = await request.form()
     action_type = form.get("action_type", "field_push")
@@ -1318,6 +1582,7 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
     secret2_value = (form.get("secret2_value") or "").strip()
     rule_id_raw = (form.get("rule_id") or "").strip()
     fields = db.query(Field).order_by(Field.name).all()
+    trigger_targets = _trigger_targets(db)
 
     def _render_error(msg: str, *, rule_override=None):
         if ctx._is_htmx(request):
@@ -1332,6 +1597,7 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
                     rule=rule_override,
                     form=form,
                     error=msg,
+                    trigger_targets=trigger_targets,
                 ),
             )
         return ctx._pipeline_redirect(error=msg, request=request)
@@ -1384,6 +1650,24 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
             msg = "Field not found"
             return _render_error(msg, rule_override=rule)
 
+    if action_type == "trigger_source":
+        target = db.query(Source).filter(Source.id == config["target_source_id"]).first()
+        if not target:
+            return _render_error("Target source not found", rule_override=rule)
+        if target.source_type == "webhook":
+            et = (
+                db.query(EventTypeRecord)
+                .filter(
+                    EventTypeRecord.id == config.get("event_type_id"),
+                    EventTypeRecord.source_id == target.id,
+                )
+                .first()
+            )
+            if not et:
+                return _render_error("Event type not found", rule_override=rule)
+        elif target.source_type != "poll":
+            return _render_error("Target source cannot be triggered", rule_override=rule)
+
     action = ActionInstance(
         source_id=source_id, action_type=action_type, config=config,
     )
@@ -1414,7 +1698,7 @@ async def pipeline_create_action(request: Request, source_id: int, db: Session =
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success="Action created")
+    return ctx._pipeline_redirect(success="Action created", request=request)
 
 
 # route: /config/pipeline/action/{action_id}
@@ -1426,7 +1710,7 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
     if not action:
         if ctx._is_htmx(request):
             return HTMLResponse("Action not found", status_code=404)
-        return ctx._pipeline_redirect(error="Action not found")
+        return ctx._pipeline_redirect(error="Action not found", request=request)
     source = db.query(Source).filter(Source.id == action.source_id).first()
 
     form = await request.form()
@@ -1434,6 +1718,7 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
     secret_value = (form.get("secret_value") or "").strip()
     secret2_value = (form.get("secret2_value") or "").strip()
     fields = db.query(Field).order_by(Field.name).all()
+    trigger_targets = _trigger_targets(db)
 
     def _render_error(msg: str):
         if ctx._is_htmx(request) and source:
@@ -1448,6 +1733,7 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
                     action=action,
                     form=form,
                     error=msg,
+                    trigger_targets=trigger_targets,
                 ),
             )
         return ctx._pipeline_redirect(error=msg, request=request)
@@ -1477,6 +1763,24 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
             msg = "Field not found"
             return _render_error(msg)
 
+    if action_type == "trigger_source":
+        target = db.query(Source).filter(Source.id == config["target_source_id"]).first()
+        if not target:
+            return _render_error("Target source not found")
+        if target.source_type == "webhook":
+            et = (
+                db.query(EventTypeRecord)
+                .filter(
+                    EventTypeRecord.id == config.get("event_type_id"),
+                    EventTypeRecord.source_id == target.id,
+                )
+                .first()
+            )
+            if not et:
+                return _render_error("Event type not found")
+        elif target.source_type != "poll":
+            return _render_error("Target source cannot be triggered")
+
     action.action_type = action_type
     action.config = config
 
@@ -1504,7 +1808,7 @@ async def pipeline_update_action(request: Request, action_id: int, db: Session =
             ctx._source_chain_template(request, db, source),
             retarget=f"#source-chain-{source.id}",
         )
-    return ctx._pipeline_redirect(success="Action updated")
+    return ctx._pipeline_redirect(success="Action updated", request=request)
 
 
 # route: /config/pipeline/source/{source_id}/partials/edit-form
@@ -1535,7 +1839,7 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
     form = await request.form()
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
-        return ctx._pipeline_redirect(error="Source not found")
+        return ctx._pipeline_redirect(error="Source not found", request=request)
     schedule = (
         db.query(PollingSchedule)
         .filter(PollingSchedule.source_id == source_id)
@@ -1725,7 +2029,7 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
         resp.headers["HX-Reswap"] = "outerHTML"
         resp.headers["HX-Trigger"] = "pipeline-dialog-close"
         return resp
-    return ctx._pipeline_redirect(success=f"Source '{name}' updated")
+    return ctx._pipeline_redirect(success=f"Source '{name}' updated", request=request)
 
 
 # route: /config/source/{source_id}/delete
@@ -1733,7 +2037,7 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
 async def delete_source(request: Request, source_id: int, db: Session = Depends(get_db)):
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
-        return ctx._pipeline_redirect(error="Source not found")
+        return ctx._pipeline_redirect(error="Source not found", request=request)
     name = source.name
     schedules = db.query(PollingSchedule).filter(PollingSchedule.source_id == source_id).all()
     for sched in schedules:
@@ -1743,6 +2047,7 @@ async def delete_source(request: Request, source_id: int, db: Session = Depends(
     action_ids = [a.id for a in actions]
     for action in actions:
         action.secret_id = None
+        action.secret_id_2 = None
     source.webhook_secret_id = None
     db.flush()
 
@@ -1759,12 +2064,12 @@ async def delete_source(request: Request, source_id: int, db: Session = Depends(
         Secret.scoped_to_type == "schedule",
         Secret.scoped_to_id.in_([sched.id for sched in schedules]),
     ).delete(synchronize_session=False)
+    ctx._scrub_trigger_source_refs(db, source_id=source_id)
     db.query(ActionInstance).filter(ActionInstance.source_id == source_id).delete()
     db.query(FieldLogEntry).filter(FieldLogEntry.source_id == source_id).update(
         {FieldLogEntry.source_id: None, FieldLogEntry.event_id: None},
         synchronize_session=False,
     )
-    db.query(MetricPoint).filter(MetricPoint.source_id == source_id).delete()
     db.query(Event).filter(Event.source_id == source_id).delete()
     db.query(EventTypeRecord).filter(EventTypeRecord.source_id == source_id).delete()
     db.query(PollingSchedule).filter(PollingSchedule.source_id == source_id).delete()
@@ -1775,7 +2080,7 @@ async def delete_source(request: Request, source_id: int, db: Session = Depends(
 
     if ctx._is_htmx(request):
         return HTMLResponse("")
-    return ctx._pipeline_redirect(success=f"Source '{name}' deleted")
+    return ctx._pipeline_redirect(success=f"Source '{name}' deleted", request=request)
 
 
 # route: /config/source/{source_id}/toggle
@@ -1783,16 +2088,23 @@ async def delete_source(request: Request, source_id: int, db: Session = Depends(
 async def toggle_source(request: Request, source_id: int, db: Session = Depends(get_db)):
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
-        return ctx._pipeline_redirect(error="Source not found")
+        return ctx._pipeline_redirect(error="Source not found", request=request)
     source.enabled = not source.enabled
     db.commit()
     status_text = "enabled" if source.enabled else "disabled"
     ctx._audit_log(db, request, "source.toggle", resource_type="source", resource_id=source.id, details={"status": status_text})
 
+    schedules = db.query(PollingSchedule).filter(PollingSchedule.source_id == source_id).all()
+    for sched in schedules:
+        if source.enabled and sched.enabled:
+            add_or_update_job(sched)
+        else:
+            remove_job(sched.id)
+
     if ctx._is_htmx(request):
         resp = ctx._source_chain_template(request, db, source)
         return resp
-    return ctx._pipeline_redirect(success=f"Source '{source.name}' {status_text}")
+    return ctx._pipeline_redirect(success=f"Source '{source.name}' {status_text}", request=request)
 
 
 # route: /config/source/{source_id}/poll-now
@@ -1800,9 +2112,9 @@ async def toggle_source(request: Request, source_id: int, db: Session = Depends(
 async def poll_source_now(request: Request, source_id: int, db: Session = Depends(get_db)):
     source = db.query(Source).filter(Source.id == source_id).first()
     if not source:
-        return ctx._pipeline_redirect(error="Source not found")
+        return ctx._pipeline_redirect(error="Source not found", request=request)
     if source.source_type != "poll":
-        return ctx._pipeline_redirect(error="Only poll sources can be run manually")
+        return ctx._pipeline_redirect(error="Only poll sources can be run manually", request=request)
     if not source.enabled:
         msg = "Enable the source before running a poll"
         return ctx._pipeline_redirect(error=msg, request=request)
@@ -1828,11 +2140,11 @@ async def poll_source_now(request: Request, source_id: int, db: Session = Depend
     db.refresh(source)
 
     msg = f"Poll ran for '{source.name}'" if ok else f"Poll failed for '{source.name}'"
+    if not ok:
+        return ctx._pipeline_redirect(error=msg, request=request)
     if ctx._is_htmx(request):
         return ctx._source_chain_template(request, db, source)
-    if not ok:
-        return ctx._pipeline_redirect(error=msg)
-    return ctx._pipeline_redirect(success=msg)
+    return ctx._pipeline_redirect(success=msg, request=request)
 
 
 # route: /config/event-type/{et_id}/toggle
@@ -1840,7 +2152,7 @@ async def poll_source_now(request: Request, source_id: int, db: Session = Depend
 async def toggle_event_type(request: Request, et_id: int, db: Session = Depends(get_db)):
     et = db.query(EventTypeRecord).filter(EventTypeRecord.id == et_id).first()
     if not et:
-        return ctx._pipeline_redirect(error="Event type not found")
+        return ctx._pipeline_redirect(error="Event type not found", request=request)
     et.enabled = not et.enabled
     db.commit()
     status_text = "active" if et.enabled else "paused"
@@ -1852,7 +2164,7 @@ async def toggle_event_type(request: Request, et_id: int, db: Session = Depends(
     source = db.query(Source).filter(Source.id == et.source_id).first()
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
-    return ctx._pipeline_redirect(success=f"Event '{et.name}' {status_text}")
+    return ctx._pipeline_redirect(success=f"Event '{et.name}' {status_text}", request=request)
 
 
 # route: /config/rule/{rule_id}/toggle
@@ -1860,7 +2172,7 @@ async def toggle_event_type(request: Request, et_id: int, db: Session = Depends(
 async def toggle_rule(request: Request, rule_id: int, db: Session = Depends(get_db)):
     rule = db.query(Rule).filter(Rule.id == rule_id).first()
     if not rule:
-        return ctx._pipeline_redirect(error="Rule not found")
+        return ctx._pipeline_redirect(error="Rule not found", request=request)
     rule.enabled = not rule.enabled
     db.commit()
     status_text = "active" if rule.enabled else "paused"
@@ -1872,7 +2184,7 @@ async def toggle_rule(request: Request, rule_id: int, db: Session = Depends(get_
     source = db.query(Source).filter(Source.id == rule.source_id).first() if rule.source_id else None
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
-    return ctx._pipeline_redirect(success=f"Rule {status_text}")
+    return ctx._pipeline_redirect(success=f"Rule {status_text}", request=request)
 
 
 # route: /config/action/{action_id}/toggle
@@ -1880,7 +2192,7 @@ async def toggle_rule(request: Request, rule_id: int, db: Session = Depends(get_
 async def toggle_action(request: Request, action_id: int, db: Session = Depends(get_db)):
     action = db.query(ActionInstance).filter(ActionInstance.id == action_id).first()
     if not action:
-        return ctx._pipeline_redirect(error="Action not found")
+        return ctx._pipeline_redirect(error="Action not found", request=request)
     action.enabled = not action.enabled
     db.commit()
     status_text = "active" if action.enabled else "paused"
@@ -1892,7 +2204,7 @@ async def toggle_action(request: Request, action_id: int, db: Session = Depends(
     source = db.query(Source).filter(Source.id == action.source_id).first()
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
-    return ctx._pipeline_redirect(success=f"Action {status_text}")
+    return ctx._pipeline_redirect(success=f"Action {status_text}", request=request)
 
 
 # route: /config/event-type/{et_id}/delete
@@ -1900,18 +2212,17 @@ async def toggle_action(request: Request, action_id: int, db: Session = Depends(
 async def delete_event_type(request: Request, et_id: int, db: Session = Depends(get_db)):
     et = db.query(EventTypeRecord).filter(EventTypeRecord.id == et_id).first()
     if not et:
-        return ctx._pipeline_redirect(error="Event type not found")
+        return ctx._pipeline_redirect(error="Event type not found", request=request)
     name = et.name
     source_id = et.source_id
-    ctx._scrub_event_type_from_rules(db, et_id)
-    db.delete(et)
+    ctx._cascade_delete_event_type(db, et)
     db.commit()
     ctx._audit_log(db, request, "event_type.delete", resource_type="event_type", resource_id=et_id, details={"name": name})
 
     source = db.query(Source).filter(Source.id == source_id).first()
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
-    return ctx._pipeline_redirect(success=f"Event type '{name}' deleted")
+    return ctx._pipeline_redirect(success=f"Event type '{name}' deleted", request=request)
 
 
 # route: /config/action/{action_id}/delete
@@ -1919,20 +2230,11 @@ async def delete_event_type(request: Request, et_id: int, db: Session = Depends(
 async def delete_action(request: Request, action_id: int, db: Session = Depends(get_db)):
     action = db.query(ActionInstance).filter(ActionInstance.id == action_id).first()
     if not action:
-        return ctx._pipeline_redirect(error="Action not found")
+        return ctx._pipeline_redirect(error="Action not found", request=request)
     action_type = action.action_type
     source_id = action.source_id
     ctx._scrub_action_from_rules(db, source_id, action_id)
-    for sid in (action.secret_id, action.secret_id_2):
-        if sid:
-            secret = db.query(Secret).filter(Secret.id == sid).first()
-            if secret:
-                db.delete(secret)
-    db.query(Secret).filter(
-        Secret.scoped_to_type == "action",
-        Secret.scoped_to_id == action_id,
-    ).delete(synchronize_session=False)
-    db.delete(action)
+    ctx._delete_actions_by_ids(db, [action_id])
     db.commit()
     ctx._audit_log(db, request, "action.delete", resource_type="action", resource_id=action_id,
                details={"action_type": action_type})
@@ -1940,7 +2242,7 @@ async def delete_action(request: Request, action_id: int, db: Session = Depends(
     source = db.query(Source).filter(Source.id == source_id).first()
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
-    return ctx._pipeline_redirect(success="Action deleted")
+    return ctx._pipeline_redirect(success="Action deleted", request=request)
 
 
 # route: /config/rule/{rule_id}/delete
@@ -1948,16 +2250,16 @@ async def delete_action(request: Request, action_id: int, db: Session = Depends(
 async def delete_rule(request: Request, rule_id: int, db: Session = Depends(get_db)):
     rule = db.query(Rule).filter(Rule.id == rule_id).first()
     if not rule:
-        return ctx._pipeline_redirect(error="Rule not found")
+        return ctx._pipeline_redirect(error="Rule not found", request=request)
     source_id = rule.source_id
-    db.delete(rule)
+    ctx._delete_rule_with_actions(db, rule)
     db.commit()
     ctx._audit_log(db, request, "rule.delete", resource_type="rule", resource_id=rule_id, details={})
 
     source = db.query(Source).filter(Source.id == source_id).first() if source_id else None
     if ctx._is_htmx(request) and source:
         return ctx._source_chain_template(request, db, source)
-    return ctx._pipeline_redirect(success="Rule deleted")
+    return ctx._pipeline_redirect(success="Rule deleted", request=request)
 
 
 # ── Config: Users ───────────────────────────────────────────────────────────

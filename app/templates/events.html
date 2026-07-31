@@ -31,8 +31,10 @@
   </div>
 </form>
 
-<div id="events-table-wrap">
-{% if items %}
+<div id="events-table-wrap"
+     {% if page == 1 %}
+     data-events-stream-url="/events/stream{% if source_id_filter %}?source_id={{ source_id_filter }}{% endif %}{% if event_type_filter %}{{ '&' if source_id_filter else '?' }}event_type_id={{ event_type_filter }}{% endif %}{% if status_filter %}{{ '&' if source_id_filter or event_type_filter else '?' }}status={{ status_filter }}{% endif %}"
+     {% endif %}>
 <table class="table">
   <thead>
     <tr>
@@ -45,16 +47,17 @@
       <th>Errors</th>
     </tr>
   </thead>
-  <tbody id="events-tbody"
-         hx-get="/events/rows{% if source_id_filter %}?source_id={{ source_id_filter }}{% endif %}{% if event_type_filter %}{{ '&' if source_id_filter else '?' }}event_type_id={{ event_type_filter }}{% endif %}{% if status_filter %}{{ '&' if source_id_filter or event_type_filter else '?' }}status={{ status_filter }}{% endif %}"
-         hx-trigger="every 5s"
-         hx-vals="js:{after: document.querySelector('#events-tbody tr td a')?.textContent?.trim() || '0'}"
-         hx-swap="afterbegin">
+  <tbody id="events-tbody">
     {% for item in items %}
     {% include "components/event_row.html" %}
+    {% else %}
     {% endfor %}
   </tbody>
 </table>
+
+{% if not items %}
+<p class="text-muted mt" id="events-empty">No events yet.</p>
+{% endif %}
 
 <div class="flex items-center gap justify-center mt">
   {% if page > 1 %}
@@ -67,8 +70,6 @@
 </div>
 
 <p class="text-muted mt">{{ total }} total events</p>
-{% else %}
-<p class="text-muted mt">No events yet.</p>
-{% endif %}
 </div>
+<script src="/static/js/events.js"></script>
 {% endblock %}

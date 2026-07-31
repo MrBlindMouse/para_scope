@@ -44,23 +44,23 @@ def test_get_by_path_star_bindings():
     assert get_by_path(data, "value.*.rate") == 1
 
 
-def test_resolve_string_template_and_maths():
-    from app.fields import resolve_string
+def test_render_data_template_via_config_value():
+    from app.widget_transforms import render_data_template
 
     nd = {"status": "ok", "rate": 20, "_poll": {"response_time_ms": 273.5}}
-    assert resolve_string({"value": "x={{ status }}"}, nd) == "x=ok"
-    assert resolve_string({"value": "{{ 1/rate }}"}, nd) == "0.05"
-    assert resolve_string({"value": "{{ _poll.response_time_ms }}"}, nd) == "273.5"
-    assert resolve_string({"value": "{{ missing }}"}, nd) == ""
-    assert resolve_string({}, nd) == ""
+    assert render_data_template("x={{ status }}", nd) == "x=ok"
+    assert render_data_template("{{ 1/rate }}", nd) == "0.05"
+    assert render_data_template("{{ _poll.response_time_ms }}", nd) == "273.5"
+    assert render_data_template("{{ missing }}", nd) == ""
+    assert render_data_template("", nd) == ""
 
 
-def test_resolve_string_star_path():
-    from app.fields import resolve_string
+def test_render_data_template_star_path():
+    from app.widget_transforms import render_data_template
 
     nd = {"data": [{"price": 9.5}, {"price": 1.0}]}
-    assert resolve_string({"value": "{{ data.*.price }}"}, nd) == "9.5"
-    assert resolve_string({"value": "{{ data.0.price }}"}, nd) == "9.5"
+    assert render_data_template("{{ data.*.price }}", nd) == "9.5"
+    assert render_data_template("{{ data.0.price }}", nd) == "9.5"
 
 
 def test_resolve_numeric_dotted_path():
@@ -129,6 +129,21 @@ def test_eval_expr_richer_maths():
     assert eval_expr("rate % 6", nd) == 2.0
     assert eval_expr("abs()", nd) is None
     assert eval_expr("__import__('os')", nd) is None
+
+
+def test_eval_expr_trunc_sum_avg():
+    from app.widget_transforms import eval_expr
+
+    nd = {"a": 2.9, "b": 4, "c": 6}
+    assert eval_expr("trunc(a)", nd) == 2.0
+    assert eval_expr("trunc(-3.7)", nd) == -3.0
+    assert eval_expr("sum(a, b, c)", nd) == 12.9
+    assert eval_expr("avg(b, c)", nd) == 5.0
+    assert eval_expr("sum()", nd) is None
+    assert eval_expr("avg()", nd) is None
+    assert eval_expr("trunc(a, b)", nd) is None
+    # List paths are not accepted as aggregate args (variadic scalars only).
+    assert eval_expr("sum(items)", {"items": [1, 2, 3]}) is None
 
 
 def test_eval_expr_star_path_tokens():

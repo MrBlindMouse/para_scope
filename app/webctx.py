@@ -108,6 +108,7 @@ def _audit_log(db, request, action, user_id=None, resource_type="", resource_id=
         db.commit()
     except Exception:
         logger.exception("Failed to write audit log action=%s", action)
+        db.rollback()
 
 
 # ponytail: replay protection uses in-memory LRU cache — fine for single-process deployment.
@@ -141,7 +142,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         status_code=401,
                         headers={"HX-Redirect": "/login"},
                     )
-                if wants_json or path.startswith("/api/") or path.startswith("/metrics/api"):
+                if wants_json or path.startswith("/api/"):
                     return JSONResponse({"error": "Please sign in"}, status_code=401)
                 return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
         finally:
@@ -172,12 +173,20 @@ _SOURCE_TYPES = frozenset({"webhook", "poll"})
 
 
 def _slugify_name(name: str) -> str:
-    """Derive an identifier-safe slug (underscores, no hyphens)."""
+    """Derive an ASCII identifier-safe slug (underscores, no hyphens).
+
+    Only ASCII alphanumerics are kept so every slug matches the expression
+    path regex used by ``fields.<slug>`` and widget templates. Leading digits
+    are prefixed with ``f_`` so the result always matches ``[a-zA-Z_]…``.
+    """
     slug = name.lower().strip().replace(" ", "_").replace("-", "_")
-    slug = "".join(c for c in slug if c.isalnum() or c == "_")
+    slug = "".join(c for c in slug if ("a" <= c <= "z") or ("0" <= c <= "9") or c == "_")
     while "__" in slug:
         slug = slug.replace("__", "_")
-    return slug.strip("_") or "source"
+    slug = slug.strip("_") or "source"
+    if slug[0].isdigit():
+        slug = f"f_{slug}"
+    return slug
 
 
 def _unique_slug_from_name(db: Session, name: str, exclude_id: int | None = None) -> str:
@@ -196,10 +205,16 @@ def _unique_slug_from_name(db: Session, name: str, exclude_id: int | None = None
 
 
 def _unique_field_slug(db: Session, name: str, exclude_id: int | None = None) -> str:
+    from app.fields import RESERVED_FIELD_SLUGS
+
     base = _slugify_name(name) or "field"
     slug = base
     n = 2
     while True:
+        if slug in RESERVED_FIELD_SLUGS:
+            slug = f"{base}_{n}"
+            n += 1
+            continue
         q = db.query(Field).filter(Field.slug == slug)
         if exclude_id is not None:
             q = q.filter(Field.id != exclude_id)
@@ -241,7 +256,9 @@ def _field_in_use(db: Session, field_id: int) -> str | None:
             return "used by an action"
     for layout in db.query(DashboardLayout).all():
         for w in parse_layout_config(layout.layout_config)["widgets"]:
-            if field_id in widget_referenced_field_ids(db, w.get("config") or {}):
+            if field_id in widget_referenced_field_ids(
+                db, w.get("config") or {}, title=(w.get("title") or ""),
+            ):
                 return "used by a dashboard widget"
     return None
 
@@ -464,6 +481,40 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             out["shell"] = True
         return out, None
 
+    if action_type == "trigger_source":
+        ref = (form.get("target_ref") or "").strip()
+        if not ref:
+            return None, "Target is required"
+        parts = ref.split(":")
+        out: dict = {}
+        if parts[0] == "poll" and len(parts) == 2:
+            try:
+                out["target_source_id"] = int(parts[1])
+            except ValueError:
+                return None, "Choose a valid target"
+            out["event_type_id"] = None
+        elif parts[0] == "webhook" and len(parts) == 3:
+            try:
+                out["target_source_id"] = int(parts[1])
+                out["event_type_id"] = int(parts[2])
+            except ValueError:
+                return None, "Choose a valid target"
+        else:
+            return None, "Choose a valid target"
+
+        raw = (form.get("payload") or "").strip()
+        if raw:
+            try:
+                parsed = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return None, "Trigger payload is not valid JSON"
+            if not isinstance(parsed, dict):
+                return None, "Trigger payload must be a JSON object"
+            out["payload"] = parsed
+        else:
+            out["payload"] = {}
+        return out, None
+
     return None, "That action type isn’t supported"
 
 
@@ -565,6 +616,7 @@ def _parse_schedule_form(form, *, required: bool = True):
         return None, "Interval (seconds) is required"
     if schedule_type == ScheduleType.CRON and not cron_expression:
         return None, "Cron Expression is required"
+    # NEVER: no interval/cron required; Run now / trigger_source still work.
 
     poller_values, secret_updates, poller_error = parse_poller_form(form)
     if poller_error:
@@ -634,13 +686,137 @@ def _scrub_action_from_rules(db: Session, source_id: int, action_id: int) -> Non
             rule.action_ids = [i for i in ids if i != action_id]
 
 
-def _scrub_event_type_from_rules(db: Session, et_id: int) -> None:
-    """Remove et_id from any rule.event_type_ids (source-scoped or global)."""
-    rules = db.query(Rule).all()
+def _delete_actions_by_ids(db: Session, action_ids: list[int]) -> None:
+    """Delete actions and their scoped secrets. Clears ActionInstance.secret FKs first."""
+    if not action_ids:
+        return
+    actions = (
+        db.query(ActionInstance)
+        .filter(ActionInstance.id.in_(action_ids))
+        .all()
+    )
+    for action in actions:
+        action.secret_id = None
+        action.secret_id_2 = None
+    db.flush()
+    db.query(Secret).filter(
+        Secret.scoped_to_type == "action",
+        Secret.scoped_to_id.in_(action_ids),
+    ).delete(synchronize_session=False)
+    db.query(ActionInstance).filter(ActionInstance.id.in_(action_ids)).delete(
+        synchronize_session=False
+    )
+
+
+def _delete_rule_with_actions(db: Session, rule: Rule) -> None:
+    """Forward cascade: rule owns its actions — delete them, then the rule."""
+    aids: list[int] = []
+    for a in rule.action_ids or []:
+        try:
+            aids.append(int(a))
+        except (TypeError, ValueError):
+            continue
+    _delete_actions_by_ids(db, aids)
+    db.delete(rule)
+
+
+def _scrub_trigger_source_refs(
+    db: Session,
+    *,
+    source_id: int | None = None,
+    event_type_id: int | None = None,
+) -> None:
+    """Clear dangling trigger_source configs that point at a deleted source/type."""
+    actions = (
+        db.query(ActionInstance)
+        .filter(ActionInstance.action_type == "trigger_source")
+        .all()
+    )
+    for action in actions:
+        cfg = dict(action.config or {})
+        changed = False
+        if source_id is not None:
+            try:
+                tgt = int(cfg.get("target_source_id"))
+            except (TypeError, ValueError):
+                tgt = None
+            if tgt == source_id:
+                cfg.pop("target_source_id", None)
+                cfg.pop("event_type_id", None)
+                changed = True
+        if event_type_id is not None:
+            try:
+                et = int(cfg.get("event_type_id"))
+            except (TypeError, ValueError):
+                et = None
+            if et == event_type_id:
+                cfg.pop("event_type_id", None)
+                changed = True
+        if changed:
+            action.config = cfg
+
+
+def _cascade_delete_event_type(db: Session, et: EventTypeRecord) -> None:
+    """Forward cascade: occurrence events → dependent rules (+ their actions) → type."""
+    et_id = et.id
+    event_ids = [
+        eid for (eid,) in db.query(Event.id).filter(Event.event_type_id == et_id).all()
+    ]
+    if event_ids:
+        db.query(FieldLogEntry).filter(FieldLogEntry.event_id.in_(event_ids)).update(
+            {FieldLogEntry.event_id: None},
+            synchronize_session=False,
+        )
+        db.query(Event).filter(Event.id.in_(event_ids)).delete(synchronize_session=False)
+
+    rules = db.query(Rule).filter(Rule.source_id == et.source_id).all()
     for rule in rules:
         ids = list(rule.event_type_ids or [])
-        if et_id in ids:
-            rule.event_type_ids = [i for i in ids if i != et_id]
+        if et_id not in ids:
+            continue
+        new_ids = [i for i in ids if i != et_id]
+        if not new_ids:
+            _delete_rule_with_actions(db, rule)
+        else:
+            rule.event_type_ids = new_ids
+
+    _scrub_trigger_source_refs(db, event_type_id=et_id)
+    db.delete(et)
+
+
+def _rules_grouped_by_event_type(rules: list, event_types: list) -> tuple[dict[int, list], list]:
+    """Map each event type id → rules that apply; orphans for unmatched ids.
+
+    Empty ``event_type_ids`` (catch-all) is listed under every event type.
+    Multi-select rules appear under each selected type. Rules whose ids no
+    longer match any current event type are returned as orphans.
+    """
+    rules_by_event_type_id: dict[int, list] = {et.id: [] for et in event_types}
+    known_et_ids = set(rules_by_event_type_id)
+    orphan_rules = []
+    for rule in rules:
+        raw_ids = rule.event_type_ids or []
+        ids: list[int] = []
+        for i in raw_ids:
+            try:
+                ids.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        if not ids:
+            if known_et_ids:
+                for et_id in known_et_ids:
+                    rules_by_event_type_id[et_id].append(rule)
+            else:
+                orphan_rules.append(rule)
+            continue
+        matched = False
+        for et_id in ids:
+            if et_id in rules_by_event_type_id:
+                rules_by_event_type_id[et_id].append(rule)
+                matched = True
+        if not matched:
+            orphan_rules.append(rule)
+    return rules_by_event_type_id, orphan_rules
 
 
 def _source_chain_template(request: Request, db: Session, source: Source, **extra):
@@ -665,16 +841,22 @@ def _source_chain_template(request: Request, db: Session, source: Source, **extr
     actions_by_id = _action_map(actions)
     fields = db.query(Field).order_by(Field.name).all()
     fields_by_id = {f.id: f for f in fields}
+    sources_by_id = {s.id: s for s in db.query(Source).all()}
     unbound = [a for a in actions if a.id not in _bound_action_ids(rules)]
+    rules_by_event_type_id, orphan_rules = _rules_grouped_by_event_type(rules, event_types)
+
     ctx = {
         "source": source,
         "rules": rules,
+        "rules_by_event_type_id": rules_by_event_type_id,
+        "orphan_rules": orphan_rules,
         "actions": actions,
         "actions_by_id": actions_by_id,
         "unbound_actions": unbound,
         "event_types": event_types,
         "event_types_by_id": _event_type_map(event_types),
         "fields_by_id": fields_by_id,
+        "sources_by_id": sources_by_id,
         "active": "pipeline",
     }
     ctx.update(extra)
@@ -781,6 +963,10 @@ templates.env.filters["poll_category_label"] = poll_category_label
 templates.env.filters["poller_label"] = poller_label
 templates.env.filters["rule_label"] = rule_label
 
+from app.fields import RESERVED_FIELD_SLUGS  # noqa: E402
+
+templates.env.globals["RESERVED_FIELD_SLUGS"] = RESERVED_FIELD_SLUGS
+
 
 @pass_context
 def display_dt(context, value, fmt: str = "%Y-%m-%d %H:%M", empty: str = ""):
@@ -864,9 +1050,12 @@ def _set_session_cookies(response, request: Request, username: str):
 def _parse_rule_form(form, *, for_update: bool = False):
     """Parse rule fields. Returns (kwargs, error) or (None, error)."""
     conditions_str = (form.get("conditions") or "{}").strip()
-    order_index = int(form.get("order_index") or 0)
+    try:
+        order_index = int(form.get("order_index") or 0)
+    except (TypeError, ValueError):
+        return None, "Order must be a number"
     event_type_ids = _parse_int_list(form, "event_type_ids")
-    # Legacy clients may still send action_ids; create form does not.
+    # Optional: bind existing actions when creating a rule (tests / advanced clients).
     action_ids = _parse_int_list(form, "action_ids") if "action_ids" in form else None
 
     try:
@@ -918,6 +1107,8 @@ def _process_webhook_event(event_id: int) -> None:
             event.processing_error = str(e)
             webhook_logger.exception("Webhook pipeline failed for event %s", event_id)
         db.commit()
+        from app.event_stream import publish
+        publish(event.id)
     finally:
         db.close()
 

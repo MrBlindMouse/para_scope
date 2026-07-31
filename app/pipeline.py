@@ -1,6 +1,7 @@
 """Event processing pipeline — rule matching and action dispatch."""
 import logging
 import re
+from contextvars import ContextVar
 
 from app.actions import run_registered_action
 from app.fields import get_by_path, path_star_bindings
@@ -10,6 +11,9 @@ logger = logging.getLogger("para_scope.pipeline")
 
 # Matches EventTypeRecord.name Column(String(200)).
 EVENT_TYPE_MAX_LEN = 200
+
+_CASCADE_DEPTH: ContextVar[int] = ContextVar("cascade_depth", default=0)
+_CASCADE_MAX = 3
 
 
 def normalize_event_type(value) -> str:
@@ -28,7 +32,7 @@ def evaluate_rules(db, event):
     """Find all enabled rules that match the given event.
 
     A rule matches if:
-    - rule.source_id is None (global rule) OR matches event.source_id
+    - rule.source_id matches event.source_id
     - rule.event_type_ids is empty OR event.event_type_id is in rule.event_type_ids
     - rule.enabled is True
 
@@ -44,7 +48,7 @@ def evaluate_rules(db, event):
 
     rules = db.query(Rule).filter(
         Rule.enabled == True,
-        (Rule.source_id.is_(None)) | (Rule.source_id == event.source_id)
+        Rule.source_id == event.source_id,
     ).order_by(Rule.order_index).all()
 
     matching = []
@@ -184,7 +188,11 @@ def match_conditions(data, conditions) -> tuple[bool, dict[str, int]]:
 
 
 def evaluate_conditions(event, conditions):
-    """Evaluate rule conditions against event data.
+    """Evaluate rule conditions against event data only (no ``fields.*`` snapshot).
+
+    Production matching uses ``evaluate_and_dispatch`` / ``_match_data``, which
+    injects Field state when conditions reference ``fields.*``. This helper is
+    for tests and event-payload-only checks (no ``db``).
 
     Supports:
       - Simple: {"field": "value"} — exact match
@@ -208,28 +216,48 @@ def evaluate_conditions(event, conditions):
     return ok
 
 
+def _match_data(db, data: dict, conditions: dict) -> dict:
+    """Event data, plus a live fields snapshot only when conditions read fields.*."""
+    if any(k == "fields" or k.startswith("fields.") for k in (conditions or {})):
+        from app.widgets import fields_snapshot
+        return {**data, "fields": fields_snapshot(db)}
+    return data
+
+
 def evaluate_and_dispatch(db, event):
     """Entry point: find matching rules and dispatch their actions."""
-    rules = evaluate_rules(db, event)
-    for rule in rules:
-        ok, bindings = match_conditions(
-            event.normalized_data or {}, rule.conditions or {}
-        )
-        if not ok:
-            continue
-        with path_star_bindings(bindings):
-            for action_id in rule.action_ids:
-                action = db.query(ActionInstance).filter(
-                    ActionInstance.id == action_id,
-                    ActionInstance.enabled == True,
-                ).first()
-                if action and (
-                    action.source_id is None or action.source_id == event.source_id
-                ):
-                    _run_action(db, event, action)
-    if event.status != "failed":
-        event.status = "processed"
-        db.commit()
+    depth = _CASCADE_DEPTH.get()
+    if depth >= _CASCADE_MAX:
+        raise ValueError(f"Trigger cascade too deep (max {_CASCADE_MAX})")
+    token = _CASCADE_DEPTH.set(depth + 1)
+    try:
+        rules = evaluate_rules(db, event)
+        failed = False
+        for rule in rules:
+            cond = rule.conditions or {}
+            ok, bindings = match_conditions(
+                _match_data(db, event.normalized_data or {}, cond), cond,
+            )
+            if not ok:
+                continue
+            with path_star_bindings(bindings):
+                for action_id in rule.action_ids:
+                    action = db.query(ActionInstance).filter(
+                        ActionInstance.id == action_id,
+                        ActionInstance.enabled == True,
+                    ).first()
+                    if action and action.source_id == event.source_id:
+                        _run_action(db, event, action)
+                        if event.status == "failed":
+                            failed = True
+                            break
+            if failed:
+                break
+        if not failed:
+            event.status = "processed"
+            db.commit()
+    finally:
+        _CASCADE_DEPTH.reset(token)
 
 
 def _run_action(db, event, action):

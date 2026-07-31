@@ -10,12 +10,12 @@ Cross-page Jinja includes (not route pages). Plain `{% include %}` — no `{% ex
 |------|------|
 | `csrf.html` | Hidden `_csrf_token` for forms |
 | `alerts.html` | `error` / `success` flash markup |
-| `event_row.html` | `<tr>` fragment for events list / HTMX prepends |
+| `event_row.html` | `<tr>` fragment for events list / SSE prepends |
 
 ## Invariants
 
 - Form CSRF markup comes from `csrf.html` only — do not hand-roll the field.
-- `event_row.html` is the HTMX fragment for `#events-tbody` swaps/prepends.
+- `event_row.html` is the row fragment for `#events-tbody` (SSE live tail).
 
 ## Prefer / avoid
 

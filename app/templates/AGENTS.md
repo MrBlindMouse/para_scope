@@ -9,7 +9,7 @@ Jinja2 HTML for all UI, mounted via `Jinja2Templates(directory="app/templates")`
 | Kind | Pattern |
 |------|---------|
 | Shell | `base.html` — layout, CSRF meta, htmx, header |
-| Pages | `{name}.html` — `index`, `events`, `metrics`, `system`, `login`, `setup`, … |
+| Pages | `{name}.html` — `index`, `events`, `system`, `login`, `setup`, … |
 | Config | `config/` — see [config/AGENTS.md](config/AGENTS.md) |
 | Components | `components/` — see [components/AGENTS.md](components/AGENTS.md) |
 | Widgets | `widgets/` — see [widgets/AGENTS.md](widgets/AGENTS.md) |

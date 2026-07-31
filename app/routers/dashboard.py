@@ -1,7 +1,7 @@
 """Auto-split route module — handlers registered on shared app via include."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
 import json
@@ -11,8 +11,17 @@ from app.models import (
     DashboardLayout,
     PushSubscription,
     Field,
+    Source,
+    EventTypeRecord,
+    PollingSchedule,
 )
-from app.widgets import fetch_widget_data, get_widget_types, validate_widget_bindings
+from app.widgets import (
+    fetch_widget_data,
+    fields_snapshot,
+    get_widget_types,
+    validate_widget_bindings,
+    _render_widget_text,
+)
 from app.dashboard_layout import (
     GRID_CELL_HEIGHT, GRID_COLUMN_LIVE_MAX, GRID_COLUMN_WIDTH, GRID_COLUMNS,
     GRID_MARGIN, GRID_STACK_BELOW,
@@ -121,6 +130,10 @@ async def root(request: Request, db: Session = Depends(get_db)):
     if not user:
         return ctx.templates.TemplateResponse(request, "base.html", {})
     widgets = _load_widgets(db)
+    # ponytail: titles only re-render on full page load (HTMX refreshes card body only).
+    snap = fields_snapshot(db)
+    for w in widgets:
+        w["title"] = _render_widget_text(w.get("title") or "", snap)
     widget_data = {}
     for w in widgets:
         wtype = w.get("type", "")
@@ -208,6 +221,129 @@ async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+# route: /api/dashboard/trigger
+@router.post("/api/dashboard/trigger")
+async def api_dashboard_trigger(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Fire a webhook event type or run a poll source once (authenticated)."""
+    from app.actions import _template_mapping
+    from app.ingest import ingest_manual_events
+    from app.pollers import run_schedule
+    from app.widgets import fields_snapshot
+
+    user = ctx._get_user(request, db)
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    kind = (body.get("kind") or "").strip()
+    try:
+        source_id = int(body.get("source_id"))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "Source id required"}, status_code=400)
+
+    source = db.query(Source).filter(Source.id == source_id).first()
+    if not source:
+        return JSONResponse({"error": "Source not found"}, status_code=404)
+    if not source.enabled:
+        return JSONResponse({"error": "Source is disabled"}, status_code=400)
+
+    if kind == "poll":
+        if source.source_type != "poll":
+            return JSONResponse({"error": "Not a poll source"}, status_code=400)
+        schedule = (
+            db.query(PollingSchedule)
+            .filter(PollingSchedule.source_id == source.id)
+            .first()
+        )
+        if not schedule or not schedule.enabled:
+            return JSONResponse({"error": "No enabled schedule"}, status_code=400)
+        ok = run_schedule(schedule.id)
+        ctx._audit_log(
+            db, request, "trigger.fire",
+            resource_type="source", resource_id=source.id,
+            details={"kind": "poll", "ok": ok},
+        )
+        if not ok:
+            return JSONResponse({"error": "Poll failed", "ok": False}, status_code=502)
+        return {"ok": True, "kind": "poll"}
+
+    if kind == "webhook":
+        if source.source_type != "webhook":
+            return JSONResponse({"error": "Not a webhook source"}, status_code=400)
+        try:
+            et_id = int(body.get("event_type_id"))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Event type id required"}, status_code=400)
+        event_type = (
+            db.query(EventTypeRecord)
+            .filter(EventTypeRecord.id == et_id, EventTypeRecord.source_id == source.id)
+            .first()
+        )
+        if not event_type:
+            return JSONResponse({"error": "Event type not found"}, status_code=404)
+        if not event_type.enabled:
+            return JSONResponse({"error": "Event type is disabled"}, status_code=400)
+
+        raw_payload = body.get("payload")
+        if raw_payload is None:
+            raw_payload = {}
+        if not isinstance(raw_payload, dict):
+            return JSONResponse({"error": "Payload must be a JSON object"}, status_code=400)
+        try:
+            encoded = json.dumps(raw_payload)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "Payload must be a JSON object"}, status_code=400)
+        if len(encoded.encode("utf-8")) > ctx._WEBHOOK_MAX_BODY:
+            return JSONResponse({"error": "Payload too large"}, status_code=400)
+
+        data = _template_mapping(raw_payload, fields_snapshot(db))
+        if not isinstance(data, dict):
+            return JSONResponse({"error": "Payload must be a JSON object"}, status_code=400)
+
+        trigger_meta = {
+            "origin": "dashboard",
+            "user": user.username,
+            "event_type": event_type.name,
+        }
+        events = ingest_manual_events(
+            db, source, event_type, data, meta=trigger_meta,
+        )
+        event = events[0]
+        always_event = events[1] if len(events) > 1 else None
+
+        details = {
+            "kind": "webhook",
+            "event_id": event.id,
+            "event_type": event_type.name,
+            "payload_keys": sorted(data.keys()),
+        }
+        if always_event:
+            details["always_event_id"] = always_event.id
+        ctx._audit_log(
+            db, request, "trigger.fire",
+            resource_type="source", resource_id=source.id,
+            details=details,
+        )
+
+        for ev in events:
+            background_tasks.add_task(ctx._process_webhook_event, ev.id)
+        body_out = {"ok": True, "kind": "webhook", "event_id": event.id}
+        if always_event:
+            body_out["always_event_id"] = always_event.id
+        return body_out
+
+    return JSONResponse({"error": "Unknown trigger kind"}, status_code=400)
+
+
 NOTES_TEXT_MAX = 50_000
 
 
@@ -282,11 +418,13 @@ def _dashboard_editor_context(
         }
         for w in get_widget_types()
     ]
+    from app.widgets import trigger_targets as _trigger_targets
     return {
         "active": "dashboard",
         "current_widgets": current_widgets,
         "available_widgets": available_widgets,
         "fields": db.query(Field).order_by(Field.name).all(),
+        "trigger_targets": _trigger_targets(db),
         "success": success,
         "error": error,
     }

@@ -9,6 +9,7 @@ ACTION_TYPE_LABELS = {
     "notify": "Notify",
     "web_push": "Browser notification",
     "local_script": "Local script",
+    "trigger_source": "Trigger source",
 }
 
 FIELD_TYPE_LABELS = {
@@ -86,7 +87,7 @@ def operator_label(slug: str) -> str:
     return OPERATOR_LABELS.get(slug, slug)
 
 
-def action_label(action, fields_by_id: dict[int, Any] | None = None) -> str:
+def action_label(action, fields_by_id: dict[int, Any] | None = None, sources_by_id: dict[int, Any] | None = None) -> str:
     """e.g. Update → Uptime, Call URL → https://…, Alert → title."""
     at = action.action_type or "?"
     cfg = action.config or {}
@@ -122,6 +123,24 @@ def action_label(action, fields_by_id: dict[int, Any] | None = None) -> str:
             short = cmd if len(cmd) <= 40 else cmd[:37] + "…"
             return f"Script → {short}"
         return "Local script"
+    if at == "trigger_source":
+        sid = cfg.get("target_source_id")
+        src = (sources_by_id or {}).get(int(sid)) if sid is not None else None
+        name = src.name if src is not None else (f"#{sid}" if sid is not None else None)
+        et_id = cfg.get("event_type_id")
+        et_name = None
+        if et_id is not None and src is not None:
+            for et in getattr(src, "event_types", None) or []:
+                if et.id == int(et_id):
+                    et_name = et.name
+                    break
+            if et_name is None:
+                et_name = f"#{et_id}"
+        if name and et_name:
+            return f"Trigger source → {name} / {et_name}"
+        if name:
+            return f"Trigger source → {name}"
+        return "Trigger source"
     return action_type_label(at)
 
 

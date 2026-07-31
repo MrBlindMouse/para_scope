@@ -30,6 +30,28 @@
       <div class="stat__hint text-muted">max {{ max_events_per_source }} per source</div>
     </div>
   </div>
+  <div class="card">
+    <div class="stat stat--lg">
+      <div class="stat__label">Failed events</div>
+      <div class="stat__value">{{ events_failed }}</div>
+      <div class="stat__hint text-muted">All time · {{ events_failed_last_hour }} in the last hour</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="stat stat--lg">
+      <div class="stat__label">Database size</div>
+      <div class="stat__value">
+        {% if db_size_bytes >= 1048576 %}
+          {{ '%.1f'|format(db_size_bytes / 1048576) }} MB
+        {% elif db_size_bytes >= 1024 %}
+          {{ '%.1f'|format(db_size_bytes / 1024) }} KB
+        {% else %}
+          {{ db_size_bytes }} B
+        {% endif %}
+      </div>
+      <div class="stat__hint text-muted">SQLite file + WAL</div>
+    </div>
+  </div>
 </div>
 
 {% if events_pending > 0 %}
@@ -82,6 +104,7 @@
         <th>Name</th>
         <th>Last Run</th>
         <th>Next Run</th>
+        <th>Overdue</th>
         <th>OK / Fail (lifetime)</th>
         <th>Status</th>
       </tr>
@@ -92,6 +115,19 @@
         <td>{{ s.name }}</td>
         <td>{{ s.last_run|display_dt('%Y-%m-%d %H:%M', 'never') }}</td>
         <td>{{ s.next_run|display_dt('%Y-%m-%d %H:%M', '-') }}</td>
+        <td>
+          {% if s.overdue_seconds is none %}
+            —
+          {% elif s.overdue_seconds == 0 %}
+            —
+          {% elif s.overdue_seconds < 60 %}
+            {{ s.overdue_seconds }}s
+          {% elif s.overdue_seconds < 3600 %}
+            {{ (s.overdue_seconds / 60)|int }}m
+          {% else %}
+            {{ (s.overdue_seconds / 3600)|int }}h
+          {% endif %}
+        </td>
         <td>{{ s.success_count }} / {{ s.failure_count }}</td>
         <td>
           {% if not s.enabled %}

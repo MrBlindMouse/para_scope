@@ -309,6 +309,15 @@ def _verify_discord(*, db, source, request, raw_body: bytes) -> VerifiedWebhook:
         raise WebhookAuthError(400, {"error": "Missing Discord signature headers"})
 
     try:
+        ts = float(timestamp)
+    except ValueError:
+        raise WebhookAuthError(400, {"error": "Invalid timestamp"})
+
+    now = time.time()
+    if abs(now - ts) > ctx._WEBHOOK_REPLAY_TTL_SECONDS:
+        raise WebhookAuthError(400, {"error": "Timestamp expired"})
+
+    try:
         verify_key = VerifyKey(bytes.fromhex(public_key_hex))
         verify_key.verify(timestamp.encode() + raw_body, bytes.fromhex(signature))
     except (BadSignatureError, ValueError):

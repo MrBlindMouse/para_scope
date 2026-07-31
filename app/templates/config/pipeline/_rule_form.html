@@ -47,5 +47,14 @@
   {% endif %}
   <div class="flex items-center gap">
     <button type="submit" class="btn btn--primary">{% if is_edit %}Save Rule{% else %}Create Rule{% endif %}</button>
+    <button type="button"
+            class="btn"
+            hx-post="/config/pipeline/source/{{ source.id }}/rules/dry-run"
+            hx-include="closest form"
+            hx-target="#rule-test-result"
+            hx-swap="innerHTML">
+      Test
+    </button>
   </div>
+  <div id="rule-test-result"></div>
 </form>
