@@ -47,27 +47,42 @@
     return [{ name: "", points: series }];
   }
 
-  function unionLabels(seriesList) {
-    var seen = Object.create(null);
-    var labels = [];
-    seriesList.forEach(function (s) {
+  function pointX(ts) {
+    if (typeof ts === "number" && isFinite(ts)) return ts;
+    var ms = Date.parse(ts);
+    return isFinite(ms) ? ms : NaN;
+  }
+
+  /** Pack series into Apex datetime [{x,y}] points (no category null-padding). */
+  function seriesPayload(series) {
+    var seriesList = normalizeSeries(series);
+    var apexSeries = seriesList.map(function (s, i) {
+      var byX = Object.create(null);
       (s.points || []).forEach(function (d) {
-        var key = d.ts;
-        if (seen[key]) return;
-        seen[key] = true;
-        labels.push(key);
+        var x = pointX(d.ts);
+        var y = Number(d.v);
+        if (!isFinite(x) || !isFinite(y)) return;
+        byX[x] = y;  // last wins on duplicate instant
       });
+      var xs = Object.keys(byX).map(Number).sort(function (a, b) { return a - b; });
+      return {
+        name: s.name || ("Series " + (i + 1)),
+        data: xs.map(function (x) { return { x: x, y: byX[x] }; }),
+      };
     });
-    labels.sort();
-    return labels;
+    return { seriesList: seriesList, apexSeries: apexSeries };
   }
 
   function formatTs(ts) {
     try {
       var dt = new Date(ts);
-      if (isNaN(dt.getTime())) return ts;
+      if (isNaN(dt.getTime())) return String(ts);
+      var tz = "UTC";
+      if (typeof document !== "undefined" && document.documentElement) {
+        tz = document.documentElement.getAttribute("data-display-timezone") || "UTC";
+      }
       return new Intl.DateTimeFormat(undefined, {
-        timeZone: document.documentElement.getAttribute("data-display-timezone") || "UTC",
+        timeZone: tz,
         year: "numeric",
         month: "2-digit",
         day: "2-digit",
@@ -76,8 +91,18 @@
         second: "2-digit",
       }).format(dt);
     } catch (e) {
-      return ts;
+      return String(ts);
     }
+  }
+
+  function tooltipTheme() {
+    try {
+      if (typeof window !== "undefined" && window.matchMedia &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        return "dark";
+      }
+    } catch (e) {}
+    return "light";
   }
 
   function baseChartOpts(type, extra) {
@@ -104,7 +129,7 @@
         labels: { colors: t.muted },
         fontSize: "12px",
       },
-      tooltip: { theme: "dark" },
+      tooltip: { theme: tooltipTheme() },
       dataLabels: { enabled: false },
       stroke: { width: 2, curve: "smooth" },
     };
@@ -173,23 +198,6 @@
     return Math.max(0, Math.min(100, p));
   }
 
-  function seriesPayload(series) {
-    var seriesList = normalizeSeries(series);
-    var rawLabels = unionLabels(seriesList);
-    var labels = rawLabels.map(formatTs);
-    var apexSeries = seriesList.map(function (s, i) {
-      var byTs = Object.create(null);
-      (s.points || []).forEach(function (d) { byTs[d.ts] = d.v; });
-      return {
-        name: s.name || ("Series " + (i + 1)),
-        data: rawLabels.map(function (ts) {
-          return byTs[ts] != null ? byTs[ts] : null;
-        }),
-      };
-    });
-    return { seriesList: seriesList, labels: labels, apexSeries: apexSeries };
-  }
-
   function unitFmt(unit) {
     return function (v) {
       return unit ? v + " " + unit : String(v);
@@ -204,6 +212,16 @@
       style: { colors: t.muted },
       rotate: 0,
       hideOverlappingLabels: true,
+      formatter: function (val) { return formatTs(val); },
+    };
+  }
+
+  function timeAxis(opts, t) {
+    return {
+      type: "datetime",
+      labels: axisLabels(opts, t),
+      axisBorder: { color: t.border },
+      axisTicks: { color: t.border },
     };
   }
 
@@ -229,12 +247,7 @@
         position: "bottom",
         labels: { colors: t.muted },
       },
-      xaxis: {
-        categories: packed.labels,
-        labels: axisLabels(opts, t),
-        axisBorder: { color: t.border },
-        axisTicks: { color: t.border },
-      },
+      xaxis: timeAxis(opts, t),
       yaxis: {
         labels: {
           show: !opts.preview,
@@ -270,12 +283,7 @@
         position: "bottom",
         labels: { colors: t.muted },
       },
-      xaxis: {
-        categories: packed.labels,
-        labels: axisLabels(opts, t),
-        axisBorder: { color: t.border },
-        axisTicks: { color: t.border },
-      },
+      xaxis: timeAxis(opts, t),
       yaxis: {
         labels: {
           show: !opts.preview,
@@ -323,12 +331,7 @@
         position: "bottom",
         labels: { colors: t.muted },
       },
-      xaxis: {
-        categories: packed.labels,
-        labels: axisLabels(opts, t),
-        axisBorder: { color: t.border },
-        axisTicks: { color: t.border },
-      },
+      xaxis: timeAxis(opts, t),
       yaxis: {
         labels: {
           show: !opts.preview,
@@ -618,9 +621,10 @@
   }
 
   function previewPoints(vals) {
-    // Short non-date categories so formatTs leaves them alone (no locale datetimes).
+    // Hourly UTC samples so datetime axis previews work.
+    var start = Date.UTC(2026, 0, 1, 12, 0, 0);
     return vals.map(function (v, i) {
-      return { ts: String(i + 1), v: v };
+      return { ts: start + i * 3600000, v: v };
     });
   }
 
@@ -720,8 +724,18 @@
     return renderPie(el, sample.labels, sample.values, opts);
   }
 
+  function destroyIn(root) {
+    root = root || document;
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll("[data-widget-chart], [data-preview-apex]").forEach(function (el) {
+      var id = el.id || el.getAttribute("id");
+      if (id) destroy(id);
+    });
+  }
+
   function initPreviews(root) {
     root = root || document;
+    destroyIn(root);
     root.querySelectorAll("[data-preview-apex]").forEach(function (el) {
       renderPreview(
         el,
@@ -742,14 +756,30 @@
     renderPreview: renderPreview,
     initPreviews: initPreviews,
     destroy: destroy,
+    destroyIn: destroyIn,
+    packSeries: seriesPayload,
     initIn: initIn,
   };
 
-  document.addEventListener("DOMContentLoaded", function () {
-    initIn(document);
-  });
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("DOMContentLoaded", function () {
+      initIn(document);
+    });
+    if (document.body) {
+      document.body.addEventListener("htmx:afterSwap", function (e) {
+        initIn(e.target);
+      });
+    } else {
+      document.addEventListener("DOMContentLoaded", function () {
+        document.body.addEventListener("htmx:afterSwap", function (e) {
+          initIn(e.target);
+        });
+      });
+    }
+  }
 
-  document.body.addEventListener("htmx:afterSwap", function (e) {
-    initIn(e.target);
-  });
-})(window);
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { packSeries: seriesPayload, pointX: pointX };
+  }
+})(typeof window !== "undefined" ? window : typeof globalThis !== "undefined" ? globalThis : this);
+

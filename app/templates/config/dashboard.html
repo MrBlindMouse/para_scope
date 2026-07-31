@@ -353,13 +353,20 @@
     return html;
   }
 
-  function toneSelectHtml(type, disp, selected) {
+  function toneSelectHtml(type, disp, selected, cfg) {
     if (type === "series" || type === "chart" || type === "clock" ||
         type === "system" || type === "links" || type === "triggers") return "";
+    if (type === "display" && disp === "table") return "";
     var cur = normalizeTone(selected, type, disp);
+    var cellKind = (cfg && cfg.cell_kind) || "toggle";
+    var onOff = type === "display" && (
+      disp === "toggle" || (disp === "board" && cellKind === "toggle")
+    );
     var opts = [
       ["none", "No background"],
-      ["conditional", "From rules (green / red / blue)"]
+      ["conditional", onOff
+        ? "From on/off (green / red)"
+        : "From rules (green / red / blue)"]
     ];
     var html = '<label class="stack form-field--lg">Background' +
       '<select class="input" data-cfg="tone">';
@@ -376,7 +383,7 @@
     if (!rules.length) rules = [{expr: "slug.value", op: "gt", compare: "0", tone: "positive"}];
     var html = '<div class="stack stack--dense" data-tone-rules>' +
       '<span class="text-muted">Background rules (first match wins). Use Field slug paths and maths, e.g. <code>1/temp.value</code>. ' +
-      '<code>=</code> / <code>≠</code> also accept strings, e.g. <code>service.status</code> / <code>ok</code>.</span>';
+      '<code>=</code> / <code>≠</code> also accept strings and booleans (<code>true</code>/<code>false</code>/<code>on</code>/<code>off</code>), e.g. <code>service.status</code> / <code>ok</code> or <code>gate.value</code> / <code>true</code>.</span>';
     rules.forEach(function (r, i) {
       var expr = (r && r.expr) || "slug.value";
       var op = (r && r.op) || "gt";
@@ -536,8 +543,15 @@
   function styleExtraFieldsHtml(type, disp, style, cfg) {
     var meta = styleMeta(type, disp, style);
     var keys = meta.keys || [];
-    if (!keys.length) return "";
     var html = "";
+    var minSrc = meta.min_sources || 1;
+    var maxSrc = meta.max_sources;
+    if (minSrc > 1 || maxSrc != null) {
+      html += '<p class="text-muted text-xs">This style needs ' +
+        (maxSrc != null ? maxSrc === 1 ? "exactly 1 source" : (minSrc + "–" + maxSrc + " sources")
+          : ("at least " + minSrc + " sources")) + ".</p>";
+    }
+    if (!keys.length) return html;
     if (keys.indexOf("horizontal") >= 0) {
       html += '<label class="flex items-center gap">' +
         '<input type="checkbox" data-cfg="horizontal" value="1"' +
@@ -560,13 +574,6 @@
         '<input type="number" class="input" data-cfg="end_angle" step="1" value="' +
         (cfg.end_angle != null ? escapeAttr(cfg.end_angle) : "90") + '"></label>' +
         "</div>";
-    }
-    var minSrc = meta.min_sources || 1;
-    var maxSrc = meta.max_sources;
-    if (minSrc > 1 || maxSrc != null) {
-      html += '<p class="text-muted text-xs">This style needs ' +
-        (maxSrc != null ? maxSrc === 1 ? "exactly 1 source" : (minSrc + "–" + maxSrc + " sources")
-          : ("at least " + minSrc + " sources")) + ".</p>";
     }
     return html;
   }
@@ -824,7 +831,7 @@
     var html = '<div class="flex items-center gap flex-wrap">' +
       displaySelectHtml(w.type, disp) +
       (disp === "board" ? "" : styleSelectHtml(w.type, disp, style)) +
-      toneSelectHtml(w.type, disp, tone) +
+      toneSelectHtml(w.type, disp, tone, cfg) +
       "</div>";
     if (disp === "board") {
       html += boardConfigHtml(cfg, tone);
@@ -956,6 +963,9 @@
   function render(expandedKeys) {
     expandedKeys = expandedKeys || currentExpandedKeys();
     var widgets = normalize(JSON.parse(jsonEl.value || "[]"));
+    if (window.ParaScopeCharts && typeof ParaScopeCharts.destroyIn === "function") {
+      ParaScopeCharts.destroyIn(listEl);
+    }
     listEl.innerHTML = "";
     emptyEl.hidden = widgets.length > 0;
     widgets.forEach(function (w, i) {

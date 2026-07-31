@@ -24,9 +24,12 @@
   }
 
   function coerceEquals(raw) {
-    var s = String(raw);
-    if (/^-?\d+(\.\d+)?$/.test(s.trim())) return Number(s.trim());
-    return s;
+    var s = String(raw).trim();
+    if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
+    var lower = s.toLowerCase();
+    if (lower === "true" || lower === "on" || lower === "yes") return true;
+    if (lower === "false" || lower === "off" || lower === "no") return false;
+    return String(raw);
   }
 
   function coerceNumeric(raw) {

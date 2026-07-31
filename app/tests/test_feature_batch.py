@@ -639,6 +639,65 @@ class TestFieldsInRules:
         finally:
             db.close()
 
+    def test_rule_condition_reads_toggle_field(self, authenticated_client):
+        sid, _ = _create_source(authenticated_client, name="Toggle Gate", slug="toggle-gate-src")
+        from app.database import get_db
+        from app.models import ActionInstance, Event, Field, Rule
+        from app.pipeline import evaluate_and_dispatch
+
+        db = next(get_db())
+        try:
+            gate = Field(
+                name="Ok Gate", slug="toggle_gate", field_type="toggle",
+                config={}, state={"value": True},
+            )
+            sink = Field(
+                name="Toggle Sink", slug="toggle_sink", field_type="value",
+                config={}, state={"value": 0},
+            )
+            db.add_all([gate, sink])
+            db.commit()
+            action = ActionInstance(
+                source_id=sid, action_type="field_push",
+                config={"field_id": sink.id, "op": "set", "delta": "1"},
+            )
+            db.add(action)
+            db.commit()
+            rule = Rule(
+                source_id=sid, event_type_ids=[],
+                conditions={"fields.toggle_gate.value": True},
+                action_ids=[action.id], order_index=0,
+            )
+            db.add(rule)
+            event = Event(
+                source_id=sid, normalized_data={"x": 1}, raw_payload="{}",
+                correlation_id="toggle-gate-ok",
+            )
+            db.add(event)
+            db.commit()
+            evaluate_and_dispatch(db, event)
+            db.refresh(sink)
+            assert sink.state["value"] == 1.0
+            assert event.status == "processed"
+
+            # Wrong bool must not match
+            sink.state = {"value": 0}
+            db.add(sink)
+            rule.conditions = {"fields.toggle_gate.value": False}
+            db.add(rule)
+            event2 = Event(
+                source_id=sid, normalized_data={"x": 2}, raw_payload="{}",
+                correlation_id="toggle-gate-miss",
+            )
+            db.add(event2)
+            db.commit()
+            evaluate_and_dispatch(db, event2)
+            db.refresh(sink)
+            assert sink.state["value"] == 0
+            assert event2.status == "processed"
+        finally:
+            db.close()
+
     def test_dry_run_fields_slug(self, authenticated_client):
         sid, _ = _create_source(authenticated_client, name="Dry Fields", slug="dry-fields")
         authenticated_client.post(
@@ -920,6 +979,48 @@ class TestDotNotationUnify:
             )
             assert data["value"] is True
             assert data["tone"] == "positive"
+        finally:
+            db.close()
+
+    def test_toggle_string_false_is_off(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            db.add(Field(
+                name="Tog Str", slug="tog_str_false", field_type="toggle",
+                config={}, state={"value": "false"},
+            ))
+            db.commit()
+            data = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "tog_str_false"},
+            )
+            assert data["value"] is False
+            assert data["tone"] == "negative"
+        finally:
+            db.close()
+
+    def test_table_keeps_same_field_different_paths(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            db.add(Field(
+                name="Pack", slug="table_pack", field_type="data",
+                config={}, state={"x": 1, "y": 2},
+            ))
+            db.commit()
+            data = fetch_widget_data(
+                "display", db, display="table",
+                widget_config={"field_slugs": ["table_pack.x", "table_pack.y"]},
+            )
+            assert len(data["rows"]) == 2
+            assert [r["value"] for r in data["rows"]] == [1, 2]
         finally:
             db.close()
 

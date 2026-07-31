@@ -859,6 +859,22 @@ def _bool_config(config: dict | None, key: str, default: bool = False) -> bool:
     return bool(value)
 
 
+def _coerce_toggle_value(raw) -> bool:
+    """Normalize Field toggle payloads; string false/off/0 → False."""
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        key = raw.strip().lower()
+        if key in ("true", "on", "yes", "1"):
+            return True
+        if key in ("false", "off", "no", "0", ""):
+            return False
+        return bool(raw)
+    if isinstance(raw, (int, float)):
+        return raw != 0
+    return bool(raw)
+
+
 def _clock_timezone_name(raw: str | None) -> str:
     value = (raw or "").strip()
     if not value:
@@ -1107,6 +1123,9 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
         if err and not points:
             errors.append(err)
             continue
+        if not points:
+            errors.append(err or "No data yet")
+            continue
         series_out.append({"name": name or "", "points": points})
 
     if not series_out:
@@ -1114,7 +1133,7 @@ def _series_data(db, config, display="line", source_id=None, fields_snap=None):
 
     out = {**base, "series": series_out}
     if display == "column":
-        out["horizontal"] = bool(config.get("horizontal"))
+        out["horizontal"] = _bool_config(config, "horizontal", default=False)
     return out
 
 
@@ -1157,14 +1176,18 @@ def _chart_source_value(db, src, source_id=None, fields_snap=None):
                 v = extract_number(raw, value_path)
             else:
                 v = extract_number({"value": raw}, value_path)
-            return label, 0.0 if v is None else v
+            if v is None:
+                return None
+            return label, v
         try:
             v = float(raw or 0) if field.field_type == "value" else float(raw)
         except (TypeError, ValueError):
-            v = 0.0
+            return None
         return label, v
     v = extract_number(raw, value_path)
-    return label, 0.0 if v is None else v
+    if v is None:
+        return None
+    return label, v
 
 
 def _chart_max(db, config) -> float:
@@ -1356,7 +1379,7 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
             raw = state.get("value", False)
         return {
             "display": display, "name": field.name,
-            "value": bool(raw),
+            "value": _coerce_toggle_value(raw),
             "field_id": field.id,
             "_tone_data": dict(snap),
         }
@@ -1370,9 +1393,10 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
         for raw in _config_field_slugs(config):
             slug, path = split_slug_path(raw)
             field = db.query(Field).filter(Field.slug == slug).first()
-            if not field or field.id in seen:
+            key = (field.id, path or "") if field else None
+            if not field or key in seen:
                 continue
-            seen.add(field.id)
+            seen.add(key)
             state = field.state or {}
             if field.field_type == "logbook":
                 entry = (
@@ -1440,7 +1464,7 @@ def _display_board(db, config, fields_snap=None):
                 "field_id": field.id,
                 "name": field.name,
                 "style": style,
-                "value": bool(raw),
+                "value": _coerce_toggle_value(raw),
             })
             continue
 

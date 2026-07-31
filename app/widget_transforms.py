@@ -53,6 +53,16 @@ def _as_number(raw):
     return None
 
 
+def _as_bool_literal(text: str):
+    """Map true/false/on/off/yes/no (case-insensitive) → bool; else None."""
+    key = (text or "").strip().lower()
+    if key in ("true", "on", "yes"):
+        return True
+    if key in ("false", "off", "no"):
+        return False
+    return None
+
+
 def _num_lit(v: float) -> str:
     """Embed a float as an AST-safe numeric literal."""
     if v != v:  # NaN
@@ -214,6 +224,7 @@ def series_from_json_array(
 
     if cutoff is not None:
         filtered = []
+        all_synthetic = True
         for pt in series:
             try:
                 ts = datetime.fromisoformat(pt["ts"].replace("Z", "+00:00"))
@@ -221,10 +232,14 @@ def series_from_json_array(
                 continue
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
+            if ts.year != 1970:
+                all_synthetic = False
             # Keep points with real timestamps inside the window; drop pure synthetic epoch-index
             # points that fall before cutoff (index-based 1970… usually filtered out).
             if ts >= cutoff:
                 filtered.append(pt)
+        if not filtered and series and all_synthetic:
+            return [], "Use Entries range (array has no timestamps)"
         return filtered, None
 
     return series, None
@@ -323,7 +338,7 @@ def eval_expr(expr: str, data: dict | None) -> float | None:
 
 
 def resolve_operand(expr: str, data: dict | None):
-    """Path → raw; else numeric expr; else string literal. Missing path → literal."""
+    """Path → raw; else numeric expr; else bool literal; else string literal. Missing path → literal."""
     text = (expr or "").strip()
     if not text:
         return None
@@ -335,11 +350,14 @@ def resolve_operand(expr: str, data: dict | None):
     num = eval_expr(text, data)
     if num is not None:
         return num
+    flag = _as_bool_literal(text)
+    if flag is not None:
+        return flag
     return text
 
 
 def eval_compare(left_expr: str, op: str, right_expr: str, data: dict | None) -> bool:
-    """Compare two operands. eq/neq allow strings; order ops require numbers."""
+    """Compare two operands. eq/neq allow strings/bools; order ops require numbers."""
     op_key = (op or "").strip().lower()
     fn = _COMPARE_OPS.get(op_key)
     if fn is None:
@@ -355,7 +373,23 @@ def eval_compare(left_expr: str, op: str, right_expr: str, data: dict | None) ->
             if left_n is None or right_n is None:
                 return False
             return bool(fn(left_n, right_n))
-        # eq / neq
+        # eq / neq — bools compare as bools (true/false literals already coerced)
+        if isinstance(left, bool) or isinstance(right, bool):
+            def _as_bool(v):
+                if isinstance(v, bool):
+                    return v
+                if isinstance(v, str):
+                    flag = _as_bool_literal(v)
+                    if flag is not None:
+                        return flag
+                n = _as_number(v)
+                if n is not None:
+                    return n != 0
+                return None
+            lb, rb = _as_bool(left), _as_bool(right)
+            if lb is None or rb is None:
+                return bool(fn(str(left), str(right)))
+            return bool(fn(lb, rb))
         if left_n is not None and right_n is not None:
             return bool(fn(left_n, right_n))
         return bool(fn(str(left), str(right)))

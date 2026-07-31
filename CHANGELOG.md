@@ -8,6 +8,30 @@ Versioning: [Semantic Versioning](https://semver.org/) on the `0.x` line. App ve
 
 While still on `0.x`, a **MINOR** bump may include breaking (wipe) changes; those are called out under **Breaking**. After `1.0.0`, breaks move to **MAJOR** only.
 
+## [0.1.1] — 2026-07-31
+
+Patch release. Tag: `v0.1.1`. No schema wipe.
+
+### Fixed
+
+- Multi-series graphs use a datetime x-axis (`{x,y}` points) instead of category null-padding, so staggered series no longer interfere
+- Visual rule conditions coerce `true`/`false`/`on`/`off`/`yes`/`no` so toggle Fields match via `fields.<slug>.value`
+- Widget tone rules coerce the same bool literals (toggle backgrounds / kv rules)
+- Data-field series with no real timestamps under Hours range surfaces an error (use Entries) instead of a blank chart
+- Empty series payloads no longer mount an empty Apex shell
+- Chart sources with a missing numeric extract are skipped (no fake `0.0` slices)
+- Table widget keeps multiple paths on the same Field; toggle string `"false"`/`"off"`/`"0"` reads as off
+- Series column `horizontal` uses proper bool config parsing
+
+### Changed
+
+- Config UI: source-count hints for multi/stacked/radar/polar styles; table Background control removed; toggle/board-toggle Background labeled “From on/off”
+- Help / conditions tip mention toggle Field paths and bool values
+
+### Added
+
+- Node pack check for multi-series datetime packing (`widget-charts-pack-check.js` + pytest)
+
 ## [0.1.0] — 2026-07-31
 
 Initial usable release. Tag: `v0.1.0`.

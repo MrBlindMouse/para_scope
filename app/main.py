@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     stop_scheduler()
 
 
-app = FastAPI(title="Para-Scope", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Para-Scope", version="0.1.1", lifespan=lifespan)
 
 # Last added = outermost: CSRF runs before Auth.
 app.add_middleware(AuthMiddleware)

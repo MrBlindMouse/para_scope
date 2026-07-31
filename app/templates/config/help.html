@@ -216,7 +216,7 @@
         <li><strong>Empty</strong> (no rows) — match all events that already passed source and event-type filters.</li>
         <li><strong>All must match</strong> — every condition row has to pass.</li>
         <li><strong>Missing or invalid data</strong> — for most operators, a missing field or bad value means the condition does <em>not</em> match. <strong>Not equal</strong> also matches when the field is missing.</li>
-        <li><strong>Nested values</strong> — use a simple name like <code>severity</code>, or a path like <code>status.code</code> if the event nests data. Conditions may also read Fields via <code>fields.&lt;slug&gt;.&lt;path&gt;</code> (for example <code>fields.temperature.value</code>). When a rule’s conditions use <code>fields.*</code>, matching sees a live Field snapshot — including writes by earlier rules in the same event. Rule order matters for that.</li>
+        <li><strong>Nested values</strong> — use a simple name like <code>severity</code>, or a path like <code>status.code</code> if the event nests data. Conditions may also read Fields via <code>fields.&lt;slug&gt;.&lt;path&gt;</code> (for example <code>fields.temperature.value</code>, or a toggle <code>fields.github_ok.value</code> equals <code>true</code>/<code>false</code>). When a rule’s conditions use <code>fields.*</code>, matching sees a live Field snapshot — including writes by earlier rules in the same event. Rule order matters for that.</li>
         <li><strong>List indexes</strong> — <code>data.0.id</code> reads a fixed position in a list.</li>
         <li><strong>Any list item</strong> — <code>data.*.status</code> matches if <em>any</em> element’s <code>status</code> matches. Several paths that share the same list (e.g. <code>data.*.base</code> and <code>data.*.quote</code>) must all match on the <em>same</em> element.</li>
         <li><strong>Actions and templates</strong> — when the rule’s conditions used <code>*</code>, the same list row is used for <code>*</code> in field keys and <code>{{ '{{…}}' }}</code> placeholders (<code>value.*.rate</code> is the matched pair’s rate). If conditions did not use <code>*</code>, <code>*</code> means the first item. Each action still runs once.</li>
@@ -230,7 +230,7 @@
         <tbody>
           <tr>
             <td>Equals (=)</td>
-            <td>Exact match (numbers compared as numbers when the value looks numeric)</td>
+            <td>Exact match (numbers and <code>true</code>/<code>false</code>/<code>on</code>/<code>off</code> coerced in the visual editor)</td>
           </tr>
           <tr>
             <td>Not equal (≠)</td>

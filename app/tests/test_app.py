@@ -2594,6 +2594,19 @@ class TestWidgetTransforms:
             [{"expr": "flit_health.status", "op": "eq", "compare": "ok", "tone": "positive"}],
             str_data,
         ) == "positive"
+        toggle = {"gate": {"value": True}}
+        assert eval_compare("gate.value", "eq", "true", toggle) is True
+        assert eval_compare("gate.value", "eq", "false", toggle) is False
+        assert eval_compare("gate.value", "eq", "on", toggle) is True
+        assert eval_compare("gate.value", "neq", "off", toggle) is True
+        assert resolve_tone_rules(
+            [{"expr": "gate.value", "op": "eq", "compare": "true", "tone": "positive"}],
+            toggle,
+        ) == "positive"
+        assert resolve_tone_rules(
+            [{"expr": "gate.value", "op": "eq", "compare": "false", "tone": "negative"}],
+            toggle,
+        ) == "neutral"
 
     def test_kv_template_math(self):
         from app.widgets import _render_kv_template
@@ -2775,6 +2788,15 @@ class TestWidgetTransforms:
             mapped = series_map["series"][0]["points"]
             assert [p["v"] for p in mapped] == [100.0, 200.0, 300.0]
             assert mapped[0]["ts"].startswith("2026-01-01")
+
+            blank_hours = fetch_widget_data("series", db, display="line", widget_config={
+                "sources": [{"field_slug": "sensor_pack.temps"}],
+                "range_mode": "hours",
+                "range_hours": 24,
+            })
+            assert blank_hours.get("error")
+            assert "Entries" in blank_hours["error"]
+            assert blank_hours.get("series") == []
 
             ok = validate_widget_bindings(db, [{
                 "type": "chart",

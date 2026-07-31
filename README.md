@@ -1,6 +1,6 @@
 # Para-Scope
 
-**Version 0.1.0** — see [CHANGELOG.md](CHANGELOG.md) and git tag `v0.1.0`.
+**Version 0.1.1** — see [CHANGELOG.md](CHANGELOG.md) and git tag `v0.1.1`.
 
 Self-hosted event hub and operational dashboard for personal or small-team infrastructure. Register **sources** (webhooks and/or scheduled polls), match events with **rules**, and run **actions** (update shared fields, notify, forward HTTP, browser push). A modular dashboard shows status, charts, clocks, and recent activity — without replacing Prometheus/Grafana or a full workflow engine like n8n.
 
