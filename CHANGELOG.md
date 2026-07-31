@@ -26,6 +26,10 @@ Initial usable release. Tag: `v0.1.0`.
 - Baseline release: start from an empty DB (or wipe `para_scope.db` / `.test_db.sqlite` including `-wal`/`-shm` if upgrading from pre-tag development).
 - `Rule.source_id` is required (no global rules).
 
+### Fixed
+
+- World-clock **Add timezone** no longer a no-op (editor normalize was dropping empty draft rows).
+
 ### Security / reliability
 
 - Fail-fast if `PARA_SCOPE_SECRET_KEY` is empty

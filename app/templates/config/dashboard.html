@@ -167,13 +167,13 @@
     else delete out.timezone;
     if (disp === "world_clock") {
       out.layout = out.layout === "row" ? "row" : "column";
+      // Keep empty draft rows so "Add timezone" can re-render a blank line;
+      // readWorldClocks / save still omit blanks.
       var clocks = Array.isArray(out.world_clocks) ? out.world_clocks.map(function (row) {
         return {
           label: ((row && row.label) || "").trim(),
           timezone: ((row && row.timezone) || "").trim()
         };
-      }).filter(function (row) {
-        return row.label || row.timezone;
       }) : [];
       out.world_clocks = clocks.length ? clocks : defs.world_clocks.slice();
     } else {
