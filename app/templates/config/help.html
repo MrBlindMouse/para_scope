@@ -76,7 +76,7 @@
           </tr>
           <tr>
             <td>Toggle</td>
-            <td>On/off state — actions can set Fixed or Switch.</td>
+            <td>On/off state — actions can set Fixed or Switch. Dashboard Toggle widgets can also derive On/Off from a Field expression (not only a Toggle Field).</td>
           </tr>
           <tr>
             <td>Data</td>
@@ -114,6 +114,9 @@
         The first segment is always the Field slug; the rest walks into that Field’s state
         or latest logbook entry. Series and charts require a path for logbook/data Fields
         (e.g. <code>my-log._poll.response_time_ms</code>).
+        The <strong>Toggle</strong> widget Field picker also accepts a compare expression
+        (e.g. <code>slug.path = ok</code> or <code>load.value &gt; 80</code>), evaluated
+        against the dashboard Field snapshot — On when the maths result is <code>1</code>.
       </p>
 
       <h3>Templates and expressions</h3>
@@ -368,9 +371,13 @@
         <li>Path (keeps objects/lists): <code>payload.sensor</code></li>
         <li>
           Maths: <code>temp * 1.8 + 32</code> or <code>1 / value.*.rate</code> —
-          ops <code>+ - * / %</code>, functions <code>abs</code>, <code>round</code>,
+          ops <code>+ - * / %</code>, compares <code>=</code> <code>!=</code>
+          <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code>
+          (also <code>==</code>; bare <code>=</code> means equal) returning <code>1</code> or <code>0</code>,
+          functions <code>abs</code>, <code>round</code>,
           <code>trunc</code>, <code>min</code>, <code>max</code>, <code>sum</code>, <code>avg</code>
           (variadic scalars, e.g. <code>sum(a, b, c)</code>).
+          String/bool compares are allowed for <code>=</code> / <code>!=</code>; order ops need numbers.
           In maths, <code>*</code> is the list row matched by the rule’s conditions (same as path-only).
         </li>
         <li>JSON shape (string leaves = path, maths, or literal text):</li>

@@ -771,7 +771,8 @@
         '<div class="card__body stack">';
       if (cellKind === "toggle") {
         html += '<div class="flex items-center gap flex-wrap">' +
-          slugInputHtml('data-bcell="field_slug"', (c.field_slug || "").trim()) +
+          slugInputHtml('data-bcell="field_slug"', (c.field_slug || "").trim(), "Field",
+            "toggle-slug or svc.status = ok") +
           reorderButtonsHtml("board-cell", i, cells.length) +
           '<button type="button" class="btn self-end" data-action="board-cell-remove">Remove</button>' +
           "</div>";
@@ -820,6 +821,11 @@
       cellKind,
       tone === "conditional" && cellKind === "kv_text"
     );
+    if (cellKind === "toggle") {
+      html += '<p class="text-muted text-xs">Toggle Field slug, or expression On when maths is <code>1</code> ' +
+        '(<code>=</code> <code>!=</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code>). ' +
+        'E.g. <code>myservice.status = ok</code>, <code>load.value &gt; 80</code>.</p>';
+    }
     return html;
   }
 
@@ -896,7 +902,12 @@
           html += toneRulesHtml(cfg.tone_rules);
         }
       } else if (disp === "toggle") {
-        html += slugInputHtml('data-cfg="field_slug"', (cfg.field_slug || "").trim());
+        html += slugInputHtml('data-cfg="field_slug"', (cfg.field_slug || "").trim(), "Field",
+          "toggle-slug or svc.status = ok");
+        html += '<p class="text-muted text-xs">Plain toggle Field → On/Off from bool. ' +
+          'Expression → On when maths result is <code>1</code>, Off when <code>0</code>. ' +
+          'Ops: <code>=</code> <code>!=</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code> (also <code>==</code>). ' +
+          'E.g. <code>myservice.status = ok</code>, <code>load.value &gt; 80</code>, <code>status != down</code>.</p>';
       } else if (disp === "table") {
         var slugList = Array.isArray(cfg.field_slugs)
           ? cfg.field_slugs.join(", ")

@@ -27,10 +27,13 @@ Patch release. Tag: `v0.1.1`. No schema wipe.
 
 - Config UI: source-count hints for multi/stacked/radar/polar styles; table Background control removed; toggle/board-toggle Background labeled “From on/off”
 - Help / conditions tip mention toggle Field paths and bool values
+- Maths (`eval_expr`) comparisons `=` `!=` `<` `>` `<=` `>=` (bare `=` means equal) return `1` or `0`; string/bool for equality ops, order ops need numbers
+- Toggle and board-toggle Field input accepts a compare/maths expression (On when result ≠ 0) as well as a classic toggle Field slug
 
 ### Added
 
 - Node pack check for multi-series datetime packing (`widget-charts-pack-check.js` + pytest)
+- Dashboard / Help copy for toggle Field expressions (e.g. `myservice.status = ok`, `load.value > 80`)
 
 ## [0.1.0] — 2026-07-31
 

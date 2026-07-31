@@ -1003,6 +1003,69 @@ class TestDotNotationUnify:
         finally:
             db.close()
 
+    def test_toggle_expr_on_off(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data, validate_widget_bindings
+
+        db = next(get_db())
+        try:
+            db.add(Field(
+                name="Svc", slug="myservice", field_type="data",
+                config={}, state={"status": "ok"},
+            ))
+            db.add(Field(
+                name="Load", slug="load", field_type="value",
+                config={}, state={"value": 90},
+            ))
+            db.add(Field(
+                name="Classic", slug="classic_tog", field_type="toggle",
+                config={}, state={"value": True},
+            ))
+            db.commit()
+
+            on = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "myservice.status = ok"},
+            )
+            assert on.get("error") is None
+            assert on["value"] is True
+
+            off = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "myservice.status != ok"},
+            )
+            assert off["value"] is False
+
+            gt = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "load.value > 80"},
+            )
+            assert gt["value"] is True
+
+            classic = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "classic_tog"},
+            )
+            assert classic["value"] is True
+
+            assert validate_widget_bindings(db, [{
+                "type": "display", "display": "toggle", "title": "Expr",
+                "config": {"field_slug": "myservice.status = ok"},
+            }]) is None
+            bad_slug = validate_widget_bindings(db, [{
+                "type": "display", "display": "toggle", "title": "Bad",
+                "config": {"field_slug": "unknown_slug.status = ok"},
+            }])
+            assert bad_slug and "wasn’t found" in bad_slug
+            err_plain = validate_widget_bindings(db, [{
+                "type": "display", "display": "toggle", "title": "Plain data",
+                "config": {"field_slug": "myservice"},
+            }])
+            assert err_plain and "expression" in err_plain.lower()
+        finally:
+            db.close()
+
     def test_table_keeps_same_field_different_paths(self, authenticated_client):
         from app.database import get_db
         from app.models import Field

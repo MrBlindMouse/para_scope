@@ -131,6 +131,27 @@ def test_eval_expr_richer_maths():
     assert eval_expr("__import__('os')", nd) is None
 
 
+def test_eval_expr_compares():
+    from app.widget_transforms import eval_expr
+
+    data = {
+        "a": {"status": "ok"},
+        "x": {"value": 3},
+        "gate": {"value": True},
+    }
+    assert eval_expr("a.status = ok", data) == 1.0
+    assert eval_expr("a.status != down", data) == 1.0
+    assert eval_expr("a.status = down", data) == 0.0
+    assert eval_expr("a.status != ok", data) == 0.0
+    assert eval_expr("x.value > 2", data) == 1.0
+    assert eval_expr("x.value < 2", data) == 0.0
+    assert eval_expr("x.value >= 3", data) == 1.0
+    assert eval_expr("x.value <= 2", data) == 0.0
+    assert eval_expr("gate.value = true", data) == 1.0
+    assert eval_expr("1+1", data) == 2.0
+    assert eval_expr("a.status > ok", data) is None  # order on strings
+
+
 def test_eval_expr_trunc_sum_avg():
     from app.widget_transforms import eval_expr
 

@@ -37,6 +37,65 @@ _PATH_TOKEN_RE = re.compile(
 )
 _TEMPLATE_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
 _NUMERIC_OPS = frozenset({"gt", "lt", "gte", "lte"})
+# Bare ``=`` → ``==``; leave ``==`` ``!=`` ``<=`` ``>=`` alone.
+_BARE_EQ_RE = re.compile(r"(?<![!<>=])=(?!=)")
+_COMPARE_MARK_RE = re.compile(r"==|!=|<=|>=|<|>")
+_EXPR_MARK_RE = re.compile(r"[=!<>+\-*/%()]")
+# Plain Field picker: slug (hyphens allowed) or slug.path — not maths/compare.
+_PLAIN_FIELD_REF_RE = re.compile(
+    r"^[a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9_*]+)*$"
+)
+_AST_COMPARE = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.Gt: operator.gt,
+    ast.LtE: operator.le,
+    ast.GtE: operator.ge,
+}
+_ORDER_COMPARE = frozenset({ast.Lt, ast.Gt, ast.LtE, ast.GtE})
+
+
+def looks_like_expr(text: str) -> bool:
+    """True when ``text`` has compare/arithmetic markers (not a plain slug.path)."""
+    text = (text or "").strip()
+    if not text or _PLAIN_FIELD_REF_RE.fullmatch(text):
+        return False
+    return bool(_EXPR_MARK_RE.search(text))
+
+
+def _normalize_bare_eq(text: str) -> str:
+    return _BARE_EQ_RE.sub("==", text)
+
+
+def expr_required_slugs(text: str) -> list[str]:
+    """Field slug heads that must exist (dotted paths; else first identifier)."""
+    text = text or ""
+    required = []
+    seen = set()
+    for m in _PATH_TOKEN_RE.finditer(text):
+        token = m.group(0)
+        if token in _CALL_FUNCS:
+            after = text[m.end() :].lstrip()
+            if after.startswith("("):
+                continue
+        if "." not in token:
+            continue
+        head = token.split(".", 1)[0]
+        if head not in seen:
+            seen.add(head)
+            required.append(head)
+    if required:
+        return required
+    for m in _PATH_TOKEN_RE.finditer(text):
+        token = m.group(0)
+        if token in _CALL_FUNCS:
+            after = text[m.end() :].lstrip()
+            if after.startswith("("):
+                continue
+        head = token.split(".", 1)[0]
+        return [head]
+    return []
 
 
 def _as_number(raw):
@@ -245,9 +304,92 @@ def series_from_json_array(
     return series, None
 
 
+def _attr_path(node: ast.AST) -> str | None:
+    parts = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if not isinstance(cur, ast.Name):
+        return None
+    parts.append(cur.id)
+    return ".".join(reversed(parts))
+
+
+def _eval_compare_operand(node, data: dict):
+    """Resolve a Compare side to a raw Python value (number, str, bool, …)."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or isinstance(node.value, (int, float, str)):
+            if isinstance(node.value, bool):
+                return node.value
+            if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+                return float(node.value)
+            return node.value
+        raise ValueError("bad constant")
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return -float(_eval_compare_operand(node.operand, data))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd):
+        return float(_eval_compare_operand(node.operand, data))
+    if isinstance(node, (ast.BinOp, ast.Call)):
+        return float(_eval_ast(node, data))
+    if isinstance(node, ast.Name):
+        raw = get_by_path(data, node.id)
+        if raw is not None:
+            return raw
+        flag = _as_bool_literal(node.id)
+        if flag is not None:
+            return flag
+        return node.id  # bare word → string literal (ok, down, …)
+    if isinstance(node, ast.Attribute):
+        path = _attr_path(node)
+        if not path:
+            raise ValueError("bad attr")
+        raw = get_by_path(data, path)
+        if raw is None:
+            raise ValueError("missing path")
+        return raw
+    raise ValueError("disallowed compare operand")
+
+
+def _compare_values(left, right, op_type) -> bool:
+    fn = _AST_COMPARE.get(op_type)
+    if fn is None:
+        raise ValueError("bad compare op")
+    if isinstance(left, bool) or isinstance(right, bool):
+        def _as_bool(v):
+            if isinstance(v, bool):
+                return v
+            if isinstance(v, str):
+                flag = _as_bool_literal(v)
+                if flag is not None:
+                    return flag
+            n = _as_number(v)
+            if n is not None:
+                return n != 0
+            return None
+        lb, rb = _as_bool(left), _as_bool(right)
+        if lb is None or rb is None:
+            if op_type in (ast.Eq, ast.NotEq):
+                return bool(fn(str(left), str(right)))
+            raise ValueError("order on non-numeric")
+        return bool(fn(lb, rb))
+    left_n, right_n = _as_number(left), _as_number(right)
+    if left_n is not None and right_n is not None:
+        return bool(fn(left_n, right_n))
+    if op_type in _ORDER_COMPARE:
+        raise ValueError("order on non-numeric")
+    return bool(fn(str(left), str(right)))
+
+
 def _eval_ast(node, data: dict):
     if isinstance(node, ast.Expression):
         return _eval_ast(node.body, data)
+    if isinstance(node, ast.Compare):
+        if len(node.ops) != 1 or len(node.comparators) != 1:
+            raise ValueError("chained compare")
+        left = _eval_compare_operand(node.left, data)
+        right = _eval_compare_operand(node.comparators[0], data)
+        return 1.0 if _compare_values(left, right, type(node.ops[0])) else 0.0
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
             return float(node.value)
@@ -300,16 +442,9 @@ def _eval_ast(node, data: dict):
             raise ValueError("missing name")
         return float(raw)
     if isinstance(node, ast.Attribute):
-        # dotted path built from Attribute chain → "a.b.c"
-        parts = []
-        cur = node
-        while isinstance(cur, ast.Attribute):
-            parts.append(cur.attr)
-            cur = cur.value
-        if not isinstance(cur, ast.Name):
+        path = _attr_path(node)
+        if not path:
             raise ValueError("bad attr")
-        parts.append(cur.id)
-        path = ".".join(reversed(parts))
         raw = get_by_path(data, path)
         if raw is None:
             raise ValueError("missing path")
@@ -318,16 +453,21 @@ def _eval_ast(node, data: dict):
 
 
 def eval_expr(expr: str, data: dict | None) -> float | None:
-    """Evaluate a safe arithmetic expression against ``data``. Fail-closed.
+    """Evaluate a safe arithmetic/compare expression against ``data``. Fail-closed.
 
     Path tokens (including starred segments like ``value.*.rate``) are resolved
-    via ``get_by_path`` before AST eval so rule star bindings apply.
+    via ``get_by_path``. Comparisons (``=`` ``!=`` ``<`` ``>`` ``<=`` ``>=``)
+    return ``1.0`` or ``0.0``. Bare ``=`` means equal.
     """
     text = (expr or "").strip()
     if not text:
         return None
     data = data or {}
     try:
+        text = _normalize_bare_eq(text)
+        if _COMPARE_MARK_RE.search(text):
+            tree = ast.parse(text, mode="eval")
+            return float(_eval_ast(tree, data))
         rewritten = _subst_path_tokens(text, data)
         if rewritten is None:
             return None

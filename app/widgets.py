@@ -7,7 +7,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.fields import get_by_path
 from app.widget_transforms import (
+    eval_expr,
+    expr_required_slugs,
     extract_number,
+    looks_like_expr,
     render_data_template,
     resolve_tone_rules,
     series_from_json_array,
@@ -564,6 +567,11 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
                     if board_kind == "kv_text":
                         continue  # template-only entry
                     return f"{label}: pick at least one field"
+                if board_kind == "toggle":
+                    err = _validate_toggle_field_input(label, slug_raw, fields_by_slug)
+                    if err:
+                        return err
+                    continue
                 slug, _ = split_slug_path(slug_raw)
                 field = fields_by_slug.get(slug)
                 if field is None:
@@ -590,6 +598,11 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
         if not slug_raw:
             if required:
                 return f"{label}: choose a field"
+            continue
+        if kind == "display" and disp == "toggle":
+            err = _validate_toggle_field_input(label, slug_raw, fields_by_slug)
+            if err:
+                return err
             continue
         slug, _ = split_slug_path(slug_raw)
         field = fields_by_slug.get(slug)
@@ -873,6 +886,75 @@ def _coerce_toggle_value(raw) -> bool:
     if isinstance(raw, (int, float)):
         return raw != 0
     return bool(raw)
+
+
+def _validate_toggle_field_input(label: str, raw: str, fields_by_slug: dict) -> str | None:
+    """Validate toggle widget/cell Field input (slug or maths compare expression)."""
+    text = (raw or "").strip()
+    if not text:
+        return f"{label}: choose a field"
+    if looks_like_expr(text):
+        heads = expr_required_slugs(text)
+        if not heads:
+            return f"{label}: choose a field"
+        for head in heads:
+            if head not in fields_by_slug:
+                return f"{label}: that field wasn’t found"
+        return None
+    slug, _ = split_slug_path(text)
+    field = fields_by_slug.get(slug)
+    if field is None:
+        return f"{label}: that field wasn’t found"
+    if field.field_type != "toggle":
+        return (
+            f"{label}: use a toggle Field, or an expression "
+            f"(e.g. {slug}.status = ok)"
+        )
+    return None
+
+
+def _toggle_on_from_input(raw_input: str, snap: dict, db=None):
+    """Return (on: bool|None, name: str, field_id, error: str|None)."""
+    from app.models import Field
+
+    text = (raw_input or "").strip()
+    snap = snap if isinstance(snap, dict) else {}
+    if not text:
+        return None, "", None, "Choose a field"
+
+    if looks_like_expr(text):
+        v = eval_expr(text, snap)
+        if v is None:
+            return None, "", None, "Expression did not evaluate"
+        name = ""
+        field_id = None
+        heads = expr_required_slugs(text)
+        if heads and db is not None:
+            field = db.query(Field).filter(Field.slug == heads[0]).first()
+            if field is not None:
+                name = field.name
+                field_id = field.id
+        return (v != 0), name, field_id, None
+
+    slug, path = split_slug_path(text)
+    field = None
+    if db is not None and slug:
+        field = db.query(Field).filter(Field.slug == slug).first()
+    if field is None:
+        return None, "", None, "Choose a field"
+    if field.field_type != "toggle":
+        return (
+            None,
+            field.name,
+            field.id,
+            "Use a toggle Field, or an expression (e.g. slug.status = ok)",
+        )
+    state = field.state or {}
+    if path:
+        raw = get_by_path(state, path)
+    else:
+        raw = state.get("value", False)
+    return _coerce_toggle_value(raw), field.name, field.id, None
 
 
 def _clock_timezone_name(raw: str | None) -> str:
@@ -1366,21 +1448,15 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
         }
 
     if display == "toggle":
-        field = resolve_field(db, config)
-        if field is None:
-            return {"display": display, "error": "Choose a field"}
-        if field.field_type != "toggle":
-            return {"display": display, "error": "This display needs a toggle field", "name": field.name}
-        _, path = split_slug_path(_config_field_slug(config))
-        state = field.state or {}
-        if path:
-            raw = get_by_path(state, path)
-        else:
-            raw = state.get("value", False)
+        on, name, field_id, err = _toggle_on_from_input(
+            _config_field_slug(config), snap, db=db,
+        )
+        if err:
+            return {"display": display, "error": err, "name": name}
         return {
-            "display": display, "name": field.name,
-            "value": _coerce_toggle_value(raw),
-            "field_id": field.id,
+            "display": display, "name": name,
+            "value": bool(on),
+            "field_id": field_id,
             "_tone_data": dict(snap),
         }
 
@@ -1451,20 +1527,17 @@ def _display_board(db, config, fields_snap=None):
         field = resolve_field(db, cell)
 
         if cell_kind == "toggle":
-            if field is None or field.field_type != "toggle":
+            on, name, field_id, err = _toggle_on_from_input(
+                _config_field_slug(cell), snap, db=db,
+            )
+            if err or on is None:
                 continue
-            _, path = split_slug_path(_config_field_slug(cell))
-            state = field.state or {}
-            if path:
-                raw = get_by_path(state, path)
-            else:
-                raw = state.get("value", False)
             items.append({
                 "kind": "toggle",
-                "field_id": field.id,
-                "name": field.name,
+                "field_id": field_id,
+                "name": name or "Toggle",
                 "style": style,
-                "value": _coerce_toggle_value(raw),
+                "value": bool(on),
             })
             continue
 
