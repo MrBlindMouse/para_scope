@@ -1,8 +1,8 @@
-Version: 0.1  
+Version: 0.1.0  
 
-Date: 2026-07-17 (updated 2026-07-30: fixed SQLite/auth/rule scope and dashboard-trigger design)
+Date: 2026-07-17 (updated 2026-07-31: v0.1.0 baseline tagged)
 
-Status: Living design. **AGENTS.md** is the ops contract for agents; this document is vision plus an explicit shipped-vs-planned split below.
+Status: Living design. **AGENTS.md** is the ops contract for agents; this document is vision plus an explicit shipped-vs-planned split below. Releases: git tags + [CHANGELOG.md](CHANGELOG.md). Trunk-based on `main`; SemVer; wipe/recreate over migrations (see README Versioning).
 
 ### 0. Shipped in v0.1 vs Planned
 
@@ -347,4 +347,4 @@ Internal events can be treated like any other source so the same pipeline can al
 - ✅ Configuration is performed through the UI.
 - ✅ The entire system runs from a git clone + virtualenv with minimal ceremony.
 - ✅ Strong session authentication protects the dashboard.
-- ⏳ Adding a simple new action or poller is documented and straightforward (registration hooks exist; richer guides planned).
+- ✅ Adding a simple new action or poller is documented ([docs/authoring.md](docs/authoring.md)).

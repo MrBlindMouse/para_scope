@@ -29,6 +29,13 @@ Tests use a real SQLite DB (`.test_db.sqlite`) — remove it between runs if sch
 - **Keep extensions built-in** — use `register_action` / `register_poller`; no plugin discovery or Python entry-point loading.
 - **Clean breaks over legacy** — prefer wipe/recreate and breaking changes over compatibility shims, dual-path code, or migration frameworks (schema, config shape, APIs). When a change is breaking, **warn the user clearly**: what breaks, what to wipe or reconfigure (`para_scope.db`, `.test_db.sqlite`, env, dashboard layout, etc.).
 
+## Versioning
+
+- **Source of truth:** `app/main.py` → `FastAPI(..., version="X.Y.Z")`. Keep [CHANGELOG.md](CHANGELOG.md) and [DESIGN.md](DESIGN.md) in sync when cutting a release.
+- **Workflow:** develop on `main` (short-lived feature branches OK). Cut a release by bumping the version string, updating CHANGELOG, committing, then `git tag vX.Y.Z` and pushing the tag. No long-lived `release/*` branches unless backporting a fix to an old tag.
+- **SemVer on `0.x`:** PATCH = no schema/API-shape break; MINOR = additive or (when necessary) documented wipe; breaking changes must lead the CHANGELOG **Breaking** section. Do not invent dual-path compatibility.
+- **Before tagging:** `pytest app/tests/ -v` green. Any `models.py` (or session/cookie/template-semantics) change is a wipe warning in CHANGELOG + README upgrade notes.
+
 ## Architecture
 Single-process FastAPI app. SQLite only, no migrations, no Docker. Everything is DB-backed config with HTMX-driven UI.
 

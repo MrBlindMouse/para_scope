@@ -1,5 +1,7 @@
 # Para-Scope
 
+**Version 0.1.0** — see [CHANGELOG.md](CHANGELOG.md) and git tag `v0.1.0`.
+
 Self-hosted event hub and operational dashboard for personal or small-team infrastructure. Register **sources** (webhooks and/or scheduled polls), match events with **rules**, and run **actions** (update shared fields, notify, forward HTTP, browser push). A modular dashboard shows status, charts, clocks, and recent activity — without replacing Prometheus/Grafana or a full workflow engine like n8n.
 
 - **Sources** — webhook receivers (HMAC, Stripe, GitHub, Slack, Discord, PayPal) and scheduled pollers
@@ -411,14 +413,32 @@ python create_user.py
 
 ### 9. Upgrade flow
 
+Read [CHANGELOG.md](CHANGELOG.md) for the target tag **before** upgrading. If the release lists a **Breaking** wipe, back up then remove `para_scope.db` (and `-wal`/`-shm`) — config and event history are not migrated. Keep the same `PARA_SCOPE_SECRET_KEY` only when you keep the same encrypted-secret DB; after a wipe, a new key is fine.
+
 ```bash
 sudo systemctl stop para-scope
 sudo -u parascope -H bash -lc '
 set -e
 cd /opt/para-scope
-git pull --ff-only
+git fetch --tags
+git checkout v0.1.0   # or: git pull --ff-only on main
 uv pip install -r requirements.txt -p .venv
+# if CHANGELOG says wipe: rm -f para_scope.db para_scope.db-wal para_scope.db-shm
 '
 sudo systemctl start para-scope
 sudo systemctl status para-scope
 ```
+
+Pin production to a tag (`git checkout v0.1.0`) if you want a known-good revision; follow `main` only if you accept unreleased changes.
+
+## Versioning
+
+Trunk-based development on `main`. Releases are SemVer **git tags** (`vMAJOR.MINOR.PATCH`). The app version string lives in `app/main.py`.
+
+| Change | Typical bump | Operator |
+|--------|--------------|----------|
+| Bugfix / docs / no schema change | PATCH | Pull or checkout tag; keep DB |
+| Additive features (new poller/action/widget); models unchanged | MINOR | Same; keep DB |
+| Model / session / template-semantics break | MINOR while on `0.x` (called out), else MAJOR | Wipe DB / reconfigure per CHANGELOG |
+
+No long-lived version branches unless a security backport to an old tag is required. Compatibility goal: **no silent breaks** — wipe/recreate is intentional; dual-path shims and migration frameworks are not.
