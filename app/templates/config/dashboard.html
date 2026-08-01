@@ -198,7 +198,7 @@
     ["positive", "Green"], ["negative", "Red"], ["neutral", "Blue"]
   ];
   var BOARD_CELL_KINDS = [
-    {id: "toggle", title: "Toggle", field_types: ["toggle"],
+    {id: "toggle", title: "Toggle", field_types: null,
       styles: [["text_color", "On/Off text"], ["led", "Green/Red light"], ["badge", "Badge"], ["switch", "Switch"]]},
     {id: "kv_text", title: "Key / text", field_types: null,
       styles: [["plain", "Plain"], ["mono", "Monospace"], ["callout", "Callout"]]}
@@ -772,7 +772,7 @@
       if (cellKind === "toggle") {
         html += '<div class="flex items-center gap flex-wrap">' +
           slugInputHtml('data-bcell="field_slug"', (c.field_slug || "").trim(), "Field",
-            "toggle-slug or svc.status = ok") +
+            "slug.path or svc.status = ok") +
           reorderButtonsHtml("board-cell", i, cells.length) +
           '<button type="button" class="btn self-end" data-action="board-cell-remove">Remove</button>' +
           "</div>";
@@ -822,9 +822,9 @@
       tone === "conditional" && cellKind === "kv_text"
     );
     if (cellKind === "toggle") {
-      html += '<p class="text-muted text-xs">Toggle Field slug, or expression On when maths is <code>1</code> ' +
+      html += '<p class="text-muted text-xs">Any Field: toggle slug, logbook/data path (latest entry), or expression On when maths is <code>1</code> ' +
         '(<code>=</code> <code>!=</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code>). ' +
-        'E.g. <code>myservice.status = ok</code>, <code>load.value &gt; 80</code>.</p>';
+        'E.g. <code>checks.ok</code>, <code>myservice.status = ok</code>, <code>load.value &gt; 80</code>.</p>';
     }
     return html;
   }
@@ -903,11 +903,12 @@
         }
       } else if (disp === "toggle") {
         html += slugInputHtml('data-cfg="field_slug"', (cfg.field_slug || "").trim(), "Field",
-          "toggle-slug or svc.status = ok");
-        html += '<p class="text-muted text-xs">Plain toggle Field → On/Off from bool. ' +
-          'Expression → On when maths result is <code>1</code>, Off when <code>0</code>. ' +
-          'Ops: <code>=</code> <code>!=</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code> (also <code>==</code>). ' +
-          'E.g. <code>myservice.status = ok</code>, <code>load.value &gt; 80</code>, <code>status != down</code>.</p>';
+          "slug.path or svc.status = ok");
+        html += '<p class="text-muted text-xs">Toggle/value/text slug → On/Off from bool. ' +
+          'Logbook/data need a path into the latest entry (e.g. <code>checks.ok</code>). ' +
+          'Expression → On when maths is <code>1</code>. ' +
+          'Ops: <code>=</code> <code>!=</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code>. ' +
+          'E.g. <code>myservice.status = ok</code>, <code>load.value &gt; 80</code>.</p>';
       } else if (disp === "table") {
         var slugList = Array.isArray(cfg.field_slugs)
           ? cfg.field_slugs.join(", ")
@@ -1374,11 +1375,20 @@
 
   function fieldBySlug(raw) {
     var head = String(raw || "").trim().split(".")[0];
+    // Expression: "slug.path = ok" → head still "slug"
+    if (head) head = head.split(/\s/)[0];
     if (!head) return null;
     for (var i = 0; i < FIELDS.length; i++) {
       if (FIELDS[i].slug === head) return FIELDS[i];
     }
     return null;
+  }
+
+  function looksLikeExpr(text) {
+    var s = String(text || "").trim();
+    if (!s) return false;
+    if (/^[a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9_*]+)*$/.test(s)) return false;
+    return /[=!<>+\-*/%()]/.test(s);
   }
 
   function splitSlugPath(raw) {
@@ -1508,13 +1518,27 @@
             if (boardKind === "kv_text") continue;
             return {index: i, message: "Pick at least one field for “" + label + "”.", selector: focusSel};
           }
-          var fC = fieldBySlug(rawC);
+          if (boardKind === "toggle" && looksLikeExpr(rawC)) {
+            var fExpr = fieldBySlug(rawC);
+            if (!fExpr) {
+              return {index: i, message: "“" + rawC + "” isn’t an existing Field slug.", selector: focusSel};
+            }
+            continue;
+          }
+          var partsC = boardKind === "toggle" ? splitSlugPath(rawC) : {slug: rawC, path: null};
+          var fC = fieldBySlug(boardKind === "toggle" ? (partsC.slug || rawC) : rawC);
           if (!fC) {
             return {index: i, message: "“" + rawC + "” isn’t an existing Field slug.", selector: focusSel};
           }
           if (Array.isArray(boardAllowed) && boardAllowed.length &&
               boardAllowed.indexOf(fC.field_type) < 0) {
             return {index: i, message: "“" + fC.name + "” isn’t the right field type.", selector: focusSel};
+          }
+          if (boardKind === "toggle" && (fC.field_type === "logbook" || fC.field_type === "data") &&
+              !partsC.path) {
+            return {index: i,
+              message: "Append a path for “" + label + "” (e.g. " + fC.slug + ".ok).",
+              selector: focusSel};
           }
         }
         continue;
@@ -1545,6 +1569,25 @@
       if (!slugRaw) {
         if (required) {
           return {index: i, message: "Choose a field for “" + label + "”.", selector: focusSel};
+        }
+        continue;
+      }
+      if (w.type === "display" && disp === "toggle") {
+        if (looksLikeExpr(slugRaw)) {
+          if (!fieldBySlug(slugRaw)) {
+            return {index: i, message: "“" + slugRaw + "” isn’t an existing Field slug.", selector: focusSel};
+          }
+          continue;
+        }
+        var partsTog = splitSlugPath(slugRaw);
+        var fTog = fieldBySlug(partsTog.slug || slugRaw);
+        if (!fTog) {
+          return {index: i, message: "“" + slugRaw + "” isn’t an existing Field slug.", selector: focusSel};
+        }
+        if ((fTog.field_type === "logbook" || fTog.field_type === "data") && !partsTog.path) {
+          return {index: i,
+            message: "Append a path for “" + label + "” (e.g. " + fTog.slug + ".ok).",
+            selector: focusSel};
         }
         continue;
       }

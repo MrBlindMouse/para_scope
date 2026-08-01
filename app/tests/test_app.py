@@ -3227,17 +3227,16 @@ class TestWidgetTransforms:
             db.close()
 
 
-    def test_save_dashboard_rejects_toggle_wrong_field(self, authenticated_client):
+    def test_save_dashboard_rejects_toggle_bare_logbook(self, authenticated_client):
         from app.database import get_db
         from app.models import Field, DashboardLayout
-        from app.dashboard_layout import parse_layout_config
 
         db = next(get_db())
         try:
-            if not db.query(Field).filter(Field.slug == "c-bad-tog").first():
+            if not db.query(Field).filter(Field.slug == "c-bad-lb").first():
                 db.add(Field(
-                    name="Bad Toggle Counter", slug="c-bad-tog",
-                    field_type="value", config={}, state={"value": 0},
+                    name="Bad Toggle Logbook", slug="c-bad-lb",
+                    field_type="logbook", config={"max_entries": 20}, state={},
                 ))
             keep_payload = {
                 "widgets": [{
@@ -3256,7 +3255,7 @@ class TestWidgetTransforms:
             db.close()
         widgets = [{
             "type": "display", "display": "toggle", "title": "Bad Toggle Draft",
-            "config": {"field_slug": "c-bad-tog", "style": "led"},
+            "config": {"field_slug": "c-bad-lb", "style": "led"},
         }]
         resp = authenticated_client.post(
             "/config/dashboard",
@@ -3265,16 +3264,16 @@ class TestWidgetTransforms:
         )
         assert resp.status_code == 400
         assert b"Bad Toggle Draft" in resp.content
-        assert b"compatible" in resp.content.lower() or b"toggle" in resp.content.lower()
+        assert b"path" in resp.content.lower()
         assert b'id="widgets-error"' in resp.content
 
         db = next(get_db())
         try:
             saved = db.query(DashboardLayout).filter(DashboardLayout.id == keep_id).first()
             assert saved is not None
-            titles = [w.get("title") for w in parse_layout_config(saved.layout_config)["widgets"]]
-            assert "Keep Me" in titles
-            assert "Bad Toggle Draft" not in titles
+            widgets_saved = (saved.layout_config or {}).get("widgets") or []
+            assert any(w.get("title") == "Keep Me" for w in widgets_saved)
+            assert not any(w.get("title") == "Bad Toggle Draft" for w in widgets_saved)
         finally:
             db.close()
 

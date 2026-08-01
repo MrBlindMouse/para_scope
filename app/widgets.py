@@ -209,7 +209,7 @@ WIDGET_BINDINGS = {
             },
             "toggle": {
                 "cardinality": "single",
-                "field_types": ("toggle",),
+                "field_types": None,  # any Field; logbook/data need a path
                 "config_key": "field_slug",
                 "required": True,
             },
@@ -317,7 +317,7 @@ WIDGET_TONES = ("none", "conditional")
 
 BOARD_CELL_KINDS = ("toggle", "kv_text")
 BOARD_CELL_FIELD_TYPES = {
-    "toggle": ("toggle",),
+    "toggle": None,  # any Field; logbook/data need a path
     "kv_text": None,  # any
 }
 
@@ -889,7 +889,7 @@ def _coerce_toggle_value(raw) -> bool:
 
 
 def _validate_toggle_field_input(label: str, raw: str, fields_by_slug: dict) -> str | None:
-    """Validate toggle widget/cell Field input (slug or maths compare expression)."""
+    """Validate toggle widget/cell Field input (slug/path or maths expression)."""
     text = (raw or "").strip()
     if not text:
         return f"{label}: choose a field"
@@ -901,14 +901,14 @@ def _validate_toggle_field_input(label: str, raw: str, fields_by_slug: dict) -> 
             if head not in fields_by_slug:
                 return f"{label}: that field wasn’t found"
         return None
-    slug, _ = split_slug_path(text)
+    slug, path = split_slug_path(text)
     field = fields_by_slug.get(slug)
     if field is None:
         return f"{label}: that field wasn’t found"
-    if field.field_type != "toggle":
+    if field.field_type in ("logbook", "data") and not path:
         return (
-            f"{label}: use a toggle Field, or an expression "
-            f"(e.g. {slug}.status = ok)"
+            f"{label}: append a path for logbook/data "
+            f"(e.g. {slug}.ok or {slug}.status = ok)"
         )
     return None
 
@@ -942,18 +942,20 @@ def _toggle_on_from_input(raw_input: str, snap: dict, db=None):
         field = db.query(Field).filter(Field.slug == slug).first()
     if field is None:
         return None, "", None, "Choose a field"
-    if field.field_type != "toggle":
+    if field.field_type in ("logbook", "data") and not path:
         return (
             None,
             field.name,
             field.id,
-            "Use a toggle Field, or an expression (e.g. slug.status = ok)",
+            f"Append a path for logbook/data (e.g. {slug}.ok)",
         )
-    state = field.state or {}
+    payload = snap.get(slug)
+    if not isinstance(payload, dict):
+        payload = dict(field.state or {}) if field.field_type != "logbook" else {}
     if path:
-        raw = get_by_path(state, path)
+        raw = get_by_path(payload, path)
     else:
-        raw = state.get("value", False)
+        raw = payload.get("value", False)
     return _coerce_toggle_value(raw), field.name, field.id, None
 
 

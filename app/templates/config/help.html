@@ -76,7 +76,7 @@
           </tr>
           <tr>
             <td>Toggle</td>
-            <td>On/off state — actions can set Fixed or Switch. Dashboard Toggle widgets can also derive On/Off from a Field expression (not only a Toggle Field).</td>
+            <td>On/off state — actions can set Fixed or Switch. Dashboard Toggle widgets can also bind any Field (path into latest logbook/data entry, or a compare expression), not only a Toggle Field.</td>
           </tr>
           <tr>
             <td>Data</td>
@@ -114,7 +114,8 @@
         The first segment is always the Field slug; the rest walks into that Field’s state
         or latest logbook entry. Series and charts require a path for logbook/data Fields
         (e.g. <code>my-log._poll.response_time_ms</code>).
-        The <strong>Toggle</strong> widget Field picker also accepts a compare expression
+        The <strong>Toggle</strong> widget Field picker accepts a toggle/value/text slug, a path into the
+        latest logbook or data Field (e.g. <code>checks.ok</code>), or a compare expression
         (e.g. <code>slug.path = ok</code> or <code>load.value &gt; 80</code>), evaluated
         against the dashboard Field snapshot — On when the maths result is <code>1</code>.
       </p>

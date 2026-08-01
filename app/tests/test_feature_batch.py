@@ -1062,7 +1062,64 @@ class TestDotNotationUnify:
                 "type": "display", "display": "toggle", "title": "Plain data",
                 "config": {"field_slug": "myservice"},
             }])
-            assert err_plain and "expression" in err_plain.lower()
+            assert err_plain and "path" in err_plain.lower()
+        finally:
+            db.close()
+
+    def test_toggle_logbook_path(self, authenticated_client):
+        from datetime import datetime, timezone
+
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+        from app.widgets import fetch_widget_data, validate_widget_bindings
+
+        db = next(get_db())
+        try:
+            lb = Field(
+                name="Checks", slug="checks_lb", field_type="logbook",
+                config={"max_entries": 20}, state={},
+            )
+            db.add(lb)
+            db.flush()
+            db.add(FieldLogEntry(
+                field_id=lb.id,
+                timestamp=datetime.now(timezone.utc),
+                value={"ok": True, "status": "up"},
+            ))
+            db.add(Field(
+                name="Classic2", slug="classic_tog2", field_type="toggle",
+                config={}, state={"value": False},
+            ))
+            db.commit()
+
+            on = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "checks_lb.ok"},
+            )
+            assert on.get("error") is None
+            assert on["value"] is True
+
+            expr = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "checks_lb.status = up"},
+            )
+            assert expr["value"] is True
+
+            classic = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "classic_tog2"},
+            )
+            assert classic["value"] is False
+
+            assert validate_widget_bindings(db, [{
+                "type": "display", "display": "toggle", "title": "LB",
+                "config": {"field_slug": "checks_lb.ok"},
+            }]) is None
+            bare = validate_widget_bindings(db, [{
+                "type": "display", "display": "toggle", "title": "Bare LB",
+                "config": {"field_slug": "checks_lb"},
+            }])
+            assert bare and "path" in bare.lower()
         finally:
             db.close()
 
