@@ -1120,6 +1120,23 @@ class TestDotNotationUnify:
                 "config": {"field_slug": "checks_lb"},
             }])
             assert bare and "path" in bare.lower()
+
+            db.add(FieldLogEntry(
+                field_id=lb.id,
+                timestamp=datetime.now(timezone.utc),
+                value={"value": [{"rate": 19.5}]},
+            ))
+            db.commit()
+            assert validate_widget_bindings(db, [{
+                "type": "display", "display": "toggle", "title": "Inv",
+                "config": {"field_slug": "1 / checks_lb.value.0.rate"},
+            }]) is None
+            inv = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "1 / checks_lb.value.0.rate"},
+            )
+            assert inv.get("error") is None
+            assert inv["value"] is True  # nonzero → On
         finally:
             db.close()
 

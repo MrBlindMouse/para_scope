@@ -2564,6 +2564,13 @@ class TestWidgetTransforms:
         assert series_from_points([(ts, 1.5)], value_path="value") == [
             {"ts": ts.isoformat(), "v": 1.5}
         ]
+        inv = series_from_points(
+            [(ts, {"value": [{"rate": 20.0}]})],
+            expr="1 / fx.value.0.rate",
+            field_slug="fx",
+        )
+        assert len(inv) == 1
+        assert inv[0]["v"] == pytest.approx(0.05)
 
     def test_eval_expr_and_compare(self):
         from app.widget_transforms import eval_expr, eval_compare, resolve_tone_rules
@@ -2938,6 +2945,76 @@ class TestWidgetTransforms:
             assert len(ldata["entries"]) == 2
             assert ldata["entries"][0]["text"] == "rt 500"
             assert ldata["entries"][1]["text"] == "rt 250"
+        finally:
+            db.close()
+
+    def test_series_and_chart_field_maths(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field, FieldLogEntry
+        from app.widgets import fetch_widget_data, validate_widget_bindings
+
+        db = next(get_db())
+        try:
+            field = Field(
+                name="FX Log", slug="fx_math", field_type="logbook",
+                config={"max_entries": 50}, state={},
+            )
+            db.add(field)
+            db.flush()
+            now = datetime.now(timezone.utc)
+            db.add(FieldLogEntry(
+                field_id=field.id, timestamp=now - timedelta(minutes=10),
+                value={"value": [{"rate": 20.0}]},
+            ))
+            db.add(FieldLogEntry(
+                field_id=field.id, timestamp=now - timedelta(minutes=5),
+                value={"value": [{"rate": 10.0}]},
+            ))
+            data_f = Field(
+                name="Arr", slug="arr_math", field_type="data",
+                config={}, state={"samples": [{"ms": 1}, {"ms": 2}]},
+            )
+            db.add(data_f)
+            db.commit()
+
+            plain = fetch_widget_data("series", db, display="line", widget_config={
+                "sources": [{"field_slug": "fx_math.value.0.rate"}],
+                "range_hours": 24,
+            })
+            assert [p["v"] for p in plain["series"][0]["points"]] == [20.0, 10.0]
+
+            inv = fetch_widget_data("series", db, display="line", widget_config={
+                "sources": [{"field_slug": "1 / fx_math.value.0.rate"}],
+                "range_hours": 24,
+            })
+            assert inv.get("error") is None
+            pts = [p["v"] for p in inv["series"][0]["points"]]
+            assert pts[0] == pytest.approx(0.05)
+            assert pts[1] == pytest.approx(0.1)
+
+            chart = fetch_widget_data("chart", db, display="pie", widget_config={
+                "sources": [{"field_slug": "1 / fx_math.value.0.rate", "label": "Inv"}],
+            })
+            assert chart["values"][0] == pytest.approx(0.1)
+
+            assert validate_widget_bindings(db, [{
+                "type": "series", "display": "line", "title": "S",
+                "config": {"sources": [{"field_slug": "1 / fx_math.value.0.rate"}]},
+            }]) is None
+            assert validate_widget_bindings(db, [{
+                "type": "series", "display": "line", "title": "Bad",
+                "config": {"sources": [{"field_slug": "1 / unknown.value.0.rate"}]},
+            }])
+            bare = validate_widget_bindings(db, [{
+                "type": "series", "display": "line", "title": "Bare",
+                "config": {"sources": [{"field_slug": "1 / fx_math"}]},
+            }])
+            assert bare and "path" in bare.lower()
+            star = validate_widget_bindings(db, [{
+                "type": "series", "display": "line", "title": "Star",
+                "config": {"sources": [{"field_slug": "1 / arr_math.samples.*.ms"}]},
+            }])
+            assert star and "*" in star
         finally:
             db.close()
 

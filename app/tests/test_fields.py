@@ -152,6 +152,20 @@ def test_eval_expr_compares():
     assert eval_expr("a.status > ok", data) is None  # order on strings
 
 
+def test_eval_expr_indexed_path_maths():
+    """Numeric list indexes in paths work for arithmetic and compares."""
+    import pytest
+    from app.widget_transforms import eval_expr
+
+    data = {"lb": {"value": [{"rate": 19.5}, {"rate": 10.0}]}}
+    assert eval_expr("1 / lb.value.0.rate", data) == pytest.approx(1 / 19.5)
+    assert eval_expr("1/lb.value.0.rate", data) == pytest.approx(1 / 19.5)
+    assert eval_expr("lb.value.0.rate > 1", data) == 1.0
+    assert eval_expr("lb.value.0.rate < 1", data) == 0.0
+    assert eval_expr("lb.value.1.rate = 10", data) == 1.0
+    assert eval_expr("1 / lb.value.9.rate", data) is None
+
+
 def test_eval_expr_trunc_sum_avg():
     from app.widget_transforms import eval_expr
 

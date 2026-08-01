@@ -39,7 +39,6 @@ _TEMPLATE_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
 _NUMERIC_OPS = frozenset({"gt", "lt", "gte", "lte"})
 # Bare ``=`` → ``==``; leave ``==`` ``!=`` ``<=`` ``>=`` alone.
 _BARE_EQ_RE = re.compile(r"(?<![!<>=])=(?!=)")
-_COMPARE_MARK_RE = re.compile(r"==|!=|<=|>=|<|>")
 _EXPR_MARK_RE = re.compile(r"[=!<>+\-*/%()]")
 # Plain Field picker: slug (hyphens allowed) or slug.path — not maths/compare.
 _PLAIN_FIELD_REF_RE = re.compile(
@@ -133,12 +132,27 @@ def _num_lit(v: float) -> str:
     return f"({s})" if v < 0 else s
 
 
-def _subst_path_tokens(text: str, data: dict) -> str | None:
-    """Replace path tokens (incl. ``*`` segments) with numeric literals.
+def _ast_lit(raw) -> str | None:
+    """AST-safe literal for a scalar; None for non-scalars."""
+    if isinstance(raw, bool):
+        return "True" if raw else "False"
+    num = _as_number(raw)
+    if num is not None:
+        try:
+            return _num_lit(num)
+        except ValueError:
+            return None
+    if isinstance(raw, str):
+        return json.dumps(raw)
+    return None
 
-    Uses ``get_by_path`` so rule star bindings apply. Fail-closed: any path
-    token that is not a number → None. Call names (``abs``, ``round``, …)
-    followed by ``(`` are left alone.
+
+def _subst_path_tokens(text: str, data: dict) -> str | None:
+    """Replace path tokens with AST-safe literals before ``ast.parse``.
+
+    Dotted paths (incl. ``*`` / numeric indexes) must resolve; missing → None.
+    Bare names that resolve become literals; unresolved bare names are left for
+    compare string-literal fallback (``ok``). Call names followed by ``(`` stay.
     """
     matches = list(_PATH_TOKEN_RE.finditer(text))
     out = text
@@ -148,14 +162,17 @@ def _subst_path_tokens(text: str, data: dict) -> str | None:
             after = text[m.end() :].lstrip()
             if after.startswith("("):
                 continue
+        dotted = "." in token
         raw = get_by_path(data, token)
-        num = _as_number(raw)
-        if num is None:
-            return None
-        try:
-            lit = _num_lit(num)
-        except ValueError:
-            return None
+        if raw is None:
+            if dotted:
+                return None
+            continue
+        lit = _ast_lit(raw)
+        if lit is None:
+            if dotted:
+                return None
+            continue
         out = out[: m.start()] + lit + out[m.end() :]
     return out
 
@@ -178,17 +195,36 @@ def extract_number(data, value_path: str | None):
         return None
 
 
-def series_from_points(points, *, value_path: str | None = None):
-    """Build [{ts, v}] from iterable of (timestamp, value_payload) pairs."""
+def series_from_points(
+    points,
+    *,
+    value_path: str | None = None,
+    expr: str | None = None,
+    field_slug: str | None = None,
+):
+    """Build [{ts, v}] from iterable of (timestamp, value_payload) pairs.
+
+    Plain ``value_path`` uses ``extract_number``. When ``expr`` + ``field_slug``
+    are set, each payload is evaluated as ``eval_expr(expr, {slug: payload})``.
+    """
     series = []
     for ts, payload in points:
-        v = extract_number(payload, value_path)
+        if expr and field_slug:
+            if isinstance(payload, dict):
+                ctx = {field_slug: payload}
+            elif payload is not None:
+                ctx = {field_slug: {"value": payload}}
+            else:
+                continue
+            v = eval_expr(expr, ctx)
+        else:
+            v = extract_number(payload, value_path)
         if v is None:
             continue
         if getattr(ts, "tzinfo", None) is None:
             ts = ts.replace(tzinfo=timezone.utc)
         iso = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
-        series.append({"ts": iso, "v": v})
+        series.append({"ts": iso, "v": float(v)})
     return series
 
 
@@ -455,9 +491,10 @@ def _eval_ast(node, data: dict):
 def eval_expr(expr: str, data: dict | None) -> float | None:
     """Evaluate a safe arithmetic/compare expression against ``data``. Fail-closed.
 
-    Path tokens (including starred segments like ``value.*.rate``) are resolved
-    via ``get_by_path``. Comparisons (``=`` ``!=`` ``<`` ``>`` ``<=`` ``>=``)
-    return ``1.0`` or ``0.0``. Bare ``=`` means equal.
+    Path tokens (including starred / numeric segments like ``value.0.rate``) are
+    rewritten to literals via ``get_by_path`` before parse so indexed paths work.
+    Comparisons (``=`` ``!=`` ``<`` ``>`` ``<=`` ``>=``) return ``1.0`` or ``0.0``.
+    Bare ``=`` means equal.
     """
     text = (expr or "").strip()
     if not text:
@@ -465,9 +502,6 @@ def eval_expr(expr: str, data: dict | None) -> float | None:
     data = data or {}
     try:
         text = _normalize_bare_eq(text)
-        if _COMPARE_MARK_RE.search(text):
-            tree = ast.parse(text, mode="eval")
-            return float(_eval_ast(tree, data))
         rewritten = _subst_path_tokens(text, data)
         if rewritten is None:
             return None

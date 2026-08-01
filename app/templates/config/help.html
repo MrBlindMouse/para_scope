@@ -113,7 +113,9 @@
         Config values like <code>field_slug</code> are <code>slug</code> or <code>slug.path</code>.
         The first segment is always the Field slug; the rest walks into that Field’s state
         or latest logbook entry. Series and charts require a path for logbook/data Fields
-        (e.g. <code>my-log._poll.response_time_ms</code>).
+        (e.g. <code>my-log._poll.response_time_ms</code>) and also accept maths expressions
+        (e.g. <code>1 / my-log.value.0.rate</code>) — evaluated per logbook entry for series,
+        or against the latest/state for charts (and radial max field).
         The <strong>Toggle</strong> widget Field picker accepts a toggle/value/text slug, a path into the
         latest logbook or data Field (e.g. <code>checks.ok</code>), or a compare expression
         (e.g. <code>slug.path = ok</code> or <code>load.value &gt; 80</code>), evaluated

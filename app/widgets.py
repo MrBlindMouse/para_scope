@@ -405,7 +405,7 @@ def widget_referenced_field_ids(db, config: dict | None, *, title: str = "") -> 
     slugs: set[str] = set()
 
     def _add(raw: str):
-        slug, _ = split_slug_path(raw)
+        slug = _binding_slug(raw)
         if slug:
             slugs.add(slug)
 
@@ -537,23 +537,28 @@ def validate_widget_bindings(db, widgets: list) -> str | None:
                 return f"{label}: use at most {max_src} field(s) for this style"
             for src in filled:
                 raw = (src.get("field_slug") or "").strip()
-                slug, path = split_slug_path(raw)
+                slug = _binding_slug(raw)
                 field = fields_by_slug.get(slug)
                 if field is None:
                     return f"{label}: that field wasn’t found"
                 if allowed is not None and field.field_type not in allowed:
                     return f"{label}: “{field.name}” isn’t the right field type"
-                if field.field_type in ("logbook", "data") and not path:
+                if field.field_type in ("logbook", "data") and _binding_missing_path(raw):
                     return f"{label}: append a path (e.g. {slug}.response_time_ms)"
+                if looks_like_expr(raw) and field.field_type == "data" and "*" in raw:
+                    return (
+                        f"{label}: maths with * array paths isn’t supported; "
+                        "use a plain path"
+                    )
             max_raw = (cfg.get("max_field_slug") or "").strip()
             if max_raw:
-                max_slug, max_path = split_slug_path(max_raw)
+                max_slug = _binding_slug(max_raw)
                 max_field = fields_by_slug.get(max_slug)
                 if max_field is None:
                     return f"{label}: max field wasn’t found"
                 if max_field.field_type not in ("value", "text", "logbook", "data"):
                     return f"{label}: max field isn’t a compatible field type"
-                if max_field.field_type in ("logbook", "data") and not max_path:
+                if max_field.field_type in ("logbook", "data") and _binding_missing_path(max_raw):
                     return f"{label}: append a path on the max field (e.g. {max_slug}.response_time_ms)"
             continue
 
@@ -659,6 +664,37 @@ def split_slug_path(raw: str) -> tuple[str, str | None]:
     return slug, path or None
 
 
+def _binding_slug(raw: str) -> str:
+    """Field slug head from a plain slug.path or a maths/compare expression."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    if looks_like_expr(text):
+        heads = expr_required_slugs(text)
+        return heads[0] if heads else ""
+    slug, _ = split_slug_path(text)
+    return slug
+
+
+def _binding_missing_path(raw: str) -> bool:
+    """True when logbook/data binding has no dotted path (plain or in expr)."""
+    text = (raw or "").strip()
+    if not text:
+        return True
+    if looks_like_expr(text):
+        return "." not in text
+    _, path = split_slug_path(text)
+    return not path
+
+
+def _payload_expr_ctx(slug: str, payload) -> dict:
+    """Wrap a Field payload for eval_expr (``{slug: …}``)."""
+    if isinstance(payload, dict):
+        return {slug: payload}
+    if payload is not None:
+        return {slug: {"value": payload}}
+    return {slug: {}}
+
 def _slug_heads_from_template(template: str) -> list[str]:
     """First identifier in each ``{{ … }}`` body (slug head)."""
     heads: list[str] = []
@@ -712,10 +748,10 @@ def _resolve_logbook_list_field(db, config, fields_by_slug: dict | None = None):
 
 
 def resolve_field(db, config) -> object | None:
-    """Resolve a Field by the leading segment of field_slug."""
+    """Resolve a Field by slug head of field_slug (path or maths expression)."""
     from app.models import Field
 
-    slug, _ = split_slug_path(_config_field_slug(config))
+    slug = _binding_slug(_config_field_slug(config))
     if not slug:
         return None
     return db.query(Field).filter(Field.slug == slug).first()
@@ -1139,29 +1175,48 @@ def _series_points_for_source(
             return rows
         return query.filter(ts_col >= cutoff).order_by(ts_col).all()
 
+    raw = _config_field_slug(src)
     field = resolve_field(db, src)
     if field is None:
         return None, [], "Choose a field"
 
     name = label or field.name
     field_id = field.id
-    _, value_path = split_slug_path(_config_field_slug(src))
+    slug = _binding_slug(raw)
+    is_expr = looks_like_expr(raw)
 
     if field.field_type == "logbook":
-        if not value_path:
+        if _binding_missing_path(raw):
             return name, [], "Append a path (e.g. field._poll.response_time_ms)"
         q = db.query(FieldLogEntry).filter(FieldLogEntry.field_id == field_id)
         if source_id:
             q = q.filter(FieldLogEntry.source_id == source_id)
         rows = _apply_range(q, FieldLogEntry.timestamp, FieldLogEntry.id)
         pairs = [(e.timestamp, e.value) for e in rows]
-        series = series_from_points(pairs, value_path=value_path)
+        if is_expr:
+            series = series_from_points(pairs, expr=raw, field_slug=slug)
+        else:
+            _, value_path = split_slug_path(raw)
+            series = series_from_points(pairs, value_path=value_path)
         return name, series, None
 
     if field.field_type == "data":
-        if not value_path:
+        if _binding_missing_path(raw):
             return name, [], "Append a path (e.g. field.samples.*.ms)"
         state = field.state if isinstance(field.state, dict) else {}
+        if is_expr:
+            if "*" in raw:
+                return (
+                    name,
+                    [],
+                    "maths with * array paths isn’t supported; use a plain path",
+                )
+            v = eval_expr(raw, _payload_expr_ctx(slug, state))
+            if v is None:
+                return name, [], "Expression did not evaluate"
+            now = datetime.now(timezone.utc)
+            return name, [{"ts": now.isoformat(), "v": float(v)}], None
+        _, value_path = split_slug_path(raw)
         series, err = series_from_json_array(
             state,
             value_path,
@@ -1252,23 +1307,32 @@ def _chart_source_value(db, src, source_id=None, fields_snap=None):
         label = field.name
     if field.field_type not in ("value", "text", "logbook", "data"):
         return None
-    _, value_path = split_slug_path(_config_field_slug(src))
-    raw = _latest_chart_source_payload(db, field, source_id=source_id)
+    raw_slug = _config_field_slug(src)
+    payload = _latest_chart_source_payload(db, field, source_id=source_id)
+    if looks_like_expr(raw_slug):
+        slug = _binding_slug(raw_slug)
+        if field.field_type in ("logbook", "data") and _binding_missing_path(raw_slug):
+            return None
+        v = eval_expr(raw_slug, _payload_expr_ctx(slug, payload))
+        if v is None:
+            return None
+        return label, float(v)
+    _, value_path = split_slug_path(raw_slug)
     if field.field_type in ("value", "text"):
         if value_path:
-            if isinstance(raw, dict):
-                v = extract_number(raw, value_path)
+            if isinstance(payload, dict):
+                v = extract_number(payload, value_path)
             else:
-                v = extract_number({"value": raw}, value_path)
+                v = extract_number({"value": payload}, value_path)
             if v is None:
                 return None
             return label, v
         try:
-            v = float(raw or 0) if field.field_type == "value" else float(raw)
+            v = float(payload or 0) if field.field_type == "value" else float(payload)
         except (TypeError, ValueError):
             return None
         return label, v
-    v = extract_number(raw, value_path)
+    v = extract_number(payload, value_path)
     if v is None:
         return None
     return label, v

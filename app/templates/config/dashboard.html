@@ -562,8 +562,8 @@
         '<input type="number" class="input" data-cfg="max" step="any" min="0" placeholder="100" value="' +
         (cfg.max != null && cfg.max !== "" ? escapeAttr(cfg.max) : "") + '"></label>';
       html += slugInputHtml('data-cfg="max_field_slug"', (cfg.max_field_slug || "").trim(),
-        "Max field (optional)", "counter/value slug if max is empty");
-      html += '<p class="text-muted text-xs">Explicit ceiling. Empty Max uses Max field, else 100.</p>';
+        "Max field (optional)", "slug.value or 1 / slug.value");
+      html += '<p class="text-muted text-xs">Explicit ceiling. Empty Max uses Max field (path or maths), else 100.</p>';
     }
     if (keys.indexOf("start_angle") >= 0 || keys.indexOf("end_angle") >= 0) {
       html += '<div class="flex items-center gap flex-wrap">' +
@@ -587,7 +587,7 @@
         '<div class="card__body stack">' +
           '<div class="flex items-center gap flex-wrap">' +
             slugInputHtml('data-ssrc="field_slug"', (s.field_slug || "").trim(), "Field",
-              "my-log.value or my-log._poll.response_time_ms") +
+              "slug.path or 1 / slug.value.0.rate") +
             reorderButtonsHtml("series-src", i, sources.length) +
             '<button type="button" class="btn self-end" data-action="series-src-remove">Remove</button>' +
           "</div>" +
@@ -597,6 +597,7 @@
         "</div></div>";
     });
     html += '<button type="button" class="btn" data-action="series-src-add">Add series</button></div>';
+    html += '<p class="text-muted text-xs">Logbook/data path, or maths per entry (e.g. <code>1 / slug.value.0.rate</code>).</p>';
     return html;
   }
 
@@ -616,7 +617,7 @@
         '<div class="card__body stack">' +
           '<div class="flex items-center gap flex-wrap">' +
             slugInputHtml('data-src="field_slug"', (s.field_slug || "").trim(), "Field",
-              "counter-or-value-slug") +
+              "slug.path or 1 / slug.value.0.rate") +
             (single ? "" :
               reorderButtonsHtml("src", i, sources.length) +
               '<button type="button" class="btn self-end" data-action="src-remove">Remove</button>') +
@@ -629,6 +630,7 @@
     if (maxSrc == null || sources.length < maxSrc) {
       html += '<button type="button" class="btn" data-action="src-add">Add source</button>';
     }
+    html += '<p class="text-muted text-xs">Path or maths on latest (e.g. <code>1 / slug.value.0.rate</code>).</p>';
     html += "</div>";
     return html;
   }
@@ -1391,6 +1393,41 @@
     return /[=!<>+\-*/%()]/.test(s);
   }
 
+  // Mirrors app.widget_transforms.expr_required_slugs — first dotted path head.
+  var PATH_TOKEN_RE = /[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)+|[a-zA-Z_][a-zA-Z0-9_]*/g;
+  var CALL_FUNCS = {abs: 1, round: 1, min: 1, max: 1, trunc: 1, sum: 1, avg: 1};
+
+  function exprRequiredSlug(text) {
+    var s = String(text || "");
+    var dottedHead = null;
+    var bareHead = null;
+    var re = new RegExp(PATH_TOKEN_RE.source, "g");
+    var m;
+    while ((m = re.exec(s))) {
+      var token = m[0];
+      if (CALL_FUNCS[token]) {
+        var after = s.slice(m.index + token.length).replace(/^\s+/, "");
+        if (after.charAt(0) === "(") continue;
+      }
+      var head = token.split(".")[0];
+      if (token.indexOf(".") >= 0) {
+        dottedHead = head;
+        break;
+      }
+      if (!bareHead) bareHead = head;
+    }
+    return dottedHead || bareHead || null;
+  }
+
+  function fieldByExprSlug(raw) {
+    var head = exprRequiredSlug(raw);
+    if (!head) return null;
+    for (var i = 0; i < FIELDS.length; i++) {
+      if (FIELDS[i].slug === head) return FIELDS[i];
+    }
+    return null;
+  }
+
   function splitSlugPath(raw) {
     var s = String(raw || "").trim();
     if (!s) return {slug: "", path: null};
@@ -1480,8 +1517,30 @@
         }
         for (var si = 0; si < filled.length; si++) {
           var rawS = String(filled[si].field_slug || "").trim();
-          var parts = splitSlugPath(rawS);
-          var fS = fieldBySlug(parts.slug);
+          var fS;
+          var parts;
+          if (looksLikeExpr(rawS)) {
+            fS = fieldByExprSlug(rawS);
+            if (!fS) {
+              return {index: i, message: "“" + rawS + "” isn’t an existing Field slug.", selector: focusSel};
+            }
+            if (allowed && allowed.indexOf(fS.field_type) < 0) {
+              return {index: i, message: "“" + fS.name + "” isn’t the right field type.", selector: focusSel};
+            }
+            if ((fS.field_type === "logbook" || fS.field_type === "data") && rawS.indexOf(".") < 0) {
+              return {index: i,
+                message: "Append a path for “" + label + "” (e.g. " + fS.slug + ".response_time_ms).",
+                selector: focusSel};
+            }
+            if (fS.field_type === "data" && rawS.indexOf("*") >= 0) {
+              return {index: i,
+                message: "Maths with * array paths isn’t supported for “" + label + "”; use a plain path.",
+                selector: focusSel};
+            }
+            continue;
+          }
+          parts = splitSlugPath(rawS);
+          fS = fieldBySlug(parts.slug);
           if (!fS) {
             return {index: i, message: "“" + rawS + "” isn’t an existing Field slug.", selector: focusSel};
           }
@@ -1492,6 +1551,20 @@
             return {index: i,
               message: "Append a path for “" + label + "” (e.g. " + parts.slug + ".response_time_ms).",
               selector: focusSel};
+          }
+        }
+        var maxRaw = String(cfg.max_field_slug || "").trim();
+        if (maxRaw) {
+          var fMax = looksLikeExpr(maxRaw) ? fieldByExprSlug(maxRaw) : fieldBySlug(splitSlugPath(maxRaw).slug);
+          if (!fMax) {
+            return {index: i, message: "Max field “" + maxRaw + "” isn’t an existing Field slug.",
+              selector: '[data-cfg="max_field_slug"]'};
+          }
+          if ((fMax.field_type === "logbook" || fMax.field_type === "data") &&
+              (looksLikeExpr(maxRaw) ? maxRaw.indexOf(".") < 0 : !splitSlugPath(maxRaw).path)) {
+            return {index: i,
+              message: "Append a path on the max field (e.g. " + fMax.slug + ".response_time_ms).",
+              selector: '[data-cfg="max_field_slug"]'};
           }
         }
         continue;
@@ -1519,7 +1592,7 @@
             return {index: i, message: "Pick at least one field for “" + label + "”.", selector: focusSel};
           }
           if (boardKind === "toggle" && looksLikeExpr(rawC)) {
-            var fExpr = fieldBySlug(rawC);
+            var fExpr = fieldByExprSlug(rawC);
             if (!fExpr) {
               return {index: i, message: "“" + rawC + "” isn’t an existing Field slug.", selector: focusSel};
             }
@@ -1574,7 +1647,7 @@
       }
       if (w.type === "display" && disp === "toggle") {
         if (looksLikeExpr(slugRaw)) {
-          if (!fieldBySlug(slugRaw)) {
+          if (!fieldByExprSlug(slugRaw)) {
             return {index: i, message: "“" + slugRaw + "” isn’t an existing Field slug.", selector: focusSel};
           }
           continue;
