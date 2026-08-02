@@ -49,7 +49,11 @@ Widget **titles**, **labels**, **units**, and **link URLs** accept the same `{{ 
 4. Body partial `app/templates/widgets/{kind}_content.html`.
 5. Config editor fragment in [`app/templates/config/dashboard.html`](../app/templates/config/dashboard.html)
    (`configFieldsHtml` + read/save + add/remove handlers).
-6. If the widget has client JS, add `app/static/js/{feature}.js` and load it from
+6. Update `previewHtml` (same file) so every new display/style mock mirrors the
+   live partial’s classes and structure — config previews are client-side mocks,
+   not the Jinja body. Chart samples go in `previewSample` /
+   [`app/static/js/widget-charts.js`](../app/static/js/widget-charts.js).
+7. If the widget has client JS, add `app/static/js/{feature}.js` and load it from
    `index.html`. Skip HTMX auto-refresh for interactive kinds (see the
    `widget.type not in (...)` list on the dashboard).
 

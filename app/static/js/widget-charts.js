@@ -683,8 +683,8 @@
         labels: ["Used", "Reserved", "Free"],
         values: [67, 45, 28],
         max: 100,
-        startAngle: style === "custom_angle" ? -120 : 0,
-        endAngle: style === "custom_angle" ? 120 : 360,
+        startAngle: style === "custom_angle" ? -90 : 0,
+        endAngle: style === "custom_angle" ? 90 : 360,
       };
     }
     return {
@@ -710,8 +710,12 @@
       return renderLine(el, sample.series, opts);
     }
     opts.max = sample.max != null ? sample.max : 100;
-    if (sample.startAngle != null) opts.startAngle = sample.startAngle;
-    if (sample.endAngle != null) opts.endAngle = sample.endAngle;
+    var attrStart = el.getAttribute("data-start-angle");
+    var attrEnd = el.getAttribute("data-end-angle");
+    if (attrStart != null && attrStart !== "") opts.startAngle = Number(attrStart);
+    else if (sample.startAngle != null) opts.startAngle = sample.startAngle;
+    if (attrEnd != null && attrEnd !== "") opts.endAngle = Number(attrEnd);
+    else if (sample.endAngle != null) opts.endAngle = sample.endAngle;
     if (display === "radial") {
       return renderRadial(el, sample.labels, sample.values, opts);
     }

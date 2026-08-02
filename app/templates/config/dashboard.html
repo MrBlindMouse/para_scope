@@ -428,105 +428,210 @@
     return out;
   }
 
-  function previewToneClass(type, disp, style, toneCfg) {
+  // Mock markup must mirror app/templates/widgets/{kind}_content.html (classes + style branches).
+  function previewToneClass(type, disp, toneCfg) {
     var tone = normalizeTone(toneCfg, type, disp);
     if (tone === "none") return "";
     if (type === "notes" || disp === "toggle" || disp === "board" || disp === "kv_text") {
+      // conditional → sample positive (live resolves from field / rules).
       return " widget-tone widget-tone--positive";
     }
     return "";
+  }
+
+  function previewToggleHtml(style, on, sm) {
+    var label = on ? "On" : "Off";
+    var badge = on ? "badge--success" : "badge--negative";
+    var body = style === "led"
+      ? '<span class="widget-toggle__led"></span><span class="widget-toggle__label">' + label + "</span>"
+      : style === "badge"
+        ? '<span class="badge ' + badge + '">' + label + "</span>"
+        : style === "switch"
+          ? '<span class="widget-toggle__switch"><span class="widget-toggle__knob"></span></span><span class="widget-toggle__label">' + label + "</span>"
+          : '<span class="widget-toggle__text">' + label + "</span>";
+    return '<div class="widget-toggle widget-toggle--' + style +
+      (sm ? " widget-toggle--sm" : "") +
+      '" data-on="' + (on ? "1" : "0") + '">' + body + "</div>";
+  }
+
+  function previewBtnClass(style) {
+    if (style === "emphasized") return "btn btn--primary";
+    if (style === "compact") return "btn btn--sm";
+    return "btn btn--primary";
   }
 
   function previewHtml(type, disp, style, toneCfg, extra) {
     style = style || "default";
     extra = extra || {};
     var inner = "";
+    var compactCls = style === "compact" ? " table--compact" : "";
     if (disp === "toggle") {
-      inner = '<div class="widget-toggle widget-toggle--' + style + '" data-on="1">' +
-        (style === "led"
-          ? '<span class="widget-toggle__led"></span><span class="widget-toggle__label">On</span>'
-          : style === "badge"
-            ? '<span class="badge badge--success">On</span>'
-            : style === "switch"
-              ? '<span class="widget-toggle__switch"><span class="widget-toggle__knob"></span></span><span class="widget-toggle__label">On</span>'
-              : '<span class="widget-toggle__text">On</span>') +
-        "</div>";
+      inner = previewToggleHtml(style, true, false);
     } else if (disp === "board") {
-      inner = '<ul class="widget-board widget-preview__mini">' +
-        '<li class="widget-board__row"><span class="widget-board__name">Up</span>' +
-          '<div class="widget-toggle widget-toggle--led widget-toggle--sm" data-on="1">' +
-          '<span class="widget-toggle__led"></span><span class="widget-toggle__label">On</span></div></li>' +
-        '<li class="widget-board__row"><span class="widget-board__name">Ready</span>' +
-          '<div class="widget-toggle widget-toggle--led widget-toggle--sm" data-on="0">' +
-          '<span class="widget-toggle__led"></span><span class="widget-toggle__label">Off</span></div></li>' +
-        "</ul>";
+      var cellKind = extra.cell_kind === "kv_text" ? "kv_text" : "toggle";
+      if (cellKind === "kv_text") {
+        var kvStyle = style || "plain";
+        inner = '<ul class="widget-board stack stack--tight widget-preview__mini">' +
+          '<li class="widget-board__row widget-board__row--kv"><div class="widget-kv widget-kv--' + kvStyle + '">Up: ok</div></li>' +
+          '<li class="widget-board__row widget-board__row--kv"><div class="widget-kv widget-kv--' + kvStyle + '">Ready: yes</div></li>' +
+          "</ul>";
+      } else {
+        var tStyle = style || "led";
+        inner = '<ul class="widget-board stack stack--tight widget-preview__mini">' +
+          '<li class="widget-board__row"><span class="widget-board__name">Up</span>' +
+            previewToggleHtml(tStyle, true, true) + "</li>" +
+          '<li class="widget-board__row"><span class="widget-board__name">Ready</span>' +
+            previewToggleHtml(tStyle, false, true) + "</li>" +
+          "</ul>";
+      }
     } else if (disp === "line" || disp === "area" || disp === "column" ||
                disp === "pie" || disp === "radial" || disp === "radar" || disp === "polar") {
       inner = '<div class="widget-preview__apex" data-preview-apex' +
         ' data-chart-display="' + escapeAttr(disp) + '"' +
         ' data-chart-style="' + escapeAttr(style) + '"' +
         (extra.horizontal ? ' data-horizontal="1"' : "") +
+        (extra.start_angle != null && extra.start_angle !== ""
+          ? ' data-start-angle="' + escapeAttr(extra.start_angle) + '"' : "") +
+        (extra.end_angle != null && extra.end_angle !== ""
+          ? ' data-end-angle="' + escapeAttr(extra.end_angle) + '"' : "") +
         "></div>";
     } else if (disp === "kv_text") {
       inner = '<div class="widget-kv widget-kv--' + style + '">Status: ok</div>';
     } else if (disp === "digital") {
       inner = '<div class="widget-clock widget-clock--digital widget-clock--' + style + '">' +
-        '<div class="widget-clock__label">UTC</div><div class="widget-clock__time">14:37:12</div><div class="widget-clock__date">Tue 28 Jul 2026</div></div>';
+        '<div class="widget-clock__label">UTC</div>' +
+        '<div class="widget-clock__time">14:37:12</div>' +
+        '<div class="widget-clock__meta"><span>Tue 28 Jul 2026</span><span>+00:00</span></div></div>';
     } else if (disp === "analog") {
       inner = '<div class="widget-clock widget-clock--analog widget-clock--' + style + '">' +
-        '<div class="widget-clock__face"><span class="widget-clock__hand widget-clock__hand--hour"></span><span class="widget-clock__hand widget-clock__hand--minute"></span><span class="widget-clock__hand widget-clock__hand--second"></span><span class="widget-clock__hub"></span></div></div>';
+        '<div class="widget-clock__label">UTC</div>' +
+        '<div class="widget-clock__face">' +
+        '<span class="widget-clock__hand widget-clock__hand--hour" style="transform: rotate(43deg)"></span>' +
+        '<span class="widget-clock__hand widget-clock__hand--minute" style="transform: rotate(222deg)"></span>' +
+        '<span class="widget-clock__hand widget-clock__hand--second" style="transform: rotate(72deg)"></span>' +
+        '<span class="widget-clock__hub"></span></div>' +
+        '<div class="widget-clock__meta"><span>Tue 28 Jul 2026</span><span>+00:00</span></div></div>';
     } else if (disp === "compact") {
       inner = '<div class="widget-clock widget-clock--compact widget-clock--' + style + '">' +
-        '<div class="widget-clock__time">14:37</div><div class="widget-clock__meta">UTC · Tue 28 Jul</div></div>';
+        '<div class="widget-clock__time">14:37</div>' +
+        '<div class="widget-clock__meta"><span>Tue 28 Jul</span><span>+00:00</span></div></div>';
     } else if (disp === "world_clock") {
       inner = '<div class="widget-clock widget-clock--world_clock widget-clock--' + style +
         (extra.layout === "row" ? " widget-clock--layout-row" : "") +
         ' widget-preview__mini"><div class="widget-clock__list">' +
-        '<div class="widget-clock__row"><div class="widget-clock__row-head"><strong>UTC</strong></div><div class="widget-clock__row-main"><span class="widget-clock__row-time">14:37</span></div></div>' +
-        '<div class="widget-clock__row"><div class="widget-clock__row-head"><strong>Tokyo</strong></div><div class="widget-clock__row-main"><span class="widget-clock__row-time">23:37</span></div></div>' +
+        '<div class="widget-clock__row"><div class="widget-clock__row-head"><strong class="widget-clock__row-label">UTC</strong>' +
+          '<span class="text-muted text-xs">+00:00</span></div>' +
+          '<div class="widget-clock__row-main"><span class="widget-clock__row-time">14:37</span>' +
+          '<span class="widget-clock__row-date text-muted">Tue 28 Jul</span></div></div>' +
+        '<div class="widget-clock__row"><div class="widget-clock__row-head"><strong class="widget-clock__row-label">Tokyo</strong>' +
+          '<span class="text-muted text-xs">+09:00</span></div>' +
+          '<div class="widget-clock__row-main"><span class="widget-clock__row-time">23:37</span>' +
+          '<span class="widget-clock__row-date text-muted">Tue 28 Jul</span></div></div>' +
         "</div></div>";
     } else if (disp === "logbook_list") {
       if (style === "timeline") {
         inner = '<ul class="widget-timeline widget-preview__mini">' +
-          '<li class="widget-timeline__item"><span class="widget-timeline__dot"></span><div><span class="text-muted">12:01</span> <code>{ok}</code></div></li>' +
-          '<li class="widget-timeline__item"><span class="widget-timeline__dot"></span><div><span class="text-muted">12:02</span> <code>{ok}</code></div></li>' +
+          '<li class="widget-timeline__item"><span class="widget-timeline__dot"></span><div><span class="text-muted">12:01</span> <code class="widget-list__code">{ok}</code></div></li>' +
+          '<li class="widget-timeline__item"><span class="widget-timeline__dot"></span><div><span class="text-muted">12:02</span> <code class="widget-list__code">{ok}</code></div></li>' +
           "</ul>";
       } else if (style === "cards") {
-        inner = '<div class="widget-entry-card widget-preview__mini"><span class="text-muted">12:01</span> <code>{ok}</code></div>';
+        inner = '<div class="stack stack--tight widget-preview__mini">' +
+          '<div class="widget-entry-card"><span class="text-muted">12:01</span> <code class="widget-list__code">{ok}</code></div>' +
+          '<div class="widget-entry-card"><span class="text-muted">12:02</span> <code class="widget-list__code">{ok}</code></div>' +
+          "</div>";
       } else {
-        inner = '<ul class="widget-list widget-preview__mini"><li class="widget-list__item"><span class="text-muted">12:01</span> <code>{ok}</code></li></ul>';
+        inner = '<ul class="stack stack--tight widget-list widget-preview__mini">' +
+          '<li class="widget-list__item"><span class="text-muted">12:01</span> <code class="widget-list__code">{ok}</code></li></ul>';
       }
     } else if (disp === "table") {
       inner = '<table class="table widget-preview__mini' +
-        (style === "compact" ? " table--compact" : "") +
+        compactCls +
         (style === "striped" ? " table--striped" : "") +
-        '"><tbody><tr><td>hits</td><td>42</td></tr><tr><td>up</td><td>on</td></tr></tbody></table>';
+        '"><thead><tr><th>Name</th><th>Type</th><th>Value</th></tr></thead>' +
+        "<tbody><tr><td>hits</td><td>value</td><td><code>42</code></td></tr>" +
+        "<tr><td>up</td><td>toggle</td><td><code>true</code></td></tr></tbody></table>";
     } else if (disp === "notes") {
-      inner = '<textarea class="widget-notes widget-preview__mini" rows="3" readonly>Scratch notes…</textarea>';
-    } else if (disp === "list" || disp === "button_row" || disp === "icon_grid") {
-      if (disp === "button_row") {
-        inner = '<span class="btn btn--sm' + (style === "emphasized" ? " btn--primary" : "") + '">Docs</span>';
-      } else if (disp === "icon_grid") {
-        inner = '<span class="widget-link-tile widget-link-tile--compact">★ Docs</span>';
+      inner = '<div class="widget-notes-wrap widget-preview__mini">' +
+        '<textarea class="widget-notes" rows="3" readonly>Scratch notes…</textarea></div>';
+    } else if (type === "triggers" && (disp === "list" || disp === "button_row")) {
+      var tBtn = '<button type="button" class="' + previewBtnClass(style) + '">Run</button>';
+      if (disp === "list") {
+        inner = '<ul class="stack stack--tight widget-list widget-triggers--' + style +
+          ' widget-preview__mini"><li>' + tBtn + "</li></ul>";
       } else {
-        inner = '<a href="#">Docs</a>';
+        inner = '<div class="flex items-center gap flex-wrap widget-triggers widget-triggers--' +
+          style + ' widget-preview__mini">' + tBtn + "</div>";
+      }
+    } else if (type === "links" && (disp === "list" || disp === "button_row" || disp === "icon_grid")) {
+      if (disp === "button_row") {
+        inner = '<div class="flex items-center gap flex-wrap widget-links widget-links--' + style +
+          ' widget-preview__mini"><a class="' + previewBtnClass(style) + '" href="#"><span>Docs</span></a></div>';
+      } else if (disp === "icon_grid") {
+        var tileMod = style === "emphasized" ? " widget-link-tile--emphasized"
+          : style === "compact" ? " widget-link-tile--compact" : "";
+        inner = '<div class="widget-links-grid widget-links--' + style +
+          ' widget-preview__mini"><a class="widget-link-tile' + tileMod +
+          '" href="#"><span>Docs</span></a></div>';
+      } else {
+        inner = '<ul class="stack stack--tight widget-list widget-links--' + style +
+          ' widget-preview__mini"><li class="widget-link-row' +
+          (style === "emphasized" ? " widget-list__item" : "") +
+          '"><a class="widget-link-row__a" href="#"><span>Docs</span></a></li></ul>';
       }
     } else if (disp === "metric_summary") {
-      inner = '<div class="grid-auto widget-preview__mini" style="--grid-min: 4em; --grid-gap: 0.25rem;">' +
-        '<div class="stat"><div class="stat__label">Hits</div><div class="stat__value">12</div></div>' +
-        '<div class="stat"><div class="stat__label">Errors</div><div class="stat__value">0</div></div>' +
-        "</div>";
-    } else if (disp === "source_health" || disp === "recent_events" || disp === "poller_status") {
       if (style === "cards") {
-        inner = '<div class="widget-entry-card widget-preview__mini"><strong>api</strong> <span class="text-success">healthy</span></div>';
+        inner = '<div class="stack stack--tight widget-preview__mini">' +
+          '<div class="widget-entry-card"><div class="stat__label">Hits</div><div class="stat__value">12</div></div>' +
+          '<div class="widget-entry-card"><div class="stat__label">Errors</div><div class="stat__value">0</div></div>' +
+          "</div>";
       } else {
-        inner = '<table class="table widget-preview__mini' + (style === "compact" ? " table--compact" : "") +
-          '"><tbody><tr><td>api</td><td class="text-success">healthy</td></tr></tbody></table>';
+        var gridMin = style === "compact" ? "6em" : "8em";
+        var gridGap = style === "compact" ? "0.25rem" : "0.5rem";
+        inner = '<div class="grid-auto widget-preview__mini" style="--grid-min: ' + gridMin +
+          "; --grid-gap: " + gridGap + ';">' +
+          '<div class="stat"><div class="stat__label">Hits</div><div class="stat__value">12</div></div>' +
+          '<div class="stat"><div class="stat__label">Errors</div><div class="stat__value">0</div></div>' +
+          "</div>";
+      }
+    } else if (disp === "source_health") {
+      if (style === "cards") {
+        inner = '<div class="stack stack--tight widget-preview__mini">' +
+          '<div class="widget-entry-card"><strong>api</strong> <span class="text-success">healthy</span> ' +
+          '<span class="text-muted">2026-07-28 14:30</span></div></div>';
+      } else {
+        inner = '<table class="table widget-preview__mini' + compactCls +
+          '"><thead><tr><th>Name</th><th>Status</th><th>Last Seen</th></tr></thead>' +
+          '<tbody><tr><td>api</td><td><span class="text-success">healthy</span></td>' +
+          "<td>2026-07-28 14:30</td></tr></tbody></table>";
+      }
+    } else if (disp === "recent_events") {
+      if (style === "cards") {
+        inner = '<div class="stack stack--tight widget-preview__mini">' +
+          '<div class="widget-entry-card"><strong>#1</strong> api / ping ' +
+          '<span class="text-success">processed</span> ' +
+          '<span class="text-muted">2026-07-28 14:30</span></div></div>';
+      } else {
+        inner = '<table class="table widget-preview__mini' + compactCls +
+          '"><thead><tr><th>#</th><th>Source</th><th>Type</th><th>Status</th><th>Time</th></tr></thead>' +
+          '<tbody><tr><td>1</td><td>api</td><td>ping</td>' +
+          '<td><span class="text-success">processed</span></td><td>2026-07-28 14:30</td></tr></tbody></table>';
+      }
+    } else if (disp === "poller_status") {
+      if (style === "cards") {
+        inner = '<div class="stack stack--tight widget-preview__mini">' +
+          '<div class="widget-entry-card"><strong>poll</strong> <span class="text-muted">api</span> ' +
+          '<span class="text-muted">12 / 0 (lifetime)</span> <span class="text-success">enabled</span></div></div>';
+      } else {
+        inner = '<table class="table widget-preview__mini' + compactCls +
+          '"><thead><tr><th>Name</th><th>Source</th><th>Last Run</th><th>Next Run</th>' +
+          "<th>OK / Fail (lifetime)</th><th>Status</th></tr></thead>" +
+          "<tbody><tr><td>poll</td><td>api</td><td>2026-07-28 14:30</td><td>2026-07-28 14:35</td>" +
+          "<td>12 / 0</td><td>enabled</td></tr></tbody></table>";
       }
     } else {
       inner = '<span class="text-muted text-xs">' + escapeAttr(disp) + " · " + escapeAttr(style) + "</span>";
     }
-    return '<div class="widget-preview' + previewToneClass(type, disp, style, toneCfg) +
+    return '<div class="widget-preview' + previewToneClass(type, disp, toneCfg) +
       '" data-preview>' + inner + "</div>";
   }
 
@@ -843,9 +948,16 @@
       "</div>";
     if (disp === "board") {
       html += boardConfigHtml(cfg, tone);
-      html += previewHtml(w.type, "board", cfg.style || "led", tone);
+      html += previewHtml(w.type, "board", cfg.style || "led", tone, {
+        cell_kind: cfg.cell_kind || "toggle",
+      });
     } else {
-      html += previewHtml(w.type, disp, style, tone, { horizontal: !!cfg.horizontal, layout: cfg.layout });
+      html += previewHtml(w.type, disp, style, tone, {
+        horizontal: !!cfg.horizontal,
+        layout: cfg.layout,
+        start_angle: cfg.start_angle != null ? cfg.start_angle : (style === "custom_angle" ? -90 : null),
+        end_angle: cfg.end_angle != null ? cfg.end_angle : (style === "custom_angle" ? 90 : null),
+      });
     }
 
     if (w.type === "series") {
@@ -1750,7 +1862,7 @@
   listEl.addEventListener("change", function (e) {
     var el = e.target;
     var cfgKey = el && el.getAttribute("data-cfg");
-    if (cfgKey === "display" || cfgKey === "range_mode" || cfgKey === "style" || cfgKey === "tone" || cfgKey === "cell_kind" || cfgKey === "horizontal" || cfgKey === "timezone_mode" || cfgKey === "layout") {
+    if (cfgKey === "display" || cfgKey === "range_mode" || cfgKey === "style" || cfgKey === "tone" || cfgKey === "cell_kind" || cfgKey === "horizontal" || cfgKey === "timezone_mode" || cfgKey === "layout" || cfgKey === "start_angle" || cfgKey === "end_angle") {
       var card = el.closest(".card");
       if (!card) return;
       var widgets = readFromDom();
@@ -1810,6 +1922,11 @@
         if (cfgKey === "range_mode") {
           widgets[i].config = widgets[i].config || {};
           widgets[i].config.range_mode = el.value;
+        }
+        if (cfgKey === "start_angle" || cfgKey === "end_angle") {
+          widgets[i].config = widgets[i].config || {};
+          var ang = parseFloat(el.value);
+          widgets[i].config[cfgKey] = isFinite(ang) ? ang : (cfgKey === "start_angle" ? -90 : 90);
         }
         setWidgets(widgets);
         return;
