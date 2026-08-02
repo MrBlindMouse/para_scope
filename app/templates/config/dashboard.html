@@ -290,11 +290,14 @@
               cells.push(kvRow);
               return;
             }
-            cells.push({field_slug: (c.field_slug || "").trim()});
+            cells.push({
+              field_slug: (c.field_slug || "").trim(),
+              label: (c.label || "").trim(),
+            });
           });
         }
         if (!cells.length) {
-          cells = cfg.cell_kind === "kv_text" ? [{template: ""}] : [{field_slug: ""}];
+          cells = cfg.cell_kind === "kv_text" ? [{template: ""}] : [{field_slug: "", label: ""}];
         }
         cfg.cells = cells;
         var meta0 = boardCellKindMeta(cfg.cell_kind);
@@ -882,7 +885,11 @@
             "slug.path or svc.status = ok") +
           reorderButtonsHtml("board-cell", i, cells.length) +
           '<button type="button" class="btn self-end" data-action="board-cell-remove">Remove</button>' +
-          "</div>";
+          "</div>" +
+          '<label class="stack form-field--lg">Label' +
+            '<input type="text" class="input" data-bcell="label" placeholder="{{ '{{ slug.value }}' }} or custom" value="' +
+            escapeAttr(c.label || "") + '"></label>' +
+          '<p class="text-muted text-xs">Optional. Empty → Field name. Templates: <code>{{ '{{ slug… }}' }}</code>.</p>';
       } else {
         html += '<div class="flex items-center gap flex-wrap justify-between">' +
           '<span class="text-muted text-xs">Template entry</span>' +
@@ -1018,6 +1025,10 @@
       } else if (disp === "toggle") {
         html += slugInputHtml('data-cfg="field_slug"', (cfg.field_slug || "").trim(), "Field",
           "slug.path or svc.status = ok");
+        html += '<label class="stack form-field--lg">Label' +
+          '<input type="text" class="input" data-cfg="label" placeholder="{{ '{{ slug.value }}' }} or custom" value="' +
+          escapeAttr(cfg.label || "") + '"></label>' +
+          '<p class="text-muted text-xs">Optional name beside the control. Templates: <code>{{ '{{ slug… }}' }}</code>. Empty → no name line.</p>';
         html += '<p class="text-muted text-xs">Toggle/value/text slug → On/Off from bool. ' +
           'Logbook/data need a path into the latest entry (e.g. <code>checks.ok</code>). ' +
           'Expression → On when maths is <code>1</code>. ' +
@@ -2048,7 +2059,7 @@
       widgetsB[iB].config.cells = widgetsB[iB].config.cells || [];
       var blank = (widgetsB[iB].config.cell_kind || "toggle") === "kv_text"
         ? {template: ""}
-        : {field_slug: ""};
+        : {field_slug: "", label: ""};
       widgetsB[iB].config.cells.push(blank);
       setWidgets(widgetsB);
       return;

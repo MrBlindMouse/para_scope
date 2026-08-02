@@ -56,6 +56,9 @@
   <div class="widget-kv widget-kv--{{ style }}">{{ wdata.text or '' }}</div>
 {% elif disp == "toggle" %}
   {% set on = wdata.value %}
+  {% if wdata.label %}
+  <span class="widget-board__name">{{ wdata.label }}</span>
+  {% endif %}
   <div class="widget-toggle widget-toggle--{{ style }}" data-on="{{ '1' if on else '0' }}">
     {% if style == "led" %}
       <span class="widget-toggle__led" aria-hidden="true"></span>

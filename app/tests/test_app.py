@@ -3600,6 +3600,60 @@ class TestWidgetTransforms:
         assert b"Board Up" in html.content and b"Board Ready" in html.content
         assert b"widget-tone--neutral" in html.content
 
+    def test_toggle_templated_labels(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Field
+        from app.widgets import fetch_widget_data
+
+        db = next(get_db())
+        try:
+            tog = Field(
+                name="Gate Field", slug="lbl_gate", field_type="toggle",
+                config={}, state={"value": True},
+            )
+            txt = Field(
+                name="Svc Name", slug="lbl_svc", field_type="text",
+                config={}, state={"value": "API"},
+            )
+            db.add_all([tog, txt])
+            db.commit()
+
+            board = fetch_widget_data(
+                "display", db, display="board",
+                widget_config={
+                    "cell_kind": "toggle",
+                    "style": "led",
+                    "cells": [
+                        {
+                            "field_slug": "lbl_gate",
+                            "label": "Status {{ lbl_svc.value }}",
+                        },
+                        {"field_slug": "lbl_gate"},
+                    ],
+                },
+            )
+            assert board["items"][0]["name"] == "Status API"
+            assert board["items"][1]["name"] == "Gate Field"
+
+            single = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={
+                    "field_slug": "lbl_gate",
+                    "label": "{{ lbl_svc.value }} gate",
+                },
+            )
+            assert single.get("error") is None
+            assert single["label"] == "API gate"
+            assert single["name"] == "Gate Field"
+
+            no_label = fetch_widget_data(
+                "display", db, display="toggle",
+                widget_config={"field_slug": "lbl_gate"},
+            )
+            assert "label" not in no_label
+        finally:
+            db.close()
+
 
 # ── Config: Secrets ──────────────────────────────────────────────────────────
 

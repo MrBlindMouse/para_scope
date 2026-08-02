@@ -411,6 +411,7 @@ def widget_referenced_field_ids(db, config: dict | None, *, title: str = "") -> 
 
     _add(_config_field_slug(cfg))
     _add((cfg.get("max_field_slug") or "").strip())
+    _add_template_slug_heads(slugs, cfg.get("label"))
     for part in _config_field_slugs(cfg):
         _add(part)
     tmpl = (cfg.get("template") or "").strip()
@@ -439,6 +440,7 @@ def widget_referenced_field_ids(db, config: dict | None, *, title: str = "") -> 
         for cell in cells:
             if isinstance(cell, dict):
                 _add((cell.get("field_slug") or "").strip())
+                _add_template_slug_heads(slugs, cell.get("label"))
                 ct = (cell.get("template") or "").strip()
                 if "{{" in ct:
                     for head in _slug_heads_from_template(ct):
@@ -861,6 +863,7 @@ def _board_cells(config: dict) -> list[dict]:
         rules = c.get("tone_rules")
         out.append({
             "field_slug": slug,
+            "label": (c.get("label") or "").strip() if isinstance(c.get("label"), str) else "",
             "unit": (c.get("unit") or "").strip() if isinstance(c.get("unit"), str) else "",
             "template": template,
             "tone_rules": rules if isinstance(rules, list) else [],
@@ -1519,12 +1522,16 @@ def _display_data(db, config, display="logbook_list", source_id=None, fields_sna
         )
         if err:
             return {"display": display, "error": err, "name": name}
-        return {
+        label = _render_widget_text((config.get("label") or "").strip(), snap).strip()
+        out = {
             "display": display, "name": name,
             "value": bool(on),
             "field_id": field_id,
             "_tone_data": dict(snap),
         }
+        if label:
+            out["label"] = label
+        return out
 
     if display == "board":
         return _display_board(db, config, fields_snap=snap)
@@ -1598,10 +1605,11 @@ def _display_board(db, config, fields_snap=None):
             )
             if err or on is None:
                 continue
+            label = _render_widget_text((cell.get("label") or "").strip(), snap).strip()
             items.append({
                 "kind": "toggle",
                 "field_id": field_id,
-                "name": name or "Toggle",
+                "name": label or name or "Toggle",
                 "style": style,
                 "value": bool(on),
             })
