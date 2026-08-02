@@ -171,7 +171,8 @@
           try { chart.resize(); } catch (e) {}
         }, 50);
       });
-      ro.observe(el);
+      var observeEl = (el.closest && el.closest(".widget-chart")) || el;
+      ro.observe(observeEl);
       chartObservers[id] = ro;
     }
     return chart;

@@ -59,14 +59,16 @@
   .dashboard-grid .widget-chart {
     position: relative;
     flex: 1 1 auto;
+    align-self: stretch;
     min-block-size: 0;
-    block-size: auto;
     inline-size: 100%;
   }
 
   .dashboard-grid .widget-chart > [data-widget-chart] {
-    block-size: 100%;
-    inline-size: 100%;
+    position: absolute;
+    inset: 0;
+    block-size: auto;
+    inline-size: auto;
     min-block-size: 0;
   }
 
