@@ -3,6 +3,7 @@
   "use strict";
 
   var charts = Object.create(null);
+  var chartMeta = Object.create(null);
   var chartObservers = Object.create(null);
   var PALETTE = [
     "#3366cc", "#dc3912", "#ff9900", "#109618", "#990099",
@@ -23,6 +24,33 @@
       try { charts[id].destroy(); } catch (e) {}
       delete charts[id];
     }
+    delete chartMeta[id];
+  }
+
+  /** Arc span in (0, 360]; 360 = full circle. */
+  function arcSpan(startAngle, endAngle) {
+    var span = Math.abs(Number(endAngle) - Number(startAngle));
+    if (!isFinite(span) || span <= 0) return 360;
+    if (span > 360) span = span % 360 || 360;
+    return span;
+  }
+
+  /** Negative grid padding / offsetY so semi-circle radials don't leave a dead lower half. */
+  function radialArcPad(el, startAngle, endAngle) {
+    var span = arcSpan(startAngle, endAngle);
+    if (span >= 350) return null;
+    var h = (el && el.clientHeight) || 0;
+    if (h <= 0) h = 200;
+    var unused = (360 - span) / 360;
+    return {
+      padding: {
+        top: 0,
+        bottom: -Math.round(h * unused * 0.55),
+        left: 0,
+        right: 0,
+      },
+      offsetY: -Math.round(h * unused * 0.12),
+    };
   }
 
   function colors(n) {
@@ -151,7 +179,7 @@
     return opts;
   }
 
-  function mount(el, options) {
+  function mount(el, options, meta) {
     if (!el || typeof ApexCharts === "undefined") return null;
     var id = el.id || el.getAttribute("id");
     if (!id) {
@@ -163,11 +191,24 @@
     var chart = new ApexCharts(el, options);
     chart.render();
     charts[id] = chart;
+    if (meta) chartMeta[id] = meta;
     if (typeof ResizeObserver !== "undefined") {
       var timer = null;
       var ro = new ResizeObserver(function () {
         clearTimeout(timer);
         timer = setTimeout(function () {
+          var m = chartMeta[id];
+          if (m && m.partialArc) {
+            var pad = radialArcPad(el, m.startAngle, m.endAngle);
+            if (pad) {
+              try {
+                chart.updateOptions({
+                  chart: { offsetY: pad.offsetY },
+                  grid: { padding: pad.padding },
+                }, false, false);
+              } catch (e) {}
+            }
+          }
           try { chart.resize(); } catch (e) {}
         }, 50);
       });
@@ -460,10 +501,12 @@
     var seriesLabels = multi ? labs : [labs[0] || "Value"];
 
     if (style === "needle" || style === "gauge_ticks" || style === "stroked_gauge") {
+      var gStart = -135;
+      var gEnd = 135;
       var value = Number(vals[0] || 0);
       var radialBar = {
-        startAngle: -135,
-        endAngle: 135,
+        startAngle: gStart,
+        endAngle: gEnd,
         min: 0,
         max: max,
         hollow: { size: style === "stroked_gauge" ? "70%" : "55%" },
@@ -514,14 +557,24 @@
           },
         };
       }
-      return mount(el, baseChartOpts(style === "needle" ? "gauge" : "radialBar", {
+      var gPad = radialArcPad(el, gStart, gEnd);
+      var gOpts = {
         series: style === "needle" ? [value] : [pctOfMax(value, max)],
         labels: seriesLabels,
         colors: [t.link],
         plotOptions: { radialBar: radialBar },
         stroke: style === "stroked_gauge" ? { lineCap: "round", dashArray: 4 } : { lineCap: "round" },
         legend: { show: false },
-      }));
+      };
+      if (gPad) {
+        gOpts.chart = { offsetY: gPad.offsetY };
+        gOpts.grid = { padding: gPad.padding };
+      }
+      return mount(el, baseChartOpts(style === "needle" ? "gauge" : "radialBar", gOpts), {
+        partialArc: true,
+        startAngle: gStart,
+        endAngle: gEnd,
+      });
     }
 
     var startAngle = opts.startAngle != null ? opts.startAngle : -90;
@@ -538,7 +591,31 @@
       ? { type: "gradient", gradient: { shade: "light", type: "horizontal", opacityFrom: 1, opacityTo: 0.6 } }
       : { type: "solid" };
 
-    return mount(el, baseChartOpts("radialBar", {
+    var pad = radialArcPad(el, startAngle, endAngle);
+    var partial = !!pad;
+    var showLeg = legendVisible(opts);
+    var legendOpts;
+    if (partial) {
+      if (multi && showLeg) {
+        legendOpts = {
+          show: true,
+          floating: true,
+          position: "bottom",
+          offsetY: Math.round(((el && el.clientHeight) || 200) * 0.02),
+          labels: { colors: t.muted },
+        };
+      } else {
+        legendOpts = { show: false };
+      }
+    } else {
+      legendOpts = {
+        show: showLeg,
+        position: "bottom",
+        labels: { colors: t.muted },
+      };
+    }
+
+    var rOpts = {
       series: seriesVals,
       labels: seriesLabels,
       colors: colors(seriesVals.length),
@@ -567,13 +644,18 @@
           },
         },
       },
-      legend: {
-        show: legendVisible(opts),
-        position: "bottom",
-        labels: { colors: t.muted },
-      },
+      legend: legendOpts,
       stroke: { lineCap: "round" },
-    }));
+    };
+    if (pad) {
+      rOpts.chart = { offsetY: pad.offsetY };
+      rOpts.grid = { padding: pad.padding };
+    }
+    return mount(
+      el,
+      baseChartOpts("radialBar", rOpts),
+      partial ? { partialArc: true, startAngle: startAngle, endAngle: endAngle } : null
+    );
   }
 
   function initIn(root) {
