@@ -242,14 +242,20 @@ def test_resolve_value_from_event_shape():
         "temp": 20,
         "payload": {"sensor": {"id": 1}},
         "field": {"n": 3},
+        "sensor": "LOOKUP",
+        "name": "A",
+        "key": "dyn",
+        "equity": 99,
+        "a": 1,
+        "b": 2,
     }
     shape = """{
       "label": "Sensor A",
-      "celsius": "{{ temp }}",
-      "fahrenheit": "{{ temp * 1.8 + 32 }}",
-      "raw": "{{ payload.sensor }}",
-      "next": "{{ field.n + 1 }}",
-      "missing": "{{ nope.path }}",
+      "celsius": temp,
+      "fahrenheit": temp * 1.8 + 32,
+      "raw": payload.sensor,
+      "next": field.n + 1,
+      "missing": nope.path,
       "flag": true,
       "n": 1
     }"""
@@ -264,13 +270,25 @@ def test_resolve_value_from_event_shape():
         "flag": True,
         "n": 1,
     }
-    # Bare quoted strings stay literal (not paths)
+    # Quoted strings stay literal (even if a path of that name exists)
+    assert resolve_value_from_event('{"name": "sensor"}', nd) == {"name": "sensor"}
     assert resolve_value_from_event('{"celsius":"temp"}', nd) == {"celsius": "temp"}
+    # Explicit {{ }} still works
+    assert resolve_value_from_event('{"celsius":"{{ temp }}"}', nd) == {"celsius": 20}
     assert resolve_value_from_event(
         '["{{ temp }}", "{{ rate * 2 }}", "hi there", "temp"]',
         {"temp": 5, "rate": 3},
     ) == [5, 6.0, "hi there", "temp"]
+    assert resolve_value_from_event("[temp, rate * 2, \"hi there\"]", {"temp": 5, "rate": 3}) == [
+        5, 6.0, "hi there",
+    ]
     # Mixed text with templates → string
     assert resolve_value_from_event('{"msg":"temp={{ temp }}"}', nd) == {"msg": "temp=20"}
-    # Invalid JSON that looks like shape → fall through to path/expr (fails → None)
+    assert resolve_value_from_event('{"label": "Sensor {{ name }}"}', nd) == {"label": "Sensor A"}
+    # Templated key
+    assert resolve_value_from_event('{"{{ key }}": equity}', nd) == {"dyn": 99}
+    # Maths with commas inside calls
+    assert resolve_value_from_event('{"t": sum(a, b)}', nd) == {"t": 3.0}
+    # Invalid shape → None
     assert resolve_value_from_event("{not json", nd) is None
+    assert resolve_value_from_event("{cash: cash}", nd) is None  # unquoted key

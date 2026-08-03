@@ -12,11 +12,11 @@ While still on `0.x`, a **MINOR** bump may include breaking (wipe) changes; thos
 
 ### Breaking
 
-- JSON shapes in Update field (data **Object from event**, logbook **Value from event**): quoted string leaves are now **literal text**. Paths and maths must use `{{ … }}` (e.g. `{"celsius":"{{ temp }}"}` instead of `{"celsius":"temp"}`). No DB wipe — reconfigure affected action `value_key` shapes. Bare (non-JSON) paths like `payload` are unchanged.
+- JSON shapes in Update field (data **Object from event**, logbook **Value from event**): keys must be quoted (may use `{{ }}`). **Bare** values are path/maths (`{"cash": cash}`); **quoted** values are literal text or templates (`"sensor"`, `"Sensor {{ name }}"`). Explicit `"{{ cash }}"` still works. No DB wipe — reconfigure shapes that relied on quoted path strings like `"temp"` as lookups (use bare `temp` or `"{{ temp }}"`). Bare (non-object) paths like `payload` are unchanged.
 
 ### Changed
 
-- Help, action-form tips/placeholders, and DESIGN align with template-style shape leaves
+- Help, action-form tips/placeholders, and DESIGN document bare-value JSON-like shapes
 
 ## [0.1.1] — 2026-07-31
 

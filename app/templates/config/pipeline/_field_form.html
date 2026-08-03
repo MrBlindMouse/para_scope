@@ -99,7 +99,7 @@
 
   {# ── data ── #}
   <div id="field-params-data" class="stack field-type-params" {% if ft != 'data' %}hidden{% endif %}>
-    <p class="text-muted">A single JSON object. Actions replace it from event data or a JSON shape (quoted leaves literal; <code>{{ '{{ path }}' }}</code> for typed path/maths). Starts empty.</p>
+    <p class="text-muted">A single JSON object. Actions replace it from event data or a JSON-like shape (keys quoted; bare values = path/maths; quoted = literal or <code>{{ '{{ … }}' }}</code>). Starts empty.</p>
     <label class="stack">
       Name *
       <input name="name" type="text" class="input field-name-input"

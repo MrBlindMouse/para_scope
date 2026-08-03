@@ -610,14 +610,201 @@ def render_data_template(template: str, data: dict | None) -> str:
     return _TEMPLATE_RE.sub(repl, template or "")
 
 
+def _skip_ws(s: str, i: int) -> int:
+    n = len(s)
+    while i < n and s[i].isspace():
+        i += 1
+    return i
+
+
+def _scan_string(s: str, i: int) -> int:
+    """``s[i]`` is ``"``; return index just past the closing quote."""
+    n = len(s)
+    i += 1
+    esc = False
+    while i < n:
+        c = s[i]
+        if esc:
+            esc = False
+        elif c == "\\":
+            esc = True
+        elif c == '"':
+            return i + 1
+        i += 1
+    raise ValueError("unclosed string")
+
+
+def _scan_value_span(s: str, i: int) -> int:
+    """End index of a value starting at ``i`` (comma/closer at depth 0 not included)."""
+    n = len(s)
+    brace = bracket = paren = 0
+    in_str = False
+    esc = False
+    while i < n:
+        c = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+            i += 1
+            continue
+        if c == "(":
+            paren += 1
+        elif c == ")":
+            paren -= 1
+        elif c == "{":
+            brace += 1
+        elif c == "}":
+            if brace == 0 and bracket == 0 and paren == 0:
+                return i
+            brace -= 1
+        elif c == "[":
+            bracket += 1
+        elif c == "]":
+            if bracket == 0 and brace == 0 and paren == 0:
+                return i
+            bracket -= 1
+        elif c == "," and brace == 0 and bracket == 0 and paren == 0:
+            return i
+        i += 1
+    return i
+
+
+def _is_json_atom(val: str) -> bool:
+    try:
+        json.loads(val.strip())
+        return True
+    except json.JSONDecodeError:
+        return False
+
+
+def _rewrite_value(val: str) -> str:
+    """Bare path/maths → ``\"{{ expr }}\"``; quoted/atoms/containers pass through (rewritten)."""
+    val = val.strip()
+    if not val:
+        raise ValueError("empty value")
+    if val[0] == '"':
+        end = _scan_string(val, 0)
+        if end != len(val):
+            raise ValueError("trailing junk after string")
+        return val
+    if val[0] in "{[":
+        return _rewrite_shape_text(val)
+    if _is_json_atom(val):
+        return val.strip()
+    return json.dumps("{{ " + val + " }}")
+
+
+def _rewrite_object_body(body: str) -> str:
+    parts = []
+    i = 0
+    n = len(body)
+    while True:
+        i = _skip_ws(body, i)
+        if i >= n:
+            break
+        if body[i] != '"':
+            raise ValueError("shape keys must be quoted strings")
+        key_end = _scan_string(body, i)
+        key = body[i:key_end]
+        i = _skip_ws(body, key_end)
+        if i >= n or body[i] != ":":
+            raise ValueError("expected ':' after key")
+        i += 1
+        i = _skip_ws(body, i)
+        val_end = _scan_value_span(body, i)
+        parts.append(f"{key}: {_rewrite_value(body[i:val_end])}")
+        i = _skip_ws(body, val_end)
+        if i >= n:
+            break
+        if body[i] != ",":
+            raise ValueError("expected ',' between pairs")
+        i += 1
+    return ", ".join(parts)
+
+
+def _rewrite_array_body(body: str) -> str:
+    parts = []
+    i = 0
+    n = len(body)
+    while True:
+        i = _skip_ws(body, i)
+        if i >= n:
+            break
+        val_end = _scan_value_span(body, i)
+        val = body[i:val_end].strip()
+        if val:
+            parts.append(_rewrite_value(val))
+        i = _skip_ws(body, val_end)
+        if i >= n:
+            break
+        if body[i] != ",":
+            raise ValueError("expected ',' between array values")
+        i += 1
+    return ", ".join(parts)
+
+
+def _rewrite_shape_text(text: str) -> str:
+    text = text.strip()
+    if not text:
+        raise ValueError("empty shape")
+    if text[0] == "{":
+        if text[-1] != "}":
+            raise ValueError("unclosed object")
+        return "{" + _rewrite_object_body(text[1:-1]) + "}"
+    if text[0] == "[":
+        if text[-1] != "]":
+            raise ValueError("unclosed array")
+        return "[" + _rewrite_array_body(text[1:-1]) + "]"
+    raise ValueError("shape must be object or array")
+
+
+def parse_shape_spec(text: str):
+    """Parse a JSON-like shape (bare values allowed). Returns dict/list or None."""
+    text = (text or "").strip()
+    if not text or text[0] not in "{[":
+        return None
+    try:
+        parsed = json.loads(_rewrite_shape_text(text))
+    except (ValueError, json.JSONDecodeError):
+        return None
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    return None
+
+
+def _resolve_shape_key(key: str, data: dict) -> str:
+    m = _WHOLE_TEMPLATE_RE.fullmatch(key)
+    if m:
+        raw = resolve_path_or_expr(m.group(1), data)
+        if raw is None:
+            return ""
+        if isinstance(raw, float):
+            return format_expr_number(raw)
+        return str(raw)
+    if _TEMPLATE_RE.search(key):
+        return render_data_template(key, data)
+    return key
+
+
 def _resolve_shape(obj, data: dict):
     """Walk a JSON shape: string leaves are literal unless ``{{ … }}``; else keep typed.
 
     A leaf that is exactly one ``{{ expr }}`` resolves typed (path/maths). Mixed text
     with templates becomes a string via ``render_data_template``. Plain strings stay literal.
+    Dict keys may also contain ``{{ … }}``.
     """
     if isinstance(obj, dict):
-        return {k: _resolve_shape(v, data) for k, v in obj.items()}
+        return {
+            _resolve_shape_key(k, data): _resolve_shape(v, data) for k, v in obj.items()
+        }
     if isinstance(obj, list):
         return [_resolve_shape(v, data) for v in obj]
     if isinstance(obj, str):
@@ -635,20 +822,18 @@ def resolve_value_from_event(spec: str, data: dict | None):
 
     - Dotted path → value from ``data`` (objects/lists kept; missing → None).
     - Safe maths → float (``+ - * / %``, ``abs``, ``round``, ``min``, ``max``).
-    - JSON object/array → same structure; string leaves are literal unless ``{{ … }}``
-      (whole-leaf template → typed path/maths; mixed → string template).
+    - JSON-like object/array → same structure; keys quoted (may use ``{{ }}``);
+      bare values are path/maths; quoted strings are literal unless ``{{ … }}``.
     """
     text = (spec or "").strip()
     if not text:
         return None
     data = data or {}
     if text[0] in "{[":
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            parsed = None
+        parsed = parse_shape_spec(text)
         if isinstance(parsed, (dict, list)):
             return _resolve_shape(parsed, data)
+        return None
     return resolve_path_or_expr(text, data)
 
 

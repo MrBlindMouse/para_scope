@@ -43,6 +43,7 @@ from jinja2 import pass_context
 from app.pipeline import evaluate_and_dispatch
 from app.dashboard_layout import parse_layout_config
 from app.pollers import parse_poller_form
+from app.widget_transforms import parse_shape_spec
 
 # ponytail: simple in-memory rate limiter for login (IP-based, 10 req/minute)
 _LOGIN_RATE_LIMIT = {}
@@ -282,10 +283,7 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
                 if not key:
                     return None, "Value from event is required"
                 if key[0] in "{[":
-                    try:
-                        parsed = json.loads(key)
-                    except json.JSONDecodeError:
-                        return None, "Value from event JSON is invalid"
+                    parsed = parse_shape_spec(key)
                     if not isinstance(parsed, (dict, list)):
                         return None, "Value from event JSON is invalid"
                 out["value_key"] = key
@@ -327,12 +325,9 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
                 if key[0] == "[":
                     return None, "Data field JSON must be an object"
                 if key[0] == "{":
-                    try:
-                        parsed = json.loads(key)
-                    except json.JSONDecodeError:
-                        return None, "Data field JSON is invalid"
+                    parsed = parse_shape_spec(key)
                     if not isinstance(parsed, dict):
-                        return None, "Data field JSON must be an object"
+                        return None, "Data field JSON is invalid"
                 out["value_key"] = key
         else:
             # field_type unknown at parse time — still store field_id; handler checks type
