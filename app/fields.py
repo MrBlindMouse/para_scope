@@ -35,7 +35,8 @@ def get_by_path(data, path: str, star_bindings: dict[str, int] | None = None):
     With no bindings, ``*`` is index 0. When ``star_bindings`` is passed
     (or set via ``path_star_bindings``), ``*`` under prefix ``value`` uses
     ``star_bindings["value"]`` (empty prefix key ``""`` for a root list).
-    Dict keys named ``*`` are looked up normally.
+    ``**`` is not supported here (use ``collect_by_path``). Dict keys named
+    ``*`` / ``**`` are looked up normally.
     """
     if not path:
         return data
@@ -48,6 +49,8 @@ def get_by_path(data, path: str, star_bindings: dict[str, int] | None = None):
             current = current.get(part)
         elif isinstance(current, list):
             try:
+                if part == "**":
+                    return None
                 if part == "*":
                     prefix = ".".join(walked)
                     idx = (star_bindings or {}).get(prefix, 0)
@@ -62,6 +65,48 @@ def get_by_path(data, path: str, star_bindings: dict[str, int] | None = None):
             return None
         walked.append(part)
     return current
+
+
+def collect_by_path(data, path: str, star_bindings: dict[str, int] | None = None):
+    """Walk a path collecting leaves; ``**`` expands every list index.
+
+    ``*`` is one row (same bindings as ``get_by_path``). Integer indexes and
+    dict keys work as usual. Returns a list of leaf values, or None if any
+    branch is missing / invalid. Empty ``**`` over an empty list → ``[]``.
+    """
+    if star_bindings is None:
+        star_bindings = _star_bindings.get()
+    if not path:
+        return [data]
+
+    def walk(current, parts: list[str], walked: list[str]):
+        if not parts:
+            return [current]
+        part, *rest = parts
+        if isinstance(current, dict):
+            if part not in current:
+                return None
+            return walk(current[part], rest, walked + [part])
+        if isinstance(current, list):
+            if part == "**":
+                out: list = []
+                for item in current:
+                    got = walk(item, rest, walked + [part])
+                    if got is None:
+                        return None
+                    out.extend(got)
+                return out
+            try:
+                if part == "*":
+                    prefix = ".".join(walked)
+                    idx = (star_bindings or {}).get(prefix, 0)
+                    return walk(current[idx], rest, walked + [part])
+                return walk(current[int(part)], rest, walked + [part])
+            except (ValueError, IndexError):
+                return None
+        return None
+
+    return walk(data, path.split("."), [])
 
 
 def default_field_config(field_type: str) -> dict:

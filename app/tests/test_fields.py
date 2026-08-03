@@ -166,6 +166,21 @@ def test_eval_expr_indexed_path_maths():
     assert eval_expr("1 / lb.value.9.rate", data) is None
 
 
+def test_collect_by_path_dbl_star():
+    from app.fields import collect_by_path, get_by_path, path_star_bindings
+
+    data = {"bars": [{"pl": -0.26}, {"pl": 0.3}, {"pl": 0.1}]}
+    assert collect_by_path(data, "bars.**.pl") == [-0.26, 0.3, 0.1]
+    assert get_by_path(data, "bars.**.pl") is None  # single-value path rejects **
+    assert collect_by_path(data, "bars.*.pl") == [-0.26]  # * = index 0
+    with path_star_bindings({"bars": 1}):
+        assert collect_by_path(data, "bars.*.pl") == [0.3]
+    assert collect_by_path({"bars": []}, "bars.**.pl") == []
+    assert collect_by_path(data, "bars.**.missing") is None
+    # Flat number list via **
+    assert collect_by_path({"xs": [1, 2, 3]}, "xs.**") == [1, 2, 3]
+
+
 def test_eval_expr_trunc_sum_avg():
     from app.widget_transforms import eval_expr
 
@@ -177,8 +192,36 @@ def test_eval_expr_trunc_sum_avg():
     assert eval_expr("sum()", nd) is None
     assert eval_expr("avg()", nd) is None
     assert eval_expr("trunc(a, b)", nd) is None
-    # List paths are not accepted as aggregate args (variadic scalars only).
-    assert eval_expr("sum(items)", {"items": [1, 2, 3]}) is None
+    # Numeric lists flatten in aggregates
+    assert eval_expr("sum(items)", {"items": [1, 2, 3]}) == 6.0
+    assert eval_expr("avg(items)", {"items": [1, 2, 3]}) == 2.0
+    assert eval_expr("min(items)", {"items": [1, 2, 3]}) == 1.0
+    assert eval_expr("max(items)", {"items": [1, 2, 3]}) == 3.0
+    assert eval_expr("sum(items, a)", {"items": [1, 2], "a": 3}) == 6.0
+    assert eval_expr("sum(payload.equity)", {"payload": {"equity": [10, 20]}}) == 30.0
+    assert eval_expr("sum(items)", {"items": []}) is None
+    assert eval_expr("sum(items)", {"items": [1, "x"]}) is None
+    assert eval_expr("sum(items)", {"items": [{"a": 1}]}) is None
+
+
+def test_eval_expr_dbl_star_aggregates():
+    from app.fields import path_star_bindings
+    from app.widget_transforms import eval_expr, resolve_path_or_expr, resolve_value_from_event
+
+    data = {"bars": [{"pl": -0.26}, {"pl": 0.3}, {"pl": 0.1}], "fee": 1.0}
+    assert eval_expr("sum(bars.**.pl)", data) == pytest.approx(0.14)
+    assert eval_expr("avg(bars.**.pl)", data) == pytest.approx(0.14 / 3)
+    assert eval_expr("min(bars.**.pl)", data) == pytest.approx(-0.26)
+    assert eval_expr("max(bars.**.pl)", data) == pytest.approx(0.3)
+    assert eval_expr("sum(bars.**.pl, fee)", data) == pytest.approx(1.14)
+    # * still one row
+    assert eval_expr("sum(bars.*.pl)", data) == pytest.approx(-0.26)
+    with path_star_bindings({"bars": 2}):
+        assert eval_expr("sum(bars.*.pl)", data) == pytest.approx(0.1)
+    # Path-only ** collects leaves
+    assert resolve_path_or_expr("bars.**.pl", data) == [-0.26, 0.3, 0.1]
+    assert resolve_value_from_event("bars.**.pl", data) == [-0.26, 0.3, 0.1]
+    assert eval_expr("sum(bars.**.missing)", data) is None
 
 
 def test_eval_expr_star_path_tokens():

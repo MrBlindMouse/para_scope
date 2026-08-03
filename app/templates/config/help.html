@@ -379,10 +379,36 @@
           (also <code>==</code>; bare <code>=</code> means equal) returning <code>1</code> or <code>0</code>,
           functions <code>abs</code>, <code>round</code>,
           <code>trunc</code>, <code>min</code>, <code>max</code>, <code>sum</code>, <code>avg</code>
-          (variadic scalars, e.g. <code>sum(a, b, c)</code>).
+          (scalars, numeric lists, or <code>**</code> collects — e.g.
+          <code>sum(a, b, c)</code>, <code>sum(profit_loss)</code>,
+          <code>sum(bars.**.pl)</code>).
           String/bool compares are allowed for <code>=</code> / <code>!=</code>; order ops need numbers.
-          In maths, <code>*</code> is the list row matched by the rule’s conditions (same as path-only).
+          List segments in paths and maths:
         </li>
+      </ul>
+      <table class="table">
+        <thead>
+          <tr><th>Segment</th><th>Meaning</th><th>Example</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>*</code></td>
+            <td>One list row — matched by the rule’s starred conditions, else index <code>0</code>. Never “all rows”.</td>
+            <td><code>1 / value.*.rate</code>, <code>sum(bars.*.pl)</code></td>
+          </tr>
+          <tr>
+            <td><code>**</code></td>
+            <td>Every list row — collect leaves (path-only returns a list; aggregates flatten numbers).</td>
+            <td><code>bars.**.pl</code>, <code>sum(bars.**.pl)</code></td>
+          </tr>
+          <tr>
+            <td>Flat <code>number[]</code></td>
+            <td>Path to a list of numbers; <code>sum</code>/<code>avg</code>/<code>min</code>/<code>max</code> flatten it.</td>
+            <td><code>sum(profit_loss)</code>, <code>avg(equity)</code></td>
+          </tr>
+        </tbody>
+      </table>
+      <ul class="stack help__list">
         <li>JSON-like shape (keys quoted, may use <code>{{ '{{ … }}' }}</code>; bare values = path/maths; quoted = literal or template):</li>
       </ul>
       <pre class="help__code">{{ '{' }}

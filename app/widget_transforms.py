@@ -8,7 +8,7 @@ import operator
 import re
 from datetime import datetime, timezone, timedelta
 
-from app.fields import get_by_path
+from app.fields import collect_by_path, get_by_path
 
 _BINOPS = {
     ast.Add: operator.add,
@@ -22,6 +22,7 @@ _UNARYOPS = {
     ast.USub: operator.neg,
 }
 _CALL_FUNCS = frozenset({"abs", "round", "min", "max", "trunc", "sum", "avg"})
+_AGG_FUNCS = frozenset({"min", "max", "sum", "avg"})
 _COMPARE_OPS = {
     "gt": operator.gt,
     "lt": operator.lt,
@@ -148,10 +149,16 @@ def _ast_lit(raw) -> str | None:
     return None
 
 
+def _path_has_dbl_star(path: str) -> bool:
+    return any(p == "**" for p in path.split("."))
+
+
 def _subst_path_tokens(text: str, data: dict) -> str | None:
     """Replace path tokens with AST-safe literals before ``ast.parse``.
 
     Dotted paths (incl. ``*`` / numeric indexes) must resolve; missing → None.
+    ``**`` paths expand to comma-separated numeric literals (for aggregates).
+    Non-scalar resolved values are left unsubstituted (aggregates flatten lists).
     Bare names that resolve become literals; unresolved bare names are left for
     compare string-literal fallback (``ok``). Call names followed by ``(`` stay.
     """
@@ -164,6 +171,18 @@ def _subst_path_tokens(text: str, data: dict) -> str | None:
             if after.startswith("("):
                 continue
         dotted = "." in token
+        if _path_has_dbl_star(token):
+            collected = collect_by_path(data, token)
+            if collected is None or not collected:
+                return None
+            lits = []
+            for v in collected:
+                lit = _ast_lit(v)
+                if lit is None:
+                    return None
+                lits.append(lit)
+            out = out[: m.start()] + ", ".join(lits) + out[m.end() :]
+            continue
         raw = get_by_path(data, token)
         if raw is None:
             if dotted:
@@ -171,8 +190,7 @@ def _subst_path_tokens(text: str, data: dict) -> str | None:
             continue
         lit = _ast_lit(raw)
         if lit is None:
-            if dotted:
-                return None
+            # Leave list/dict paths for Name/Attribute (aggregate flatten).
             continue
         out = out[: m.start()] + lit + out[m.end() :]
     return out
@@ -418,6 +436,45 @@ def _compare_values(left, right, op_type) -> bool:
     return bool(fn(str(left), str(right)))
 
 
+def _as_number_list(raw) -> list[float] | None:
+    """Scalar number → one-float list; list of numbers → floats; else None."""
+    if isinstance(raw, (list, tuple)):
+        out: list[float] = []
+        for x in raw:
+            n = _as_number(x)
+            if n is None:
+                return None
+            out.append(n)
+        return out
+    n = _as_number(raw)
+    if n is not None:
+        return [n]
+    return None
+
+
+def _eval_aggregate_arg(node, data: dict) -> list[float]:
+    """Resolve one sum/avg/min/max arg to floats (flatten numeric lists)."""
+    if isinstance(node, ast.Name):
+        raw = get_by_path(data, node.id)
+        nums = _as_number_list(raw)
+        if nums is None:
+            raise ValueError("bad agg arg")
+        return nums
+    if isinstance(node, ast.Attribute):
+        path = _attr_path(node)
+        if not path:
+            raise ValueError("bad attr")
+        if _path_has_dbl_star(path):
+            collected = collect_by_path(data, path)
+            nums = _as_number_list(collected) if collected is not None else None
+        else:
+            nums = _as_number_list(get_by_path(data, path))
+        if nums is None:
+            raise ValueError("bad agg arg")
+        return nums
+    return [_eval_ast(node, data)]
+
+
 def _eval_ast(node, data: dict):
     if isinstance(node, ast.Expression):
         return _eval_ast(node.body, data)
@@ -444,8 +501,19 @@ def _eval_ast(node, data: dict):
             raise ValueError("disallowed call")
         if node.keywords:
             raise ValueError("disallowed kwargs")
-        args = [_eval_ast(a, data) for a in node.args]
         name = node.func.id
+        if name in _AGG_FUNCS:
+            nums: list[float] = []
+            for a in node.args:
+                nums.extend(_eval_aggregate_arg(a, data))
+            if not nums:
+                raise ValueError("agg arity")
+            if name == "sum":
+                return float(sum(nums))
+            if name == "avg":
+                return float(sum(nums) / len(nums))
+            return float((min if name == "min" else max)(nums))
+        args = [_eval_ast(a, data) for a in node.args]
         if name == "abs":
             if len(args) != 1:
                 raise ValueError("abs arity")
@@ -460,18 +528,6 @@ def _eval_ast(node, data: dict):
             if len(args) != 1:
                 raise ValueError("trunc arity")
             return float(math.trunc(args[0]))
-        if name in ("min", "max"):
-            if not args:
-                raise ValueError("minmax arity")
-            return float((min if name == "min" else max)(args))
-        if name == "sum":
-            if not args:
-                raise ValueError("sum arity")
-            return float(sum(args))
-        if name == "avg":
-            if not args:
-                raise ValueError("avg arity")
-            return float(sum(args) / len(args))
         raise ValueError("disallowed call")
     if isinstance(node, ast.Name):
         raw = get_by_path(data, node.id)
@@ -519,7 +575,10 @@ def resolve_operand(expr: str, data: dict | None):
         return None
     data = data or {}
     if _PATH_RE.fullmatch(text):
-        raw = get_by_path(data, text)
+        if _path_has_dbl_star(text):
+            raw = collect_by_path(data, text)
+        else:
+            raw = get_by_path(data, text)
         if raw is not None:
             return raw
     num = eval_expr(text, data)
@@ -589,7 +648,10 @@ def resolve_path_or_expr(body: str, data: dict | None):
         return None
     data = data or {}
     if _PATH_RE.fullmatch(text):
-        raw = get_by_path(data, text)
+        if _path_has_dbl_star(text):
+            raw = collect_by_path(data, text)
+        else:
+            raw = get_by_path(data, text)
         if raw is not None:
             return raw
     return eval_expr(text, data)
