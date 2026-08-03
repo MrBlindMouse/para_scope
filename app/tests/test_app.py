@@ -4886,9 +4886,9 @@ class TestPipeline:
             db.commit()
 
             shape = (
-                '{"label":"Sensor A","celsius":"temp",'
-                '"fahrenheit":"temp * 1.8 + 32","raw":"payload.sensor",'
-                '"next":"field.n + 1"}'
+                '{"label":"Sensor A","celsius":"{{ temp }}",'
+                '"fahrenheit":"{{ temp * 1.8 + 32 }}","raw":"{{ payload.sensor }}",'
+                '"next":"{{ field.n + 1 }}"}'
             )
             action = ActionInstance(
                 source_id=sid, action_type="field_push",
@@ -4988,7 +4988,7 @@ class TestPipeline:
 
             action.config = {
                 "field_id": field.id,
-                "value_key": '{"reading":"temp","next":"field.id + 1","meta":"payload"}',
+                "value_key": '{"reading":"{{ temp }}","next":"{{ field.id + 1 }}","meta":"{{ payload }}"}',
             }
             flag_modified(action, "config")
             db.commit()

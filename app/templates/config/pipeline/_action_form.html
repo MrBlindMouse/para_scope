@@ -73,10 +73,10 @@
         <span class="field-label">
           Value from event *
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Path, maths, or JSON object/array. String leaves = path, maths, or literal. field = current stored value; fields.slug.path = any Field. e.g. status, field.n + 1, fields.temperature.value">?</button>
+                  data-tip="Path, maths, or JSON object/array. In shapes, quoted text is literal; use {{ '{{ path }}' }} / {{ '{{ expr }}' }} for typed values (whole-leaf). field = current stored value; fields.slug.path = any Field. e.g. status, field.n + 1, fields.temperature.value">?</button>
         </span>
         <textarea name="value_key" class="input" id="logbook-value-key" rows="4"
-                  placeholder='status&#10;or field.n + 1&#10;or {"celsius":"temp","label":"Sensor A"}'>{{ cfg.get('value_key') or '' }}</textarea>
+                  placeholder='status&#10;or field.n + 1&#10;or {"celsius":"{{ '{{ temp }}' }}","label":"Sensor A"}'>{{ cfg.get('value_key') or '' }}</textarea>
       </label>
       <label class="stack" id="logbook-literal-wrap" hidden>
         <span class="field-label">
@@ -154,10 +154,10 @@
         <span class="field-label">
           Object from event *
           <button type="button" class="field-tip" tabindex="0"
-                  data-tip="Path or JSON object shape. Result must be a JSON object. field = current stored value; fields.slug.path = any Field.">?</button>
+                  data-tip="Path or JSON object shape. Result must be a JSON object. In shapes, quoted text is literal; use {{ '{{ path }}' }} / {{ '{{ expr }}' }} for typed values (whole-leaf). field = current stored value; fields.slug.path = any Field.">?</button>
         </span>
         <textarea name="value_key" class="input" id="data-value-key" rows="4"
-                  placeholder='payload&#10;or {"celsius":"temp","sensor":"payload.sensor"}'>{{ cfg.get('value_key') or '' }}</textarea>
+                  placeholder='payload&#10;or {"celsius":"{{ '{{ temp }}' }}","sensor":"{{ '{{ payload.sensor }}' }}"}'>{{ cfg.get('value_key') or '' }}</textarea>
       </label>
     </div>
   </div>

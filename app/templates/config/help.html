@@ -80,7 +80,7 @@
           </tr>
           <tr>
             <td>Data</td>
-            <td>A single JSON object replaced from event data or a JSON shape.</td>
+            <td>A single JSON object replaced from event data or a JSON shape (quoted leaves are literal; use <code>{{ '{{ path }}' }}</code> for typed path/maths).</td>
           </tr>
         </tbody>
       </table>
@@ -383,13 +383,13 @@
           String/bool compares are allowed for <code>=</code> / <code>!=</code>; order ops need numbers.
           In maths, <code>*</code> is the list row matched by the rule’s conditions (same as path-only).
         </li>
-        <li>JSON shape (string leaves = path, maths, or literal text):</li>
+        <li>JSON shape (quoted text is literal; <code>{{ '{{ path }}' }}</code> / <code>{{ '{{ expr }}' }}</code> for typed values when the leaf is a single template):</li>
       </ul>
       <pre class="help__code">{{ '{' }}
   "label": "Sensor A",
-  "celsius": "temp",
-  "fahrenheit": "temp * 1.8 + 32",
-  "raw": "payload.sensor"
+  "celsius": "{{ '{{ temp }}' }}",
+  "fahrenheit": "{{ '{{ temp * 1.8 + 32 }}' }}",
+  "raw": "{{ '{{ payload.sensor }}' }}"
 }</pre>
       <p class="text-muted">
         Call URL, notify, and browser notification templates stay strings.

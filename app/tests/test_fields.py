@@ -245,11 +245,11 @@ def test_resolve_value_from_event_shape():
     }
     shape = """{
       "label": "Sensor A",
-      "celsius": "temp",
-      "fahrenheit": "temp * 1.8 + 32",
-      "raw": "payload.sensor",
-      "next": "field.n + 1",
-      "missing": "nope.path",
+      "celsius": "{{ temp }}",
+      "fahrenheit": "{{ temp * 1.8 + 32 }}",
+      "raw": "{{ payload.sensor }}",
+      "next": "{{ field.n + 1 }}",
+      "missing": "{{ nope.path }}",
       "flag": true,
       "n": 1
     }"""
@@ -264,8 +264,13 @@ def test_resolve_value_from_event_shape():
         "flag": True,
         "n": 1,
     }
-    assert resolve_value_from_event('["temp", "rate * 2", "hi there"]', {"temp": 5, "rate": 3}) == [
-        5, 6.0, "hi there"
-    ]
+    # Bare quoted strings stay literal (not paths)
+    assert resolve_value_from_event('{"celsius":"temp"}', nd) == {"celsius": "temp"}
+    assert resolve_value_from_event(
+        '["{{ temp }}", "{{ rate * 2 }}", "hi there", "temp"]',
+        {"temp": 5, "rate": 3},
+    ) == [5, 6.0, "hi there", "temp"]
+    # Mixed text with templates → string
+    assert resolve_value_from_event('{"msg":"temp={{ temp }}"}', nd) == {"msg": "temp=20"}
     # Invalid JSON that looks like shape → fall through to path/expr (fails → None)
     assert resolve_value_from_event("{not json", nd) is None

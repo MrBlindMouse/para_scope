@@ -8,6 +8,16 @@ Versioning: [Semantic Versioning](https://semver.org/) on the `0.x` line. App ve
 
 While still on `0.x`, a **MINOR** bump may include breaking (wipe) changes; those are called out under **Breaking**. After `1.0.0`, breaks move to **MAJOR** only.
 
+## [Unreleased]
+
+### Breaking
+
+- JSON shapes in Update field (data **Object from event**, logbook **Value from event**): quoted string leaves are now **literal text**. Paths and maths must use `{{ … }}` (e.g. `{"celsius":"{{ temp }}"}` instead of `{"celsius":"temp"}`). No DB wipe — reconfigure affected action `value_key` shapes. Bare (non-JSON) paths like `payload` are unchanged.
+
+### Changed
+
+- Help, action-form tips/placeholders, and DESIGN align with template-style shape leaves
+
 ## [0.1.1] — 2026-07-31
 
 Patch release. Tag: `v0.1.1`. No schema wipe.

@@ -36,6 +36,7 @@ _PATH_TOKEN_RE = re.compile(
     r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)+|[a-zA-Z_][a-zA-Z0-9_]*"
 )
 _TEMPLATE_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
+_WHOLE_TEMPLATE_RE = re.compile(r"^\{\{\s*([^}]+?)\s*\}\}$")
 _NUMERIC_OPS = frozenset({"gt", "lt", "gte", "lte"})
 # Bare ``=`` → ``==``; leave ``==`` ``!=`` ``<=`` ``>=`` alone.
 _BARE_EQ_RE = re.compile(r"(?<![!<>=])=(?!=)")
@@ -594,41 +595,6 @@ def resolve_path_or_expr(body: str, data: dict | None):
     return eval_expr(text, data)
 
 
-def _resolve_shape(obj, data: dict):
-    """Walk a JSON shape: string leaves → path, maths, or literal; else keep typed."""
-    if isinstance(obj, dict):
-        return {k: _resolve_shape(v, data) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_resolve_shape(v, data) for v in obj]
-    if isinstance(obj, str):
-        if _PATH_RE.fullmatch(obj):
-            return get_by_path(data, obj)
-        num = eval_expr(obj, data)
-        return num if num is not None else obj
-    return obj
-
-
-def resolve_value_from_event(spec: str, data: dict | None):
-    """Path, maths, or JSON shape → typed value.
-
-    - Dotted path → value from ``data`` (objects/lists kept; missing → None).
-    - Safe maths → float (``+ - * / %``, ``abs``, ``round``, ``min``, ``max``).
-    - JSON object/array → same structure; string leaves are path, maths, or literal.
-    """
-    text = (spec or "").strip()
-    if not text:
-        return None
-    data = data or {}
-    if text[0] in "{[":
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, (dict, list)):
-            return _resolve_shape(parsed, data)
-    return resolve_path_or_expr(text, data)
-
-
 def render_data_template(template: str, data: dict | None) -> str:
     """Substitute ``{{ path }}`` or ``{{ expr }}`` from ``data``."""
     data = data if isinstance(data, dict) else {}
@@ -642,6 +608,48 @@ def render_data_template(template: str, data: dict | None) -> str:
         return str(raw)
 
     return _TEMPLATE_RE.sub(repl, template or "")
+
+
+def _resolve_shape(obj, data: dict):
+    """Walk a JSON shape: string leaves are literal unless ``{{ … }}``; else keep typed.
+
+    A leaf that is exactly one ``{{ expr }}`` resolves typed (path/maths). Mixed text
+    with templates becomes a string via ``render_data_template``. Plain strings stay literal.
+    """
+    if isinstance(obj, dict):
+        return {k: _resolve_shape(v, data) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_shape(v, data) for v in obj]
+    if isinstance(obj, str):
+        m = _WHOLE_TEMPLATE_RE.fullmatch(obj)
+        if m:
+            return resolve_path_or_expr(m.group(1), data)
+        if _TEMPLATE_RE.search(obj):
+            return render_data_template(obj, data)
+        return obj
+    return obj
+
+
+def resolve_value_from_event(spec: str, data: dict | None):
+    """Path, maths, or JSON shape → typed value.
+
+    - Dotted path → value from ``data`` (objects/lists kept; missing → None).
+    - Safe maths → float (``+ - * / %``, ``abs``, ``round``, ``min``, ``max``).
+    - JSON object/array → same structure; string leaves are literal unless ``{{ … }}``
+      (whole-leaf template → typed path/maths; mixed → string template).
+    """
+    text = (spec or "").strip()
+    if not text:
+        return None
+    data = data or {}
+    if text[0] in "{[":
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, (dict, list)):
+            return _resolve_shape(parsed, data)
+    return resolve_path_or_expr(text, data)
 
 
 def resolve_tone_rules(rules, data: dict | None) -> str:
