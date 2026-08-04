@@ -31,6 +31,7 @@ WEBHOOK_PROVIDERS: list[dict[str, Any]] = [
         "secret_label": "Signing secret (optional)",
         "secret_help": "Shared HMAC secret. Leave blank to accept unsigned webhooks.",
         "secret_input_label": "Secret value",
+        "secret_required": False,
         "uses_paypal_config": False,
     },
     {
@@ -40,6 +41,7 @@ WEBHOOK_PROVIDERS: list[dict[str, Any]] = [
         "secret_label": "Stripe webhook signing secret",
         "secret_help": "From the Stripe Dashboard endpoint (whsec_…). Required for verification.",
         "secret_input_label": "Signing secret",
+        "secret_required": True,
         "uses_paypal_config": False,
     },
     {
@@ -49,6 +51,7 @@ WEBHOOK_PROVIDERS: list[dict[str, Any]] = [
         "secret_label": "Webhook secret",
         "secret_help": "The secret configured on the GitHub/Gitea webhook.",
         "secret_input_label": "Secret value",
+        "secret_required": True,
         "uses_paypal_config": False,
     },
     {
@@ -58,6 +61,7 @@ WEBHOOK_PROVIDERS: list[dict[str, Any]] = [
         "secret_label": "Signing secret",
         "secret_help": "Slack app Signing Secret from Basic Information.",
         "secret_input_label": "Signing secret",
+        "secret_required": True,
         "uses_paypal_config": False,
     },
     {
@@ -67,6 +71,7 @@ WEBHOOK_PROVIDERS: list[dict[str, Any]] = [
         "secret_label": "Application public key",
         "secret_help": "Discord application Public Key (hex), not a bot token.",
         "secret_input_label": "Public key",
+        "secret_required": True,
         "uses_paypal_config": False,
     },
     {
@@ -76,6 +81,7 @@ WEBHOOK_PROVIDERS: list[dict[str, Any]] = [
         "secret_label": "Client secret",
         "secret_help": "PayPal app client secret (stored encrypted).",
         "secret_input_label": "Client secret",
+        "secret_required": True,
         "uses_paypal_config": True,
     },
 ]
@@ -87,6 +93,13 @@ def get_webhook_providers() -> list[dict[str, Any]]:
 
 def get_webhook_provider_slugs() -> set[str]:
     return {p["slug"] for p in WEBHOOK_PROVIDERS}
+
+
+def get_webhook_provider(slug: str) -> dict[str, Any] | None:
+    for provider in WEBHOOK_PROVIDERS:
+        if provider["slug"] == slug:
+            return provider
+    return None
 
 
 class WebhookAuthError(Exception):

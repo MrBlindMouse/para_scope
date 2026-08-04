@@ -184,7 +184,7 @@ Responsibilities:
 
 - Signature verification when a webhook secret is configured (`X-Webhook-Timestamp` + HMAC-SHA256 of `{timestamp}.{raw_body}`)
 - Body size limit (256 KB)
-- Event type extraction (`X-Event-Type` header or body `event_type` / `type`)
+- Event type extraction (known event-type headers such as `X-Event-Type` / `X-GitHub-Event` / `X-Contentful-Topic`, or body `event_type` / `type`)
 - Optional side-emission of an `always` event type when present on the source
 - Immediate processing into the shared pipeline
 - Clear error responses

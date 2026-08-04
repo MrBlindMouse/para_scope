@@ -25,10 +25,8 @@ from app.models import (
     Event,
     Field,
     FieldLogEntry,
-    Secret,
     PushSubscription,
 )
-from app.security import decrypt_secret
 from app.webpush_util import vapid_config
 from app.widget_transforms import render_data_template, resolve_value_from_event
 
@@ -242,12 +240,9 @@ def _action_field_push(db, event: Event, action: ActionInstance) -> None:
 
 def _secret_value(db, secret_id) -> str:
     """Resolve and decrypt a configured secret. Raises if missing/unreadable."""
-    if not secret_id:
-        raise ValueError("Secret is missing")
-    secret = db.query(Secret).filter(Secret.id == secret_id).first()
-    if not secret:
-        raise ValueError("Secret not found")
-    return decrypt_secret(secret.encrypted_value)
+    from app.http_auth import decrypt_secret_by_id
+
+    return decrypt_secret_by_id(db, secret_id, label="Secret")
 
 
 def _template_mapping(obj: Any, data: dict) -> Any:
@@ -262,6 +257,8 @@ def _template_mapping(obj: Any, data: dict) -> Any:
 
 
 def _forward_headers(db, action: ActionInstance, config: dict, data: dict) -> dict:
+    from app.http_auth import inject_http_auth_headers
+
     raw_headers = config.get("headers") or {}
     headers = {
         str(k): str(v)
@@ -273,15 +270,20 @@ def _forward_headers(db, action: ActionInstance, config: dict, data: dict) -> di
     if auth_mode == "key_secret":
         if not action.secret_id or not action.secret_id_2:
             raise ValueError("This forward needs both API key and secret")
-        key = _secret_value(db, action.secret_id)
-        secret = _secret_value(db, action.secret_id_2)
-        headers[config.get("api_key_header") or "X-Api-Key"] = key
-        headers[config.get("api_secret_header") or "X-Api-Secret"] = secret
-    elif action.secret_id and (not auth_mode_explicit or auth_mode == "bearer"):
-        token = _secret_value(db, action.secret_id)
-        header_name = config.get("auth_header", "Authorization")
-        prefix = config.get("auth_prefix", "Bearer ")
-        headers[header_name] = f"{prefix}{token}"
+        return inject_http_auth_headers(
+            headers,
+            auth_mode="key_secret",
+            api_key=_secret_value(db, action.secret_id),
+            api_secret=_secret_value(db, action.secret_id_2),
+            config=config,
+        )
+    if action.secret_id and (not auth_mode_explicit or auth_mode == "bearer"):
+        return inject_http_auth_headers(
+            headers,
+            auth_mode="bearer",
+            token=_secret_value(db, action.secret_id),
+            config=config,
+        )
     return headers
 
 

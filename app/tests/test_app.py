@@ -12,9 +12,10 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 # Must be set before importing app.security / app.main / app.database
+# (conftest.py also pins PARA_SCOPE_DATABASE_URL before collection.)
 DB_PATH = Path(__file__).parent.parent / ".test_db.sqlite"
 os.environ.setdefault("PARA_SCOPE_SECRET_KEY", "test-secret-key-for-pytest")
-os.environ["PARA_SCOPE_DATABASE_URL"] = f"sqlite:///{DB_PATH}"
+os.environ.setdefault("PARA_SCOPE_DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -888,6 +889,52 @@ class TestEventTypes:
             }
             assert "always" in names
             assert "on_success" in names
+        finally:
+            db.close()
+
+    def test_webhook_to_poll_clears_webhook_secret(self, authenticated_client):
+        from app.database import get_db
+        from app.models import Source, Secret
+        from app.security import encrypt_secret
+
+        sid, _ = _create_source(authenticated_client, name="Wh To Poll")
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            sec = Secret(
+                scoped_to_type="source",
+                scoped_to_id=src.id,
+                encrypted_value=encrypt_secret("wh-secret"),
+            )
+            db.add(sec)
+            db.flush()
+            src.webhook_secret_id = sec.id
+            secret_id = sec.id
+            db.commit()
+        finally:
+            db.close()
+
+        resp = authenticated_client.post(
+            f"/config/source/{sid}/edit",
+            data={
+                "name": "Wh To Poll",
+                "source_type": "poll",
+                "description": "",
+                "poll_category": "url",
+                "schedule_type": "interval",
+                "interval_seconds": "3600",
+                "handler_type": "http_get",
+                "handler_url": "https://example.com/health",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.id == sid).first()
+            assert src.source_type == "poll"
+            assert src.webhook_secret_id is None
+            assert db.query(Secret).filter(Secret.id == secret_id).first() is None
         finally:
             db.close()
 
@@ -2966,7 +3013,7 @@ class TestWidgetTransforms:
         db = next(get_db())
         try:
             field = Field(
-                name="FX Log", slug="fx_math", field_type="logbook",
+                name="FX Math Log", slug="fx_math", field_type="logbook",
                 config={"max_entries": 50}, state={},
             )
             db.add(field)
@@ -2981,7 +3028,7 @@ class TestWidgetTransforms:
                 value={"value": [{"rate": 10.0}]},
             ))
             data_f = Field(
-                name="Arr", slug="arr_math", field_type="data",
+                name="Arr Math", slug="arr_math", field_type="data",
                 config={}, state={"samples": [{"ms": 1}, {"ms": 2}]},
             )
             db.add(data_f)
@@ -3873,7 +3920,11 @@ def test_webhook_provider_metadata_covers_verifiers():
     assert by_slug["discord"]["secret_label"] == "Application public key"
     assert by_slug["paypal"]["uses_paypal_config"] is True
     assert by_slug["generic_hmac"]["uses_paypal_config"] is False
+    assert by_slug["generic_hmac"]["secret_required"] is False
+    assert by_slug["stripe"]["secret_required"] is True
+    assert by_slug["paypal"]["secret_required"] is True
     assert all(p.get("secret_help") for p in providers)
+    assert all("secret_required" in p for p in providers)
 
 
 # ── Cascade Delete ──────────────────────────────────────────────────────────

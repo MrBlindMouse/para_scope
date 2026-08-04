@@ -21,6 +21,7 @@ Single-process domain layer: SQLite models, auth/secrets, webhook/poll ingress, 
 | `widgets.py` / `widget_transforms.py` / `dashboard_layout.py` | Widget registry, series/maths/templates, GridStack layout |
 | `source_templates.py` | Full-stack source+fields+rules+widgets recipes (prefill / apply) |
 | `pollers.py` / `scheduler.py` | Poller registry + `run_schedule`; APScheduler lifecycle |
+| `http_auth.py` | Shared outbound bearer/key_secret header injection (poll + Call URL) |
 | `webhook_verifiers.py` | Provider signature / replay verification |
 | `themes.py` / `labels.py` / `webpush_util.py` | Appearance, UI labels, VAPID config |
 

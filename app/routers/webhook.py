@@ -31,6 +31,29 @@ _DISCORD_INTERACTION_TYPES = {
     5: "modal_submit",
 }
 
+# Ordered event-type headers (first non-empty wins). Case-insensitive via Starlette.
+_EVENT_TYPE_HEADERS = (
+    "x-event-type",           # Para-Scope / generic
+    "x-github-event",         # GitHub
+    "x-gitea-event",          # Gitea
+    "x-gitlab-event",         # GitLab
+    "x-shopify-topic",        # Shopify
+    "x-contentful-topic",     # Contentful (e.g. ContentManagement.Entry.publish)
+    "toast-event-type",       # Toast
+    "kick-event-type",        # Kick
+    "x-webhook-event",        # informal alias
+    "x-webhook-event-type",   # informal alias
+)
+
+
+def _event_type_from_headers(request: Request) -> str:
+    for name in _EVENT_TYPE_HEADERS:
+        et_name = normalize_event_type(request.headers.get(name))
+        if et_name:
+            return et_name
+    return ""
+
+
 # route: /sw.js
 @router.get("/sw.js")
 async def service_worker():
@@ -86,11 +109,9 @@ async def handle_webhook(
     if provider == "discord" and isinstance(payload, dict) and payload.get("type") == 1:
         return JSONResponse({"type": 1}, status_code=200)
 
-    # Resolve event type: explicit headers preferred, then payload fields.
+    # Resolve event type: known headers preferred, then payload fields.
     # `always` is an optional side-emission (like pollers), not a producer type.
-    et_name = normalize_event_type(request.headers.get("x-event-type"))
-    if not et_name:
-        et_name = normalize_event_type(request.headers.get("x-github-event"))
+    et_name = _event_type_from_headers(request)
     if not et_name and isinstance(payload, dict):
         if provider == "discord":
             raw_type = payload.get("type")
@@ -124,7 +145,8 @@ async def handle_webhook(
                 {
                     "error": "Event type required",
                     "hint": (
-                        "Send X-Event-Type header (or X-GitHub-Event), "
+                        "Send a known event-type header "
+                        "(e.g. X-Event-Type, X-GitHub-Event, X-Contentful-Topic), "
                         "or event_type/type in JSON body"
                     ),
                     "registered": names,

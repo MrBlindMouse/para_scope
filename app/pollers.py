@@ -29,7 +29,6 @@ from app.database import SQLALCHEMY_DATABASE_URL, SessionLocal
 from app.fields import get_by_path
 from app.models import Event, EventTypeRecord, PollingSchedule, Secret, Source
 from app.pipeline import evaluate_and_dispatch, normalize_event_type
-from app.security import decrypt_secret
 
 logger = logging.getLogger("para_scope.poller")
 
@@ -184,8 +183,13 @@ def parse_poller_form(
         "handler_params": {},
     }
     secret_updates: dict[str, str] = {}
+    auth_mode = (form.get("auth_mode") or existing_params.get("auth_mode") or "none").strip()
 
     for field in spec.get("fields", []):
+        show_for_auth = field.get("show_for_auth")
+        if show_for_auth and auth_mode not in show_for_auth:
+            continue
+
         name = field["name"]
         raw = form.get(name)
         if field["input_type"] == "checkbox":
@@ -222,6 +226,12 @@ def parse_poller_form(
             values["retry_count"] = int(parsed)
         else:
             values["handler_params"][field["param_key"]] = parsed
+
+    # Drop the second key_secret credential unless this submit set key_secret mode.
+    if values["handler_params"].get("auth_mode") != "key_secret":
+        if existing_params.get("api_secret_id"):
+            values["handler_params"]["api_secret_id"] = None
+        secret_updates.pop("api_secret_id", None)
 
     if spec.get("uses_url") and not values["handler_url"]:
         return None, {}, "URL is required"
@@ -281,47 +291,71 @@ def _parse_field_value(field: dict[str, Any], raw: Any) -> tuple[Any, str | None
 
 
 def _build_headers(db, params: dict) -> dict:
+    from app.http_auth import decrypt_secret_by_id, inject_http_auth_headers
+
     headers = dict(params.get("headers") or {})
-    auth_mode = (params.get("auth_mode") or "bearer").strip()
+    auth_mode = (params.get("auth_mode") or "none").strip()
+    if auth_mode in ("", "none"):
+        return headers
+
+    if auth_mode == "key_secret":
+        if not params.get("auth_secret_id") or not params.get("api_secret_id"):
+            raise ValueError("API key + secret auth needs both credentials")
+        key = decrypt_secret_by_id(db, params.get("auth_secret_id"), label="Polling secret")
+        secret = decrypt_secret_by_id(db, params.get("api_secret_id"), label="Polling secret")
+        return inject_http_auth_headers(
+            headers,
+            auth_mode="key_secret",
+            api_key=key,
+            api_secret=secret,
+            config=params,
+        )
+
     secret_id = params.get("auth_secret_id")
-    if secret_id:
-        secret = db.query(Secret).filter(Secret.id == secret_id).first()
-        if not secret:
-            raise ValueError("Polling secret not found")
+    if not secret_id:
+        return headers
 
-        secret_value = decrypt_secret(secret.encrypted_value)
-        header_name = params.get("auth_header", "Authorization")
+    secret_value = decrypt_secret_by_id(db, secret_id, label="Polling secret")
+    header_name = params.get("auth_header", "Authorization")
 
-        if auth_mode == "basic":
-            # Expect "username:password" stored in the secret.
-            if ":" not in secret_value:
-                raise ValueError("Basic auth secret must be in the form 'username:password'")
-            user, pw = secret_value.split(":", 1)
-            b64 = base64.b64encode(f"{user}:{pw}".encode()).decode()
-            headers[header_name] = f"Basic {b64}"
+    if auth_mode == "basic":
+        # Expect "username:password" stored in the secret.
+        if ":" not in secret_value:
+            raise ValueError("Basic auth secret must be in the form 'username:password'")
+        user, pw = secret_value.split(":", 1)
+        b64 = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        headers[header_name] = f"Basic {b64}"
 
-        elif auth_mode == "oauth_client_credentials":
-            token_url = (params.get("token_url") or "").strip()
-            if not token_url:
-                raise ValueError("OAuth token URL is required")
-            scope = (params.get("scope") or "").strip()
-            client_id, client_secret = _parse_id_secret_pair(
-                secret_value,
-                label="OAuth client secret",
-            )
-            token = _oauth2_get_access_token(
-                token_url=token_url,
-                client_id=client_id,
-                client_secret=client_secret,
-                scope=scope,
-            )
-            prefix = params.get("auth_prefix", "Bearer ")
-            headers[header_name] = f"{prefix}{token}"
+    elif auth_mode == "oauth_client_credentials":
+        token_url = (params.get("token_url") or "").strip()
+        if not token_url:
+            raise ValueError("OAuth token URL is required")
+        scope = (params.get("scope") or "").strip()
+        client_id, client_secret = _parse_id_secret_pair(
+            secret_value,
+            label="OAuth client secret",
+        )
+        token = _oauth2_get_access_token(
+            token_url=token_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            scope=scope,
+        )
+        return inject_http_auth_headers(
+            headers,
+            auth_mode="bearer",
+            token=token,
+            config=params,
+        )
 
-        else:
-            # Default: bearer-style header injection.
-            prefix = params.get("auth_prefix", "Bearer ")
-            headers[header_name] = f"{prefix}{secret_value}"
+    else:
+        # bearer (and legacy default when a secret is present).
+        return inject_http_auth_headers(
+            headers,
+            auth_mode="bearer",
+            token=secret_value,
+            config=params,
+        )
     return headers
 
 
@@ -382,12 +416,15 @@ def _oauth2_get_access_token(*, token_url: str, client_id: str, client_secret: s
 
 
 def _require_secret(db, secret_id: int | None, *, label: str = "Secret") -> str:
-    if not secret_id:
-        raise ValueError(f"{label} is required")
-    secret = db.query(Secret).filter(Secret.id == secret_id).first()
-    if not secret:
-        raise ValueError(f"{label} not found")
-    return decrypt_secret(secret.encrypted_value)
+    from app.http_auth import decrypt_secret_by_id
+
+    try:
+        return decrypt_secret_by_id(db, secret_id, label=label)
+    except ValueError as e:
+        msg = str(e)
+        if "is missing" in msg:
+            raise ValueError(f"{label} is required") from e
+        raise
 
 
 def _previous_schedule_event(db, source_id: int, schedule_id: int) -> Event | None:
@@ -1071,7 +1108,7 @@ _HTTP_BODY_FIELD = _field(
     rows=4,
     advanced=True,
 )
-_HTTP_ADVANCED_FIELDS = [
+_HTTP_RESULT_FIELDS = [
     _field(
         "event_type",
         "Success event type",
@@ -1095,48 +1132,35 @@ _HTTP_ADVANCED_FIELDS = [
         placeholder="200",
         help_text="Exact HTTP status to require for a successful run.",
     ),
-    _field(
-        "headers",
-        "Headers (JSON)",
-        input_type="textarea",
-        parse_as="json_dict",
-        default={},
-        rows=3,
-        advanced=True,
-    ),
-    _field(
-        "query",
-        "Query params (JSON)",
-        input_type="textarea",
-        parse_as="json_dict",
-        default={},
-        rows=3,
-        advanced=True,
-    ),
+]
+_HTTP_AUTH_FIELDS = [
     _field(
         "auth_mode",
         "Auth mode",
         input_type="select",
         parse_as="str",
-        default="bearer",
+        default="none",
         advanced=True,
         options=[
+            ("none", "None"),
             ("bearer", "Bearer token header"),
             ("basic", "HTTP Basic auth"),
             ("oauth_client_credentials", "OAuth2 client credentials"),
+            ("key_secret", "API key + secret (custom headers)"),
         ],
-        help_text="How to convert the stored secret into an Authorization header.",
+        help_text="How credentials become request headers.",
     ),
     _field(
         "auth_secret_value",
-        "Poll secret",
+        "API credential",
         param_key="auth_secret_id",
         input_type="password",
         secret=True,
         advanced=True,
         show_for_auth=["bearer", "basic", "oauth_client_credentials"],
         help_text=(
-            "Optional encrypted secret. For bearer: token. For basic/oauth: store 'id:secret' or 'username:password'."
+            "Encrypted credential. For bearer: token. "
+            "For basic/oauth: store 'username:password' or 'client_id:client_secret'."
         ),
     ),
     _field(
@@ -1145,7 +1169,7 @@ _HTTP_ADVANCED_FIELDS = [
         default="Authorization",
         advanced=True,
         show_for_auth=["bearer", "basic", "oauth_client_credentials"],
-        help_text="Header name used for Authorization-style auth.",
+        help_text="Header name for bearer/basic/oauth credentials.",
     ),
     _field(
         "auth_prefix",
@@ -1174,7 +1198,67 @@ _HTTP_ADVANCED_FIELDS = [
         help_text="Optional OAuth2 scope for oauth_client_credentials.",
         default="",
     ),
+    _field(
+        "auth_key_value",
+        "API key",
+        param_key="auth_secret_id",
+        input_type="password",
+        secret=True,
+        advanced=True,
+        show_for_auth=["key_secret"],
+        help_text="Encrypted API key value (leave blank on edit to keep).",
+    ),
+    _field(
+        "auth_secret_value_2",
+        "API secret",
+        param_key="api_secret_id",
+        input_type="password",
+        secret=True,
+        advanced=True,
+        show_for_auth=["key_secret"],
+        help_text="Encrypted API secret value (leave blank on edit to keep).",
+    ),
+    _field(
+        "api_key_header",
+        "Key header",
+        default="X-Api-Key",
+        advanced=True,
+        show_for_auth=["key_secret"],
+        help_text="Header name for the API key (e.g. APCA-API-KEY-ID).",
+    ),
+    _field(
+        "api_secret_header",
+        "Secret header",
+        default="X-Api-Secret",
+        advanced=True,
+        show_for_auth=["key_secret"],
+        help_text="Header name for the API secret (e.g. APCA-API-SECRET-KEY).",
+    ),
 ]
+_HTTP_REQUEST_EXTRA_FIELDS = [
+    _field(
+        "headers",
+        "Headers (JSON)",
+        input_type="textarea",
+        parse_as="json_dict",
+        default={},
+        rows=3,
+        advanced=True,
+        help_text="Extra static headers (not for secrets — use Auth mode).",
+    ),
+    _field(
+        "query",
+        "Query params (JSON)",
+        input_type="textarea",
+        parse_as="json_dict",
+        default={},
+        rows=3,
+        advanced=True,
+    ),
+]
+_HTTP_ADVANCED_FIELDS = (
+    list(_HTTP_RESULT_FIELDS) + list(_HTTP_AUTH_FIELDS) + list(_HTTP_REQUEST_EXTRA_FIELDS)
+)
 _HTTP_PRIMARY_FIELDS = [
     _field(
         "handler_url",
@@ -1201,21 +1285,29 @@ _HTTP_GET_METHOD_FIELD = _field(
 _HTTP_BODY_METHODS = {"http_post", "http_put", "http_patch"}
 
 for _ht, _method in _HTTP_METHODS.items():
-    _fields = list(_HTTP_PRIMARY_FIELDS) + list(_HTTP_ADVANCED_FIELDS)
+    # Result fields → optional body → auth → static headers/query last.
+    _fields = (
+        list(_HTTP_PRIMARY_FIELDS)
+        + list(_HTTP_RESULT_FIELDS)
+        + list(_HTTP_AUTH_FIELDS)
+        + list(_HTTP_REQUEST_EXTRA_FIELDS)
+    )
     if _ht == "http_get":
         _fields = (
             list(_HTTP_PRIMARY_FIELDS)
-            + _HTTP_ADVANCED_FIELDS[:2]
+            + _HTTP_RESULT_FIELDS[:2]
             + [_HTTP_GET_METHOD_FIELD]
-            + _HTTP_ADVANCED_FIELDS[2:]
+            + _HTTP_RESULT_FIELDS[2:]
+            + list(_HTTP_AUTH_FIELDS)
+            + list(_HTTP_REQUEST_EXTRA_FIELDS)
         )
     if _ht in _HTTP_BODY_METHODS:
-        # Body after query params, before auth_mode.
         _fields = (
             list(_HTTP_PRIMARY_FIELDS)
-            + _HTTP_ADVANCED_FIELDS[:5]
+            + list(_HTTP_RESULT_FIELDS)
             + [_HTTP_BODY_FIELD]
-            + _HTTP_ADVANCED_FIELDS[5:]
+            + list(_HTTP_AUTH_FIELDS)
+            + list(_HTTP_REQUEST_EXTRA_FIELDS)
         )
     register_poller(
         _ht,
@@ -1228,6 +1320,7 @@ for _ht, _method in _HTTP_METHODS.items():
             "fields": _fields,
         },
     )
+
 
 register_poller(
     "system_snapshot",

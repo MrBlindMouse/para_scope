@@ -1,12 +1,15 @@
+{% set is_edit = is_edit if is_edit is defined else (source is defined and source and source.id) %}
+{% set st = source.source_type if source.source_type in ['webhook', 'poll'] else 'webhook' %}
+{% set sched_type = schedule.schedule_type.value if schedule and schedule.schedule_type.value is defined else (schedule.schedule_type if schedule else 'interval') %}
 <form method="post"
-      action="/config/pipeline/sources"
+      action="{% if is_edit %}/config/source/{{ source.id }}/edit{% else %}/config/pipeline/sources{% endif %}"
       class="stack dialog__form"
-      hx-post="/config/pipeline/sources"
+      hx-post="{% if is_edit %}/config/source/{{ source.id }}/edit{% else %}/config/pipeline/sources{% endif %}"
       hx-target="#pipeline-dialog"
       hx-swap="innerHTML">
   {% include 'components/csrf.html' %}
   <header class="dialog__header flex items-center gap">
-    <h2 class="dialog__title">Add Source</h2>
+    <h2 class="dialog__title">{% if is_edit %}Edit Source{% else %}Add Source{% endif %}</h2>
     <button type="button" class="btn btn--sm" onclick="this.closest('dialog').close()">Close</button>
   </header>
   {% if error %}
@@ -15,11 +18,18 @@
   <label class="stack">
     <span class="field-label">
       Name *
-      <button type="button" class="field-tip" tabindex="0"
+      <button type="button" class="field-tip" id="source-name-tip-webhook" tabindex="0"
               aria-label="About source name"
-              data-tip="Also sets the address: &quot;Warehouse sensors&quot; receives at /webhook/warehouse-sensors on this site.">?</button>
+              data-tip="Also sets the address: &quot;Warehouse sensors&quot; receives at /webhook/warehouse-sensors on this site."
+              {% if st == 'poll' %}hidden{% endif %}>?</button>
+      <button type="button" class="field-tip" id="source-name-tip-poll" tabindex="0"
+              aria-label="About source name"
+              data-tip="A short name for this poll source on the pipeline chain."
+              {% if st != 'poll' %}hidden{% endif %}>?</button>
     </span>
-    <input name="name" type="text" class="input" placeholder="Warehouse sensors" value="{{ source.name or '' }}" required autofocus>
+    <input name="name" type="text" class="input"
+           {% if not is_edit %}placeholder="Warehouse sensors"{% endif %}
+           value="{{ source.name or '' }}" required autofocus>
   </label>
   <label class="stack">
     Description
@@ -33,19 +43,26 @@
               data-tip="Webhook: others send events to you. Poll: Para-Scope runs one typed poller on a schedule.">?</button>
     </span>
     <select name="source_type" class="input" id="source-type">
-      <option value="webhook" {% if source.source_type != 'poll' %}selected{% endif %}>Webhook</option>
-      <option value="poll" {% if source.source_type == 'poll' %}selected{% endif %}>Poll</option>
+      <option value="webhook" {% if st == 'webhook' %}selected{% endif %}>Webhook</option>
+      <option value="poll" {% if st == 'poll' %}selected{% endif %}>Poll</option>
     </select>
   </label>
+  {% if is_edit and st == 'webhook' %}
+    <p class="text-muted">
+      Senders post to this site’s address + <code>/webhook/{{ source.slug }}</code>.
+    </p>
+    <p class="alert alert--warning" role="note">
+      Changing the source name re-derives this path. Update your senders if the slug changes.
+    </p>
+  {% endif %}
 
   {% set webhook_provider = (source.config or {}).get('webhook_provider') or 'generic_hmac' %}
-  {% with webhook_provider=webhook_provider, webhook_secret=None, source_config=source.config or {}, hide_webhook_fields=(source.source_type == 'poll') %}
+  {% with webhook_provider=webhook_provider, webhook_secret=webhook_secret, source_config=source.config or {}, hide_webhook_fields=(st != 'webhook') %}
     {% include 'config/pipeline/_webhook_provider_fields.html' %}
   {% endwith %}
 
-  {% set sched_type = schedule.schedule_type.value if schedule and schedule.schedule_type.value is defined else (schedule.schedule_type if schedule else 'interval') %}
-  <fieldset class="stack" id="schedule-fields" {% if source.source_type != 'poll' %}style="display:none"{% endif %}>
-    <legend>Initial schedule</legend>
+  <fieldset class="stack" id="schedule-fields" {% if st != 'poll' %}style="display:none"{% endif %}>
+    <legend>{% if is_edit %}Schedule{% else %}Initial schedule{% endif %}</legend>
     <label class="stack">
       Schedule type
       <select name="schedule_type" class="input" id="sched-type">
@@ -77,6 +94,6 @@
   </fieldset>
 
   <div class="flex items-center gap">
-    <button type="submit" class="btn btn--primary">Create Source</button>
+    <button type="submit" class="btn btn--primary">{% if is_edit %}Save{% else %}Create Source{% endif %}</button>
   </div>
 </form>

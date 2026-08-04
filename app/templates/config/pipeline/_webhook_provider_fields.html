@@ -40,7 +40,7 @@
           </label>
         {% endif %}
         <label class="stack">
-          {{ provider.secret_input_label }}{% if provider.uses_paypal_config %} *{% endif %}
+          {{ provider.secret_input_label }}{% if provider.secret_required %} *{% endif %}
           <input name="webhook_secret_value"
                  type="password"
                  class="input"

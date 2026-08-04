@@ -551,19 +551,25 @@ def test_unknown_poller_records_last_error(db_session_factory, source_id):
         db.refresh(sched)
 
         TestSession = sessionmaker(bind=db.get_bind())
-        database.SessionLocal = TestSession
-        pollers.SessionLocal = TestSession
-
-        ok = run_schedule(sched.id)
-        assert ok is False
-
-        s2 = TestSession()
+        previous_db = database.SessionLocal
+        previous_pollers = pollers.SessionLocal
         try:
-            updated = s2.query(PollingSchedule).filter_by(id=sched.id).first()
-            assert "Unknown poll method" in updated.last_error
-            assert updated.failure_count == 1
+            database.SessionLocal = TestSession
+            pollers.SessionLocal = TestSession
+
+            ok = run_schedule(sched.id)
+            assert ok is False
+
+            s2 = TestSession()
+            try:
+                updated = s2.query(PollingSchedule).filter_by(id=sched.id).first()
+                assert "Unknown poll method" in updated.last_error
+                assert updated.failure_count == 1
+            finally:
+                s2.close()
         finally:
-            s2.close()
+            database.SessionLocal = previous_db
+            pollers.SessionLocal = previous_pollers
     finally:
         db.close()
 

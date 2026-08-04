@@ -22,7 +22,7 @@
               {% if source.source_type == "poll" %}
               data-tip="Built-in: on_success, on_failure. Optional: always (every run). Custom types need a matching schedule setting. Stored lowercase."
               {% else %}
-              data-tip="Read from X-Event-Type (or X-GitHub-Event), else body event_type, else body type. Stored lowercase; case variants match. Optional: always. Once any producer type exists, non-matching deliveries are rejected."
+              data-tip="Read from a known event-type header (X-Event-Type first, then GitHub/Gitea/GitLab, Shopify/Contentful topics, Toast/Kick, or X-Webhook-Event), else body event_type, else body type. Register the exact topic string the provider sends. Stored lowercase; case variants match. Optional: always. Once any producer type exists, non-matching deliveries are rejected."
               {% endif %}
       >?</button>
     </span>

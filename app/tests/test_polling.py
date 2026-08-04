@@ -1,16 +1,29 @@
 """Tests for the polling engine (Phase 3)."""
-import os
 import tempfile
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-# Use an isolated SQLite DB before importing app modules that bind to para_scope.db
+# Isolated SQLite file for this module's unit fixtures (does not rebind global engine).
 _tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp.close()
-os.environ["PARA_SCOPE_DATABASE_URL"] = f"sqlite:///{_tmp.name}"
+
+
+@contextmanager
+def _patched_session_local(bind, *modules):
+    """Temporarily point SessionLocal on the given modules at *bind*; always restore."""
+    TestSession = sessionmaker(bind=bind)
+    previous = [(mod, mod.SessionLocal) for mod in modules]
+    try:
+        for mod, _ in previous:
+            mod.SessionLocal = TestSession
+        yield TestSession
+    finally:
+        for mod, prev in previous:
+            mod.SessionLocal = prev
 
 
 @pytest.fixture()
@@ -224,6 +237,111 @@ def test_http_poll_oauth_client_credentials_injects_bearer(db, source):
     assert first_call_headers["Authorization"] == "Bearer token123"
 
 
+def test_http_poll_key_secret_custom_headers(db, source):
+    from app.pollers import http_poll
+    from app.models import Secret
+    from app.security import encrypt_secret
+
+    key = Secret(
+        scoped_to_type="schedule",
+        scoped_to_id=source.id,
+        encrypted_value=encrypt_secret("PK_TEST"),
+    )
+    secret = Secret(
+        scoped_to_type="schedule",
+        scoped_to_id=source.id,
+        encrypted_value=encrypt_secret("SK_TEST"),
+    )
+    db.add_all([key, secret])
+    db.commit()
+    db.refresh(key)
+    db.refresh(secret)
+
+    schedule = _make_schedule(
+        db,
+        source,
+        handler_params={
+            "auth_mode": "key_secret",
+            "auth_secret_id": key.id,
+            "api_secret_id": secret.id,
+            "api_key_header": "APCA-API-KEY-ID",
+            "api_secret_header": "APCA-API-SECRET-KEY",
+            "headers": {"X-Extra": "1"},
+        },
+    )
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"ok": True}
+    mock_response.text = '{"ok": true}'
+    mock_response.raise_for_status = MagicMock()
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.request.return_value = mock_response
+
+    with patch("app.pollers.httpx.Client", return_value=mock_client):
+        result = http_poll(schedule, db)
+
+    assert result["ok"] is True
+    headers = mock_client.request.call_args.kwargs["headers"]
+    assert headers["APCA-API-KEY-ID"] == "PK_TEST"
+    assert headers["APCA-API-SECRET-KEY"] == "SK_TEST"
+    assert headers["X-Extra"] == "1"
+
+
+def test_http_poll_none_auth_leaves_headers_only(db, source):
+    from app.pollers import _build_headers
+    from app.models import Secret
+    from app.security import encrypt_secret
+
+    sec = Secret(
+        scoped_to_type="schedule",
+        scoped_to_id=source.id,
+        encrypted_value=encrypt_secret("should-not-send"),
+    )
+    db.add(sec)
+    db.commit()
+    db.refresh(sec)
+
+    headers = _build_headers(
+        db,
+        {
+            "auth_mode": "none",
+            "auth_secret_id": sec.id,
+            "headers": {"X-Static": "yes"},
+        },
+    )
+    assert headers == {"X-Static": "yes"}
+
+
+def test_parse_poller_form_key_secret_secrets():
+    from app.pollers import parse_poller_form
+
+    form = {
+        "handler_type": "http_get",
+        "handler_url": "https://api.example.com/v2/account",
+        "auth_mode": "key_secret",
+        "auth_key_value": "PK",
+        "auth_secret_value_2": "SK",
+        "api_key_header": "APCA-API-KEY-ID",
+        "api_secret_header": "APCA-API-SECRET-KEY",
+    }
+    values, secret_updates, error = parse_poller_form(form)
+    assert error is None
+    assert values["handler_params"]["auth_mode"] == "key_secret"
+    assert values["handler_params"]["api_key_header"] == "APCA-API-KEY-ID"
+    assert values["handler_params"]["api_secret_header"] == "APCA-API-SECRET-KEY"
+    assert secret_updates == {
+        "auth_secret_id": "PK",
+        "api_secret_id": "SK",
+    }
+    # Bearer-only fields must not be parsed when mode is key_secret.
+    assert "auth_header" not in values["handler_params"]
+
+
+
 # ── registry + typed handlers ───────────────────────────────────────────────
 
 def test_poller_registry_exposes_categories_and_specs():
@@ -312,8 +430,26 @@ def test_http_field_advanced_and_auth_metadata():
     assert by_name["request_method"]["options"] == [("GET", "GET"), ("HEAD", "HEAD")]
     assert by_name["expected_status"]["parse_as"] == "int"
     assert by_name["auth_mode"]["advanced"] is True
+    assert by_name["auth_mode"]["default"] == "none"
+    option_values = [v for v, _ in by_name["auth_mode"]["options"]]
+    assert option_values == [
+        "none",
+        "bearer",
+        "basic",
+        "oauth_client_credentials",
+        "key_secret",
+    ]
+    assert by_name["auth_secret_value"]["label"] == "API credential"
     assert by_name["auth_prefix"]["show_for_auth"] == ["bearer", "oauth_client_credentials"]
     assert by_name["token_url"]["show_for_auth"] == ["oauth_client_credentials"]
+    assert by_name["auth_key_value"]["show_for_auth"] == ["key_secret"]
+    assert by_name["auth_secret_value_2"]["param_key"] == "api_secret_id"
+    assert by_name["api_key_header"]["show_for_auth"] == ["key_secret"]
+    assert by_name["api_secret_header"]["show_for_auth"] == ["key_secret"]
+    # Auth before static headers/query.
+    names = [f["name"] for f in get_spec["fields"]]
+    assert names.index("auth_mode") < names.index("headers")
+    assert names.index("headers") < names.index("query")
     assert "body" not in by_name
     assert any(f["name"] == "body" for f in post_spec["fields"])
 
@@ -418,16 +554,10 @@ def test_http_poll_supports_head_and_expected_status(db, source):
 def test_run_schedule_creates_event(db, source):
     from app.pollers import run_schedule
     from app.models import Event
-    from app.database import SessionLocal
     import app.database as database
     import app.pollers as pollers
 
     schedule = _make_schedule(db, source, handler_params={"event_type": ""})
-
-    # Point SessionLocal at our test DB
-    TestSession = sessionmaker(bind=db.get_bind())
-    database.SessionLocal = TestSession
-    pollers.SessionLocal = TestSession
 
     mock_result = {
         "ok": True,
@@ -437,29 +567,28 @@ def test_run_schedule_creates_event(db, source):
         "attempts": 1,
     }
 
-    with patch("app.pollers.http_poll", return_value=mock_result):
-        run_schedule(schedule.id)
+    with _patched_session_local(db.get_bind(), database, pollers) as TestSession:
+        with patch("app.pollers.http_poll", return_value=mock_result):
+            run_schedule(schedule.id)
 
-    events = db.query(Event).all()
-    # run_schedule uses its own session — re-query via TestSession
-    s2 = TestSession()
-    try:
-        events = s2.query(Event).all()
-        assert len(events) == 1
-        assert events[0].normalized_data["temperature"] == 21.5
-        assert events[0].normalized_data["_poll"]["schedule_id"] == schedule.id
-        assert events[0].normalized_data["source"] == source.name
-        assert events[0].normalized_data["_poll"]["response_time_ms"] is not None
-        assert events[0].normalized_data["_poll"]["timestamp"]
-        assert events[0].status == "processed"
+        s2 = TestSession()
+        try:
+            events = s2.query(Event).all()
+            assert len(events) == 1
+            assert events[0].normalized_data["temperature"] == 21.5
+            assert events[0].normalized_data["_poll"]["schedule_id"] == schedule.id
+            assert events[0].normalized_data["source"] == source.name
+            assert events[0].normalized_data["_poll"]["response_time_ms"] is not None
+            assert events[0].normalized_data["_poll"]["timestamp"]
+            assert events[0].status == "processed"
 
-        updated = s2.query(type(schedule)).filter_by(id=schedule.id).first()
-        assert updated.success_count == 1
-        assert updated.failure_count == 0
-        assert updated.last_run_at is not None
-        assert updated.last_error == ""
-    finally:
-        s2.close()
+            updated = s2.query(type(schedule)).filter_by(id=schedule.id).first()
+            assert updated.success_count == 1
+            assert updated.failure_count == 0
+            assert updated.last_run_at is not None
+            assert updated.last_error == ""
+        finally:
+            s2.close()
 
 
 def test_run_schedule_records_failure(db, source):
@@ -474,30 +603,28 @@ def test_run_schedule_records_failure(db, source):
     db.commit()
 
     schedule = _make_schedule(db, source)
-    TestSession = sessionmaker(bind=db.get_bind())
-    database.SessionLocal = TestSession
-    pollers.SessionLocal = TestSession
 
-    with patch("app.pollers.http_poll", side_effect=RuntimeError("boom")):
-        run_schedule(schedule.id)
+    with _patched_session_local(db.get_bind(), database, pollers) as TestSession:
+        with patch("app.pollers.http_poll", side_effect=RuntimeError("boom")):
+            run_schedule(schedule.id)
 
-    s2 = TestSession()
-    try:
-        updated = s2.query(PollingSchedule).filter_by(id=schedule.id).first()
-        assert updated.failure_count == 1
-        assert updated.success_count == 0
-        assert "boom" in updated.last_error
-        assert updated.last_run_at is not None
+        s2 = TestSession()
+        try:
+            updated = s2.query(PollingSchedule).filter_by(id=schedule.id).first()
+            assert updated.failure_count == 1
+            assert updated.success_count == 0
+            assert "boom" in updated.last_error
+            assert updated.last_run_at is not None
 
-        events = s2.query(Event).all()
-        assert len(events) == 1
-        assert events[0].normalized_data.get("error") == "boom"
-        assert events[0].normalized_data["_poll"]["outcome"] == "on_failure"
-        et = s2.query(EventTypeRecord).filter_by(id=events[0].event_type_id).first()
-        assert et is not None
-        assert et.name == "on_failure"
-    finally:
-        s2.close()
+            events = s2.query(Event).all()
+            assert len(events) == 1
+            assert events[0].normalized_data.get("error") == "boom"
+            assert events[0].normalized_data["_poll"]["outcome"] == "on_failure"
+            et = s2.query(EventTypeRecord).filter_by(id=events[0].event_type_id).first()
+            assert et is not None
+            assert et.name == "on_failure"
+        finally:
+            s2.close()
 
 
 def test_run_schedule_emits_always_when_present(db, source):
@@ -511,9 +638,6 @@ def test_run_schedule_emits_always_when_present(db, source):
     db.commit()
 
     schedule = _make_schedule(db, source)
-    TestSession = sessionmaker(bind=db.get_bind())
-    database.SessionLocal = TestSession
-    pollers.SessionLocal = TestSession
 
     mock_result = {
         "ok": True,
@@ -522,26 +646,27 @@ def test_run_schedule_emits_always_when_present(db, source):
         "raw": '{"v": 1}',
         "attempts": 1,
     }
-    with patch("app.pollers.http_poll", return_value=mock_result):
-        run_schedule(schedule.id)
+    with _patched_session_local(db.get_bind(), database, pollers) as TestSession:
+        with patch("app.pollers.http_poll", return_value=mock_result):
+            run_schedule(schedule.id)
 
-    s2 = TestSession()
-    try:
-        events = s2.query(Event).all()
-        assert len(events) == 2
-        names = {
-            s2.query(EventTypeRecord).filter_by(id=e.event_type_id).first().name
-            for e in events
-        }
-        assert names == {"on_success", "always"}
-        always = next(
-            e for e in events
-            if s2.query(EventTypeRecord).filter_by(id=e.event_type_id).first().name == "always"
-        )
-        assert always.normalized_data["_poll"]["outcome"] == "on_success"
-        assert always.normalized_data["_poll"]["trigger"] == "always"
-    finally:
-        s2.close()
+        s2 = TestSession()
+        try:
+            events = s2.query(Event).all()
+            assert len(events) == 2
+            names = {
+                s2.query(EventTypeRecord).filter_by(id=e.event_type_id).first().name
+                for e in events
+            }
+            assert names == {"on_success", "always"}
+            always = next(
+                e for e in events
+                if s2.query(EventTypeRecord).filter_by(id=e.event_type_id).first().name == "always"
+            )
+            assert always.normalized_data["_poll"]["outcome"] == "on_success"
+            assert always.normalized_data["_poll"]["trigger"] == "always"
+        finally:
+            s2.close()
 
 
 def test_resolve_poll_event_type_casefold(db, source):
@@ -575,21 +700,19 @@ def test_run_schedule_skips_always_when_absent(db, source):
     import app.pollers as pollers
 
     schedule = _make_schedule(db, source)
-    TestSession = sessionmaker(bind=db.get_bind())
-    database.SessionLocal = TestSession
-    pollers.SessionLocal = TestSession
 
-    with patch("app.pollers.http_poll", return_value={
-        "ok": True, "status_code": 200, "data": {}, "raw": "{}", "attempts": 1,
-    }):
-        run_schedule(schedule.id)
+    with _patched_session_local(db.get_bind(), database, pollers) as TestSession:
+        with patch("app.pollers.http_poll", return_value={
+            "ok": True, "status_code": 200, "data": {}, "raw": "{}", "attempts": 1,
+        }):
+            run_schedule(schedule.id)
 
-    s2 = TestSession()
-    try:
-        # Only the default on_success path (may be untyped if type missing) — not a second always
-        assert s2.query(Event).count() == 1
-    finally:
-        s2.close()
+        s2 = TestSession()
+        try:
+            # Only the default on_success path (may be untyped if type missing) — not a second always
+            assert s2.query(Event).count() == 1
+        finally:
+            s2.close()
 
 
 # ── scheduler job registration ──────────────────────────────────────────────
@@ -601,25 +724,22 @@ def test_scheduler_add_and_remove_job(db, source):
     import app.database as database
     import app.scheduler as scheduler_mod
 
-    TestSession = sessionmaker(bind=db.get_bind())
-    database.SessionLocal = TestSession
-    scheduler_mod.SessionLocal = TestSession
-
-    # Ensure clean slate
-    stop_scheduler()
-    start_scheduler()
-    try:
-        assert get_scheduler() is not None
-        schedule = _make_schedule(db, source, interval_seconds=60)
-        add_or_update_job(schedule)
-        assert job_count() >= 1
-
-        remove_job(schedule.id)
-        # May still have jobs from start_scheduler if any were in DB; our job should be gone
-        sched = get_scheduler()
-        assert sched.get_job(f"poll_{schedule.id}") is None
-    finally:
+    with _patched_session_local(db.get_bind(), database, scheduler_mod):
+        # Ensure clean slate
         stop_scheduler()
+        start_scheduler()
+        try:
+            assert get_scheduler() is not None
+            schedule = _make_schedule(db, source, interval_seconds=60)
+            add_or_update_job(schedule)
+            assert job_count() >= 1
+
+            remove_job(schedule.id)
+            # May still have jobs from start_scheduler if any were in DB; our job should be gone
+            sched = get_scheduler()
+            assert sched.get_job(f"poll_{schedule.id}") is None
+        finally:
+            stop_scheduler()
 
 
 def test_trigger_rejects_bad_interval(db, source):

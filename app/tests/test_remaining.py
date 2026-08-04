@@ -28,13 +28,23 @@ def db():
 
 @contextmanager
 def _webhook_client(db):
-    """Override get_db for webhook tests; restore SessionLocal afterward."""
+    """Override get_db for webhook tests; restore SessionLocal afterward.
+
+    Patch every module that holds its own SessionLocal binding — scheduler
+    imports it at module load, so database-only patches miss lifespan startup.
+    """
     from fastapi.testclient import TestClient
     import app.database as database
     import app.main as main_mod
+    import app.pollers as pollers
+    import app.scheduler as scheduler_mod
 
     TestSession = sessionmaker(bind=db.get_bind())
-    previous = database.SessionLocal
+    previous = [
+        (database, database.SessionLocal),
+        (pollers, pollers.SessionLocal),
+        (scheduler_mod, scheduler_mod.SessionLocal),
+    ]
 
     def override_get_db():
         s = TestSession()
@@ -43,14 +53,16 @@ def _webhook_client(db):
         finally:
             s.close()
 
-    database.SessionLocal = TestSession
+    for mod, _ in previous:
+        mod.SessionLocal = TestSession
     main_mod.app.dependency_overrides[database.get_db] = override_get_db
     try:
         with TestClient(main_mod.app) as client:
             yield client, TestSession
     finally:
         main_mod.app.dependency_overrides.clear()
-        database.SessionLocal = previous
+        for mod, prev in previous:
+            mod.SessionLocal = prev
 
 
 # ── AES secrets ─────────────────────────────────────────────────────────────
@@ -133,6 +145,71 @@ def test_webhook_requires_event_type_when_registered(db):
             headers={"X-Event-Type": "nope"},
         )
         assert r.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "header_name,header_value",
+    [
+        ("X-Contentful-Topic", "ContentManagement.Entry.publish"),
+        ("Toast-Event-Type", "partner_added"),
+        ("Kick-Event-Type", "chat.message.sent"),
+        ("X-Webhook-Event", "order.paid"),
+        ("X-Webhook-Event-Type", "order.paid"),
+        ("X-Gitlab-Event", "Push Hook"),
+        ("X-Shopify-Topic", "orders/create"),
+        ("X-Gitea-Event", "push"),
+    ],
+)
+def test_webhook_accepts_provider_event_type_headers(db, header_name, header_value):
+    from app.models import Source, EventTypeRecord
+    from app.pipeline import normalize_event_type
+
+    et = normalize_event_type(header_value)
+    src = Source(name="Prov", slug="prov-et", source_type="webhook", enabled=True)
+    db.add(src)
+    db.commit()
+    db.refresh(src)
+    db.add(EventTypeRecord(source_id=src.id, name=et))
+    db.commit()
+
+    with _webhook_client(db) as (client, _):
+        r = client.post(
+            "/webhook/prov-et",
+            json={"ok": True},
+            headers={header_name: header_value},
+        )
+        assert r.status_code == 202, r.text
+
+
+def test_webhook_event_type_header_priority(db):
+    """X-Event-Type wins over a later alias when both are present."""
+    from app.models import Source, EventTypeRecord, Event
+
+    src = Source(name="Prio", slug="prio-et", source_type="webhook", enabled=True)
+    db.add(src)
+    db.commit()
+    db.refresh(src)
+    db.add(EventTypeRecord(source_id=src.id, name="from-x-event-type"))
+    db.add(EventTypeRecord(source_id=src.id, name="from-alias"))
+    db.commit()
+
+    with _webhook_client(db) as (client, TestSession):
+        r = client.post(
+            "/webhook/prio-et",
+            json={"ok": True},
+            headers={
+                "X-Event-Type": "from-x-event-type",
+                "X-Webhook-Event-Type": "from-alias",
+            },
+        )
+        assert r.status_code == 202
+        s2 = TestSession()
+        try:
+            event = s2.query(Event).filter(Event.source_id == src.id).one()
+            et = s2.query(EventTypeRecord).filter_by(id=event.event_type_id).one()
+            assert et.name == "from-x-event-type"
+        finally:
+            s2.close()
 
 
 def test_webhook_allows_untyped_when_no_registry(db):

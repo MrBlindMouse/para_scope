@@ -63,7 +63,7 @@ Copy `.env.example` to `.env` (gitignored). Values are loaded automatically via 
 Get a working pipeline after login (more detail in `/help`):
 
 1. **Open Pipeline** at `/config/pipeline`. Add a source (name required; slug is always derived from the name). Choose type **Webhook** (optional provider + secret in the same dialog) or **Poll** (initial schedule required). Poll sources get `on_success` and `on_failure` events automatically (no auto-rules).
-2. **Add event types** on the source chain (Source → Event Types → Rules). New webhooks already include `always`. Once a source has producer types, webhooks must declare a matching type via the `X-Event-Type` header (or `X-GitHub-Event`), or body field `event_type` / `type`. Matching is case-insensitive; types are stored lowercase.
+2. **Add event types** on the source chain (Source → Event Types → Rules). New webhooks already include `always`. Once a source has producer types, webhooks must declare a matching type via a known event-type header (e.g. `X-Event-Type`, `X-GitHub-Event`, `X-Contentful-Topic`), or body field `event_type` / `type`. Matching is case-insensitive; types are stored lowercase and are not auto-created from deliveries.
 3. **Ingest an event** — pick one path:
    - **Webhook:** `POST /webhook/{slug}` with a JSON body (see [Webhooks](#webhooks)).
    - **Poll:** schedules feed `on_success` / `on_failure` into the same pipeline (see [Polling](#polling)).
@@ -92,10 +92,9 @@ You do not invent event types — you copy them from the sender. Values are stor
 
 Para-Scope reads the type from the first of these that is non-empty:
 
-1. the `X-Event-Type` header
-2. the `X-GitHub-Event` header (GitHub / Gitea)
-3. the JSON body field `event_type`
-4. the JSON body field `type`
+1. a known event-type header (first match wins): `X-Event-Type`; `X-GitHub-Event` / `X-Gitea-Event` / `X-Gitlab-Event`; `X-Shopify-Topic` / `X-Contentful-Topic`; `Toast-Event-Type` / `Kick-Event-Type`; informal `X-Webhook-Event` / `X-Webhook-Event-Type`
+2. the JSON body field `event_type`
+3. the JSON body field `type`
 
 Discord is a special case: its numeric interaction `type` is mapped to `application_command`, `message_component`, `application_command_autocomplete`, or `modal_submit`.
 

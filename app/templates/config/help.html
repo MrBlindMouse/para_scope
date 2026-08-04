@@ -442,8 +442,11 @@
             </td>
           </tr>
           <tr>
-            <td>API key + secret</td>
-            <td>Sends two custom headers (key and secret). Useful for APIs that don’t use Bearer.</td>
+            <td>API key + secret (custom headers)</td>
+            <td>
+              Sends two custom headers. Key header and Secret header names are editable
+              (defaults <code>X-Api-Key</code> / <code>X-Api-Secret</code>).
+            </td>
           </tr>
         </tbody>
       </table>
@@ -471,7 +474,7 @@
         <li>The URL is this site’s address plus the source path, e.g. <code>https://your-host/webhook/warehouse-sensors</code>. The path is shown on the source’s edit dialog and on <a href="/system">System</a>.</li>
         <li>New webhook sources get an <code>always</code> event type automatically (fires on every delivery; senders don’t send it).</li>
         <li>Once you’ve added any producer event type (anything except <code>always</code>), senders must include a matching type.</li>
-        <li>Choose a <strong>Webhook verification</strong> mode and, when needed, a credential in the Webhook secret field.</li>
+        <li>Choose a <strong>Webhook verification</strong> mode and, when needed, enter the provider credential in that mode’s credential field.</li>
         <li>Renaming a source re-derives its slug and webhook path — update senders if the path changes.</li>
       </ul>
       <p>
@@ -482,12 +485,19 @@
       <h3>Event types</h3>
       <p>
         You don’t invent event types — you copy them from the sender. An event type’s
-        value is stored lowercase (punctuation preserved). Para-Scope reads it from the
-        first of these that isn’t empty:
+        value is stored lowercase (punctuation preserved). Types are <strong>not</strong>
+        auto-created from deliveries; register the exact topic string the provider sends.
+        Para-Scope reads it from the first of these that isn’t empty:
       </p>
       <ol class="stack help__list help__list--ordered">
-        <li>the <code>X-Event-Type</code> header</li>
-        <li>the <code>X-GitHub-Event</code> header (GitHub / Gitea)</li>
+        <li>
+          a known event-type header (first match wins):
+          <code>X-Event-Type</code>;
+          <code>X-GitHub-Event</code> / <code>X-Gitea-Event</code> / <code>X-Gitlab-Event</code>;
+          <code>X-Shopify-Topic</code> / <code>X-Contentful-Topic</code>;
+          <code>Toast-Event-Type</code> / <code>Kick-Event-Type</code>;
+          informal <code>X-Webhook-Event</code> / <code>X-Webhook-Event-Type</code>
+        </li>
         <li>the JSON body field <code>event_type</code></li>
         <li>the JSON body field <code>type</code></li>
       </ol>
@@ -586,7 +596,7 @@
 
       <h3>Discord notes</h3>
       <ul class="stack help__list">
-        <li>Paste the Discord application <strong>public key</strong> into the Webhook secret field (not a shared HMAC secret).</li>
+        <li>Paste the Discord application <strong>public key</strong> into the provider credential field (not a shared HMAC secret).</li>
         <li>Discord’s PING (<code>type: 1</code>) is answered with <code>{"type": 1}</code> and never becomes an event.</li>
         <li>
           Other interactions map to event types:
@@ -599,7 +609,7 @@
       <h3>PayPal notes</h3>
       <ul class="stack help__list">
         <li>Set webhook ID, client ID, and environment (sandbox/live) on the source.</li>
-        <li>Store the PayPal <strong>client secret</strong> in the Webhook secret field.</li>
+        <li>Store the PayPal <strong>client secret</strong> in the provider credential field.</li>
         <li>Register event types that match PayPal’s <code>event_type</code> values (e.g. <code>PAYMENT.SALE.COMPLETED</code>).</li>
       </ul>
 
@@ -607,7 +617,7 @@
         <summary>For senders (generic HMAC)</summary>
         <ul class="stack help__list">
           <li>Send <code>POST /webhook/{slug}</code> with a JSON body.</li>
-          <li>Type via the <code>X-Event-Type</code> header, <code>X-GitHub-Event</code> (GitHub/Gitea), or body field <code>event_type</code> / <code>type</code>. Types are matched case-insensitively and stored lowercase.</li>
+          <li>Type via a known event-type header (e.g. <code>X-Event-Type</code>, <code>X-GitHub-Event</code>, <code>X-Contentful-Topic</code>), or body field <code>event_type</code> / <code>type</code>. Types are matched case-insensitively and stored lowercase; register the exact topic string the provider sends.</li>
           <li>
             With a secret: also send <code>X-Webhook-Timestamp</code> (unix seconds) and
             <code>X-Webhook-Signature</code>. Sign with HMAC-SHA256 of <code>{timestamp}.{raw_body}</code>
@@ -690,17 +700,22 @@
 
       <h3>HTTP poll authentication</h3>
       <p>
-        HTTP / API pollers can attach credentials from an encrypted poll secret.
-        Choose an auth mode on the schedule:
+        HTTP / API pollers can attach encrypted credentials from Auth mode on the schedule
+        (same idea as Call URL auth — different option set). Modes in UI order:
       </p>
       <p class="text-muted">
         Use <code>http_get</code> for plain uptime/status-style checks too. It covers optional exact status matching and HEAD requests, so a separate public-status subtype is no longer part of the poller set.
       </p>
       <table class="table">
         <thead>
-          <tr><th>Auth mode</th><th>Secret format</th><th>What happens</th></tr>
+          <tr><th>Auth mode</th><th>Credential</th><th>What happens</th></tr>
         </thead>
         <tbody>
+          <tr>
+            <td>None</td>
+            <td>—</td>
+            <td>No credential headers (static Headers JSON still apply).</td>
+          </tr>
           <tr>
             <td>Bearer token</td>
             <td>Raw token</td>
@@ -712,7 +727,7 @@
           <tr>
             <td>HTTP Basic</td>
             <td><code>username:password</code></td>
-            <td>Standard Basic auth header.</td>
+            <td>Standard Basic auth header (header name configurable).</td>
           </tr>
           <tr>
             <td>OAuth2 client credentials</td>
@@ -722,10 +737,22 @@
               caches it in-process, then sends it as a Bearer token.
             </td>
           </tr>
+          <tr>
+            <td>API key + secret</td>
+            <td>Two encrypted values</td>
+            <td>
+              Sends both as custom headers. <strong>Key header</strong> and
+              <strong>Secret header</strong> are editable (defaults
+              <code>X-Api-Key</code> / <code>X-Api-Secret</code>).
+              Example: Alpaca <code>APCA-API-KEY-ID</code> /
+              <code>APCA-API-SECRET-KEY</code>.
+            </td>
+          </tr>
         </tbody>
       </table>
       <p>
-        Poll-specific secrets are stored encrypted.
+        Do not put secrets in Headers (JSON) — that field is for non-secret static headers.
+        Poll credentials are stored encrypted.
         Some pollers also depend on host commands being present, and their failures will show up as poll errors.
       </p>
 
@@ -822,12 +849,12 @@
         The same store covers:
       </p>
       <ul class="stack help__list">
-        <li><strong>Webhook sources</strong> — shared HMAC secrets, Stripe/Slack/GitHub signing secrets, Discord public key, PayPal client secret</li>
-        <li><strong>HTTP polls</strong> — bearer tokens, <code>username:password</code>, or <code>client_id:client_secret</code></li>
+        <li><strong>Webhook sources</strong> — provider credential (HMAC / Stripe / Slack / GitHub signing secret, Discord public key, PayPal client secret)</li>
+        <li><strong>HTTP polls</strong> — bearer tokens, <code>username:password</code>, <code>client_id:client_secret</code>, or API key + secret pairs</li>
         <li><strong>Call URL actions</strong> — bearer tokens, API key/secret pairs, and optional HMAC signing keys</li>
       </ul>
       <p class="text-muted">
-        Secrets are never shown again after save. Replace by entering a new value, or clear the webhook secret from the source edit dialog.
+        Secrets are never shown again after save. Replace by entering a new value, or clear the provider credential from the source edit dialog.
       </p>
     </div>
   </section>

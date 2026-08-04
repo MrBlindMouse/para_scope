@@ -198,6 +198,7 @@ def _build_source_dialog_context(
         "source": draft_source,
         "schedule": draft_schedule,
         "webhook_secret": webhook_secret,
+        "is_edit": getattr(source, "id", None) is not None,
         "error": error,
     }
     context.update(_poller_template_context(draft_source, draft_schedule))
@@ -891,7 +892,7 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
     if source_type not in ctx._SOURCE_TYPES:
         return _err("Choose Webhook or Poll")
 
-    from app.webhook_verifiers import get_webhook_provider_slugs
+    from app.webhook_verifiers import get_webhook_provider, get_webhook_provider_slugs
     if source_type == "webhook" and webhook_provider not in get_webhook_provider_slugs():
         return _err("Choose a supported webhook verification method")
 
@@ -909,13 +910,15 @@ async def pipeline_create_source(request: Request, db: Session = Depends(get_db)
         source_config["poll_category"] = poll_category
     if source_type == "webhook":
         source_config["webhook_provider"] = webhook_provider
+        provider_meta = get_webhook_provider(webhook_provider) or {}
+        if provider_meta.get("secret_required") and not secret_value:
+            label = provider_meta.get("secret_input_label") or "Credential"
+            return _err(f"{label} is required")
         if webhook_provider == "paypal":
             if not paypal_webhook_id:
                 return _err("Webhook ID is required")
             if not paypal_client_id:
                 return _err("Client ID is required")
-            if not secret_value:
-                return _err("Client secret is required")
             source_config["paypal_webhook_id"] = paypal_webhook_id
             source_config["paypal_client_id"] = paypal_client_id
             source_config["paypal_environment"] = paypal_environment
@@ -1830,7 +1833,7 @@ async def pipeline_source_edit_form(request: Request, source_id: int, db: Sessio
         schedule=schedule,
         webhook_secret=webhook_secret,
     )
-    return ctx.templates.TemplateResponse(request, "config/pipeline/_source_edit_form.html", context)
+    return ctx.templates.TemplateResponse(request, "config/pipeline/_source_form.html", context)
 
 
 # route: /config/source/{source_id}/edit
@@ -1859,7 +1862,7 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
                 error=msg,
             )
             return ctx.templates.TemplateResponse(
-                request, "config/pipeline/_source_edit_form.html", context
+                request, "config/pipeline/_source_form.html", context
             )
         return ctx._pipeline_redirect(error=msg, request=request)
 
@@ -1895,10 +1898,11 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
         source_cfg.pop("poll_category", None)
 
     if source_type == "webhook":
-        from app.webhook_verifiers import get_webhook_provider_slugs
+        from app.webhook_verifiers import get_webhook_provider, get_webhook_provider_slugs
         if webhook_provider not in get_webhook_provider_slugs():
             return _err("Choose a supported webhook verification method")
         source_cfg["webhook_provider"] = webhook_provider
+        provider_meta = get_webhook_provider(webhook_provider) or {}
         if webhook_provider == "paypal":
             if paypal_webhook_id:
                 source_cfg["paypal_webhook_id"] = paypal_webhook_id
@@ -1944,12 +1948,22 @@ async def update_source(request: Request, source_id: int, db: Session = Depends(
             db.add(secret)
             db.flush()
             source.webhook_secret_id = secret.id
+        provider_meta = get_webhook_provider(webhook_provider) or {}
+        if provider_meta.get("secret_required") and not source.webhook_secret_id:
+            label = provider_meta.get("secret_input_label") or "Credential"
+            return _err(f"{label} is required")
         if previous_type != "webhook":
             _ensure_event_type(
                 db, source.id, "always",
                 "Fires on every accepted webhook delivery",
             )
     elif source_type == "poll":
+        if source.webhook_secret_id:
+            old_id = source.webhook_secret_id
+            source.webhook_secret_id = None
+            orphan = db.query(Secret).filter(Secret.id == old_id).first()
+            if orphan:
+                db.delete(orphan)
         existing_type_names = {
             normalize_event_type(et.name)
             for et in db.query(EventTypeRecord).filter(EventTypeRecord.source_id == source.id).all()

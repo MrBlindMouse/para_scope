@@ -198,6 +198,10 @@
         webhookFields.style.display = "";
         scheduleFields.style.display = "none";
       }
+      var tipWh = form.querySelector("#source-name-tip-webhook");
+      var tipPoll = form.querySelector("#source-name-tip-poll");
+      if (tipWh) tipWh.hidden = typeSel.value === "poll";
+      if (tipPoll) tipPoll.hidden = typeSel.value !== "poll";
     }
 
     typeSel.addEventListener("change", toggleSourceType);

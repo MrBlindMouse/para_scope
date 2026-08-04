@@ -8,7 +8,7 @@ Underscore-prefixed partials for the pipeline dialog and source-chain SSR. Serve
 
 | Pattern | Files |
 |---------|--------|
-| Forms | `_source_form`, `_source_edit_form`, `_event_form`, `_rule_form`, `_action_form`, `_field_form` |
+| Forms | `_source_form`, `_event_form`, `_rule_form`, `_action_form`, `_field_form` (each uses `is_edit`) |
 | Chain | `_source_chain`, `_fields_section` |
 | Recipes / dry-run | `_source_templates`, `_rule_test_result` |
 | Shared fieldsets | `_webhook_provider_fields`, `_poll_schedule_fields`, `_conditions_builder` |
@@ -27,7 +27,6 @@ Route ↔ template: `/config/pipeline/.../partials/{kebab}` → `_{snake}.html`.
 ## Prefer / avoid
 
 - Reuse `_webhook_provider_fields`, `_poll_schedule_fields`, `_conditions_builder` — do not copy fieldsets into create vs edit.
-- Prefer deduplicating `_source_form` / `_source_edit_form` when touching either.
 - Pair with `static/js/source-dialog.js` and `conditions-builder.js`.
 
 ## See also
