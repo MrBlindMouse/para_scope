@@ -2409,7 +2409,7 @@ class TestDashboardGridLayout:
     def test_dashboard_exposes_grid_resolution(self, authenticated_client):
         from app.dashboard_layout import (
             DEFAULT_W, GRID_COLUMN_LIVE_MAX, GRID_COLUMN_WIDTH, GRID_COLUMNS,
-            GRID_STACK_BELOW,
+            GRID_STACK_BELOW, GRID_STACK_FIXED_H,
         )
 
         authenticated_client.post(
@@ -2425,6 +2425,7 @@ class TestDashboardGridLayout:
         assert f'data-gs-column-width="{GRID_COLUMN_WIDTH}"'.encode() in resp.content
         assert f'data-gs-column-live-max="{GRID_COLUMN_LIVE_MAX}"'.encode() in resp.content
         assert f'data-gs-stack-below="{GRID_STACK_BELOW}"'.encode() in resp.content
+        assert f'data-gs-stack-fixed-h="{GRID_STACK_FIXED_H}"'.encode() in resp.content
         assert b".gs-1>" in resp.content
         assert f".gs-{GRID_COLUMNS}>".encode() in resp.content
         assert f".gs-{GRID_COLUMN_LIVE_MAX}>".encode() in resp.content
@@ -2453,11 +2454,20 @@ class TestDashboardGridLayout:
         assert 'layout = "none"' in js
         assert 'layout = "moveScale"' not in js
         assert "stackBelow" in js
+        assert "stackFixedH" in js
         assert "liveMax" in js
         assert "syncEditAvailability" in js
         assert "toggle.disabled" in js
         assert "columnOpts" not in js
         assert "checkDynamicColumn" not in js
+        assert "sizeToContent" in js
+        assert "dashboard-grid--stacked" in js
+        assert "resizeToContentCheck" in js
+        assert "htmx:afterSwap" in js
+        assert "STACK_FIXED_KINDS" in js
+        assert "stackedOrigH" in js
+        assert "enterStack" in js
+        assert "leaveStack" in js
 
     def test_migrate_and_merge_keep_ultrawide_geometry(self):
         from app.dashboard_layout import GRID_COLUMN_LIVE_MAX, merge_geometry, normalize_widgets

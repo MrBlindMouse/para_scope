@@ -2,6 +2,8 @@
 (function () {
   "use strict";
 
+  var STACK_FIXED_KINDS = { chart: 1, series: 1, notes: 1 };
+
   function csrfToken() {
     var meta = document.querySelector('meta[name="csrf-token"]');
     return meta ? meta.getAttribute("content") || "" : "";
@@ -17,6 +19,7 @@
     var cellHeight = parseInt(el.getAttribute("data-gs-cell-height") || "40", 10);
     var margin = parseInt(el.getAttribute("data-gs-margin") || "6", 10);
     var stackBelow = parseInt(el.getAttribute("data-gs-stack-below") || "768", 10);
+    var stackFixedH = parseInt(el.getAttribute("data-gs-stack-fixed-h") || "8", 10);
 
     // Prepare in the full live coordinate space so ultrawide right-edge x/w are not
     // clamped into the design 36-col grid before applyResponsiveColumns runs.
@@ -32,6 +35,8 @@
     var editing = false;
     var saveTimer = null;
     var resizeTimer = null;
+    var stacked = false;
+    var stackedOrigH = null;
     var toggle = document.getElementById("dashboard-edit-toggle");
 
     function atDesignWidth() {
@@ -113,6 +118,65 @@
       }
     }
 
+    function widgetKind(itemEl) {
+      var card = itemEl.querySelector("[data-widget]");
+      return card ? (card.getAttribute("data-widget") || "") : "";
+    }
+
+    function isFixedKind(itemEl) {
+      return !!STACK_FIXED_KINDS[widgetKind(itemEl)];
+    }
+
+    function cacheStackedHeights() {
+      stackedOrigH = {};
+      (grid.engine.nodes || []).forEach(function (n) {
+        if (n.id != null && n.h != null) stackedOrigH[n.id] = n.h;
+      });
+    }
+
+    function applyStackHeights() {
+      grid.batchUpdate();
+      (grid.engine.nodes || []).forEach(function (n) {
+        if (!n.el) return;
+        if (isFixedKind(n.el)) {
+          n.sizeToContent = false;
+          if (n.h !== stackFixedH) grid.update(n.el, { h: stackFixedH });
+        } else {
+          n.sizeToContent = true;
+        }
+      });
+      grid.opts.sizeToContent = true;
+      grid.batchUpdate(false);
+      grid.resizeToContentCheck();
+    }
+
+    function clearStackHeights() {
+      grid.opts.sizeToContent = false;
+      var orig = stackedOrigH || {};
+      stackedOrigH = null;
+      grid.batchUpdate();
+      (grid.engine.nodes || []).forEach(function (n) {
+        if (!n.el) return;
+        n.sizeToContent = false;
+        var h = orig[n.id];
+        if (h != null && n.h !== h) grid.update(n.el, { h: h });
+      });
+      grid.batchUpdate(false);
+    }
+
+    function enterStack() {
+      cacheStackedHeights();
+      el.classList.add("dashboard-grid--stacked");
+      stacked = true;
+      applyStackHeights();
+    }
+
+    function leaveStack() {
+      el.classList.remove("dashboard-grid--stacked");
+      stacked = false;
+      clearStackHeights();
+    }
+
     function applyResponsiveColumns() {
       // Stack mode uses viewport width so GRID_STACK_BELOW matches what DevTools shows.
       // Cell count uses the grid's clientWidth (content box after page padding).
@@ -128,8 +192,17 @@
         next = Math.min(Math.round(gridWidth / columnWidth) || 1, liveMax);
         layout = "none";
       }
+      var wasStacked = stacked;
+      var nowStacked = next === 1;
       if (grid.getColumn() !== next) {
         grid.column(next, layout);
+      }
+      if (nowStacked && !wasStacked) {
+        enterStack();
+      } else if (!nowStacked && wasStacked) {
+        leaveStack();
+      } else if (nowStacked) {
+        applyStackHeights();
       }
       syncEditAvailability();
     }
@@ -150,6 +223,10 @@
         setEditing(!editing);
       });
     }
+
+    el.addEventListener("htmx:afterSwap", function () {
+      if (stacked) applyStackHeights();
+    });
 
     applyResponsiveColumns();
     if (typeof ResizeObserver !== "undefined") {

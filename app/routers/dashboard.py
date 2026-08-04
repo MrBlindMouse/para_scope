@@ -24,7 +24,7 @@ from app.widgets import (
 )
 from app.dashboard_layout import (
     GRID_CELL_HEIGHT, GRID_COLUMN_LIVE_MAX, GRID_COLUMN_WIDTH, GRID_COLUMNS,
-    GRID_MARGIN, GRID_STACK_BELOW,
+    GRID_MARGIN, GRID_STACK_BELOW, GRID_STACK_FIXED_H,
     find_widget, grid_stack_column_css, layout_json, merge_geometry,
     normalize_for_save, normalize_widgets, parse_layout_config,
 )
@@ -155,6 +155,7 @@ async def root(request: Request, db: Session = Depends(get_db)):
             "grid_cell_height": GRID_CELL_HEIGHT,
             "grid_margin": GRID_MARGIN,
             "grid_stack_below": GRID_STACK_BELOW,
+            "grid_stack_fixed_h": GRID_STACK_FIXED_H,
             "grid_column_css": grid_stack_column_css(GRID_COLUMN_LIVE_MAX),
         },
     )

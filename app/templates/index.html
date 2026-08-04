@@ -40,7 +40,8 @@
      data-gs-column-live-max="{{ grid_column_live_max }}"
      data-gs-cell-height="{{ grid_cell_height }}"
      data-gs-margin="{{ grid_margin }}"
-     data-gs-stack-below="{{ grid_stack_below }}">
+     data-gs-stack-below="{{ grid_stack_below }}"
+     data-gs-stack-fixed-h="{{ grid_stack_fixed_h }}">
   {% for widget in widgets %}
     {% set wid = widget.id %}
     {% set wdata = widget_data.get(wid, {}) %}

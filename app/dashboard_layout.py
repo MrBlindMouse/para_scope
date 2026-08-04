@@ -15,6 +15,8 @@ GRID_MARGIN = 6  # px
 GRID_COLUMN_LIVE_MAX = 96
 # Layout mode threshold (viewport / window width px); at/below → full-width stacked list.
 GRID_STACK_BELOW = 768
+# Fixed row span for chart/series/notes while stacked (~320px at GRID_CELL_HEIGHT).
+GRID_STACK_FIXED_H = 8
 
 DEFAULT_W = max(1, GRID_COLUMNS // 2)
 DEFAULT_H = 3

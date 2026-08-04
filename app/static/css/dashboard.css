@@ -49,6 +49,20 @@
     overflow: auto;
   }
 
+  /* Stack mode: content widgets size to natural height (GridStack sizeToContent).
+     chart/series/notes keep fill-the-cell so GRID_STACK_FIXED_H is the drawable area. */
+  .dashboard-grid--stacked .grid-stack-item-content > .card:not([data-widget="chart"]):not([data-widget="series"]):not([data-widget="notes"]) {
+    flex: none;
+    min-block-size: auto;
+    height: auto;
+  }
+
+  .dashboard-grid--stacked .card:not([data-widget="chart"]):not([data-widget="series"]):not([data-widget="notes"]) > .card__body {
+    flex: none;
+    min-block-size: auto;
+    overflow: visible;
+  }
+
   .dashboard-grid .card__body:has(.widget-notes-wrap),
   .dashboard-grid .card__body:has(.widget-chart) {
     display: flex;
