@@ -17,7 +17,7 @@ Widget body markup included on the dashboard and re-rendered by `GET /widgets/{t
 - Titles/labels/units/link URLs may contain `{{ slug… }}`; expansion happens in `widgets.py` / dashboard `root()`, not in these Jinja bodies.
 - BEM: `.widget-{kind}`, modifiers `--{display}` / `--{style}`, elements `__*`.
 - Client hooks: `data-*-widget`, `data-chart-*`, etc. matching `static/js/widget-*.js`.
-- HTMX refresh: non-`links` / `notes` / `clock` / `triggers` bodies get `hx-get="/widgets/{type}?id=…"` on a timer.
+- HTMX refresh: non-`links` / `clock` / `triggers` bodies get `hx-get="/widgets/{type}?id=…"` on a timer. Notes skip the swap while focused or a debounced save is pending (`widget-notes.js`).
 
 ## Prefer / avoid
 

@@ -33,9 +33,24 @@
     }, SAVE_DELAY_MS);
   }
 
+  function notesBusyIn(el) {
+    if (!el || !el.querySelector) return false;
+    var ta = el.querySelector("[data-notes-widget]");
+    if (!ta) return false;
+    return document.activeElement === ta || !!ta._notesSaveTimer;
+  }
+
   document.addEventListener("input", function (e) {
     var el = e.target;
     if (!el || !el.getAttribute || !el.hasAttribute("data-notes-widget")) return;
     scheduleSave(el);
+  });
+
+  // Skip HTMX body swap while editing or a debounced save is pending.
+  document.body.addEventListener("htmx:beforeSwap", function (e) {
+    var target = e.detail && e.detail.target;
+    if (notesBusyIn(target)) {
+      e.detail.shouldSwap = false;
+    }
   });
 })();

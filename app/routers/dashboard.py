@@ -158,6 +158,7 @@ async def root(request: Request, db: Session = Depends(get_db)):
             "grid_stack_fixed_h": GRID_STACK_FIXED_H,
             "grid_column_css": grid_stack_column_css(GRID_COLUMN_LIVE_MAX),
         },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -192,8 +193,11 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
             **appearance_context(db),
         )
     except Exception:
-        return HTMLResponse('<p class="text-muted">Unknown widget</p>')
-    return HTMLResponse(html)
+        return HTMLResponse(
+            '<p class="text-muted">Unknown widget</p>',
+            headers={"Cache-Control": "no-store"},
+        )
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 # route: /api/dashboard/layout

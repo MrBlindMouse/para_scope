@@ -6625,7 +6625,7 @@ class TestNotesWidget:
         finally:
             db.close()
 
-    def test_dashboard_renders_notes_without_htmx_poll(self, authenticated_client):
+    def test_dashboard_renders_notes_with_htmx_poll(self, authenticated_client):
         authenticated_client.post(
             "/config/dashboard",
             data={"widgets": json.dumps([{
@@ -6638,12 +6638,27 @@ class TestNotesWidget:
         )
         home = authenticated_client.get("/")
         assert home.status_code == 200
+        assert home.headers.get("cache-control") == "no-store"
         assert b"My Notes" in home.content
         assert b'data-notes-widget' in home.content
         assert b"body text here" in home.content
         assert b"widget-notes.js" in home.content
-        # No HTMX poll on notes (same as links)
-        assert b'hx-get="/widgets/notes' not in home.content
+        assert b'hx-get="/widgets/notes' in home.content
+
+        notes_id = None
+        from app.database import get_db
+        from app.models import DashboardLayout
+        db = next(get_db())
+        try:
+            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            widgets = json.loads(layout.layout_config)["widgets"]
+            notes_id = next(w["id"] for w in widgets if w["type"] == "notes")
+        finally:
+            db.close()
+        partial = authenticated_client.get(f"/widgets/notes?id={notes_id}")
+        assert partial.status_code == 200
+        assert partial.headers.get("cache-control") == "no-store"
+        assert b"body text here" in partial.content
 
 
 class TestWebhookAudit:

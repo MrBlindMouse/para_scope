@@ -29,6 +29,7 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 - Phase-2 poll integrations: Docker/runtime snapshots, SMART health, ZFS/Btrfs pool health, MQTT broker checks, deeper queue integrations
 - Mandatory webhook secrets in production (operator guidance only today)
 - Heatmap / calendar heatmap / range-column widgets; markdown notes display
+- SSE-driven dashboard refresh for **series** (graphs), **chart**, and **system** log/list displays when Fields/events change (HTMX 30s poll remains fallback). Out of scope: notes, links, clock, triggers.
 
 ---
 
@@ -138,7 +139,7 @@ Global named sink used by both actions and widgets:
 
 **Dashboard View / Widget**  
 
-Modular visualization or control surface (status, charts, series, links, notes, system info, display). Layout is stored in `DashboardLayout` and edited via GridStack. Widgets refresh via HTMX.
+Modular visualization or control surface (status, charts, series, links, notes, system info, display). Layout is stored in `DashboardLayout` and edited via GridStack. Widgets refresh via HTMX today; SSE push for series/chart/system is Planned (see §0).
 
 Series displays (logbook): `line` / `area` / `column` with per-style options (e.g. stepline, stacked, horizontal). Chart displays (value/text): `pie` / `radial` / `radar` / `polar`. Radial styles use an explicit max/target. Notes display: `Text` (plain body in layout config, debounced save from the dashboard).
 
