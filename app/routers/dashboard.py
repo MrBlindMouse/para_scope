@@ -33,6 +33,13 @@ from app import webctx as ctx
 
 router = APIRouter()
 
+# Widget HTML must never be reused from browser/proxy/HTMX history caches.
+_NO_STORE = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 # route: /api/push/vapid-public-key
 @router.get("/api/push/vapid-public-key")
 async def push_vapid_public_key():
@@ -158,7 +165,7 @@ async def root(request: Request, db: Session = Depends(get_db)):
             "grid_stack_fixed_h": GRID_STACK_FIXED_H,
             "grid_column_css": grid_stack_column_css(GRID_COLUMN_LIVE_MAX),
         },
-        headers={"Cache-Control": "no-store"},
+        headers=_NO_STORE,
     )
 
 
@@ -168,7 +175,7 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
     """HTMX partial: re-render a single widget's content body."""
     user = ctx._get_user(request, db)
     if not user:
-        return HTMLResponse("", status_code=401)
+        return HTMLResponse("", status_code=401, headers=_NO_STORE)
 
     widget_id = (request.query_params.get("id") or "").strip() or None
     try:
@@ -195,9 +202,9 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
     except Exception:
         return HTMLResponse(
             '<p class="text-muted">Unknown widget</p>',
-            headers={"Cache-Control": "no-store"},
+            headers=_NO_STORE,
         )
-    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+    return HTMLResponse(html, headers=_NO_STORE)
 
 
 # route: /api/dashboard/layout

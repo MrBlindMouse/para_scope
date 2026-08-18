@@ -17,6 +17,7 @@ Jinja2 HTML for all UI, mounted via `Jinja2Templates(directory="app/templates")`
 ## Invariants
 
 - Most pages: `{% extends "base.html" %}` → `title`, `body_class`, `header_actions`, `content`.
+- `base.html` sets HTMX `getCacheBusterParam` / `historyCacheSize: 0` so widget (and other) GETs are not served from HTTP or history cache.
 - Auth pages (`login`, `setup`): **standalone** HTML (no `base`), CSRF-exempt.
 - Mutating forms include `components/csrf.html` (`_csrf_token`). `base` sets `<meta name="csrf-token">` for JSON/`X-CSRF-Token`.
 - Prefer partials over growing monolithic pages (`config/dashboard.html`, `config/help.html` are already large).

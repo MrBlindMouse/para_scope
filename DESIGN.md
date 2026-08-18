@@ -1,6 +1,6 @@
-Version: 0.1.1  
+Version: 0.1.2  
 
-Date: 2026-07-17 (updated 2026-07-31: v0.1.1)
+Date: 2026-07-17 (updated 2026-08-18: v0.1.2)
 
 Status: Living design. **AGENTS.md** is the ops contract for agents; this document is vision plus an explicit shipped-vs-planned split below. Releases: git tags + [CHANGELOG.md](CHANGELOG.md). Trunk-based on `main`; SemVer; wipe/recreate over migrations (see README Versioning).
 

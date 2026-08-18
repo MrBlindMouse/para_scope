@@ -10,13 +10,31 @@ While still on `0.x`, a **MINOR** bump may include breaking (wipe) changes; thos
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-08-18
+
+Patch release. Tag: `v0.1.2`. No schema wipe.
+
 ### Breaking
 
 - JSON shapes in Update field (data **Object from event**, logbook **Value from event**): keys must be quoted (may use `{{ }}`). **Bare** values are path/maths (`{"cash": cash}`); **quoted** values are literal text or templates (`"sensor"`, `"Sensor {{ name }}"`). Explicit `"{{ cash }}"` still works. No DB wipe — reconfigure shapes that relied on quoted path strings like `"temp"` as lookups (use bare `temp` or `"{{ temp }}"`). Bare (non-object) paths like `payload` are unchanged.
 
+### Fixed
+
+- Notes widget no longer loses edits: HTMX no longer polls notes; pending text flushes on blur/pagehide; `autocomplete="off"` so refresh cannot restore stale form values
+- Dashboard and widget HTML is uncached (`Cache-Control: no-store`); HTMX GETs to `/widgets/` send a cache-buster and skip history snapshots
+- Radial/chart widgets fill their card; series/chart/radial maths eval
+- Widget preview alignment; toggle widget labelling
+- JSON field updates treat quoted values as literals
+
+### Added
+
+- Maths `list` step (`math(list.**.value)`)
+- Logbook fields usable on toggle widgets
+
 ### Changed
 
 - Help, action-form tips/placeholders, and DESIGN document bare-value JSON-like shapes
+- Auth/header chrome; dashboard layout fits narrower device screens
 
 ## [0.1.1] — 2026-07-31
 
