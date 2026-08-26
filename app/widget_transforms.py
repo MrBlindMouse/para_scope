@@ -31,10 +31,12 @@ _COMPARE_OPS = {
     "eq": operator.eq,
     "neq": operator.ne,
 }
-_PATH_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)*$")
+# Trailing segments: negative/positive indexes, ``*`` / ``**``, or identifiers.
+_PATH_SEG = r"(?:-?\d+|[a-zA-Z0-9_*]+)"
+_PATH_RE = re.compile(rf"^[a-zA-Z_][a-zA-Z0-9_]*(?:\.{_PATH_SEG})*$")
 # Dotted paths first so ``value.*.rate`` wins over bare ``value``.
 _PATH_TOKEN_RE = re.compile(
-    r"[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z0-9_*]+)+|[a-zA-Z_][a-zA-Z0-9_]*"
+    rf"[a-zA-Z_][a-zA-Z0-9_]*(?:\.{_PATH_SEG})+|[a-zA-Z_][a-zA-Z0-9_]*"
 )
 _TEMPLATE_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
 _WHOLE_TEMPLATE_RE = re.compile(r"^\{\{\s*([^}]+?)\s*\}\}$")
@@ -44,7 +46,7 @@ _BARE_EQ_RE = re.compile(r"(?<![!<>=])=(?!=)")
 _EXPR_MARK_RE = re.compile(r"[=!<>+\-*/%()]")
 # Plain Field picker: slug (hyphens allowed) or slug.path — not maths/compare.
 _PLAIN_FIELD_REF_RE = re.compile(
-    r"^[a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9_*]+)*$"
+    rf"^[a-zA-Z_][a-zA-Z0-9_-]*(?:\.{_PATH_SEG})*$"
 )
 _AST_COMPARE = {
     ast.Eq: operator.eq,

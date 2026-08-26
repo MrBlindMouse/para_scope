@@ -23,6 +23,17 @@ def test_get_by_path_nested():
     assert get_by_path({"_poll": {"response_time_ms": 273.5}}, "_poll.response_time_ms") == 273.5
 
 
+def test_get_by_path_negative_index():
+    from app.fields import get_by_path
+
+    data = {"items": [{"id": 1}, {"id": 2}, {"id": 3}]}
+    assert get_by_path(data, "items.-1") == {"id": 3}
+    assert get_by_path(data, "items.-1.id") == 3
+    assert get_by_path(data, "items.-2.id") == 2
+    assert get_by_path({"items": []}, "items.-1") is None
+    assert get_by_path(data, "items.-9") is None
+
+
 def test_get_by_path_star_first_item():
     from app.fields import get_by_path
 
@@ -115,6 +126,21 @@ def test_resolve_path_or_expr():
     assert resolve_path_or_expr("1/rate", nd) == 0.05
     assert resolve_path_or_expr("missing", nd) is None
     assert resolve_path_or_expr("1/0", nd) is None
+
+
+def test_resolve_negative_list_index():
+    """Dotted ``.-1`` is last element; spaced ``array - 1`` stays subtraction."""
+    from app.fields import resolve_numeric
+    from app.widget_transforms import eval_expr, render_data_template, resolve_path_or_expr
+
+    nd = {"array": [10, 20, 30], "items": [{"n": 1}, {"n": 7}]}
+    assert resolve_path_or_expr("array.-1", nd) == 30
+    assert resolve_path_or_expr("items.-1.n", nd) == 7
+    assert resolve_numeric("array.-1", nd) == 30.0
+    assert render_data_template("{{ array.-1 }}", nd) == "30"
+    assert render_data_template("{{ items.-1.n }}", nd) == "7"
+    assert eval_expr("array.-1 + 1", nd) == 31.0
+    assert eval_expr("array - 1", nd) is None  # whole list minus 1 is not numeric
 
 
 def test_eval_expr_richer_maths():

@@ -31,7 +31,7 @@ def get_by_path(data, path: str, star_bindings: dict[str, int] | None = None):
     """Walk a dotted path into a nested dict/list structure.
 
     Empty path returns data unchanged. Missing segments return None.
-    List segments are integer indexes (e.g. items.0.id) or ``*``.
+    List segments are integer indexes (e.g. items.0.id, items.-1) or ``*``.
     With no bindings, ``*`` is index 0. When ``star_bindings`` is passed
     (or set via ``path_star_bindings``), ``*`` under prefix ``value`` uses
     ``star_bindings["value"]`` (empty prefix key ``""`` for a root list).
@@ -70,8 +70,9 @@ def get_by_path(data, path: str, star_bindings: dict[str, int] | None = None):
 def collect_by_path(data, path: str, star_bindings: dict[str, int] | None = None):
     """Walk a path collecting leaves; ``**`` expands every list index.
 
-    ``*`` is one row (same bindings as ``get_by_path``). Integer indexes and
-    dict keys work as usual. Returns a list of leaf values, or None if any
+    ``*`` is one row (same bindings as ``get_by_path``). Integer indexes
+    (including negative) and dict keys work as usual. Returns a list of leaf
+    values, or None if any
     branch is missing / invalid. Empty ``**`` over an empty list → ``[]``.
     """
     if star_bindings is None:
