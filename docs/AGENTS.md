@@ -7,6 +7,7 @@ Non-code assets for README, marketing, and contributor guides. Not application r
 ## Contents
 
 - `dashboard.png` — live dashboard screenshot used in [README.md](../README.md)
+- `guide.md` — operator guide (install, env, webhooks, polling, production); moved off README
 - `authoring.md` — how to add a poller, action, or widget kind (built-in registries only)
 
 Release notes and SemVer policy live at the repo root: [CHANGELOG.md](../CHANGELOG.md) (not under `docs/`).
@@ -20,4 +21,4 @@ Release notes and SemVer policy live at the repo root: [CHANGELOG.md](../CHANGEL
 
 ## See also
 
-Root [AGENTS.md](../AGENTS.md) · [README.md](../README.md) · [CHANGELOG.md](../CHANGELOG.md) · [authoring.md](authoring.md)
+Root [AGENTS.md](../AGENTS.md) · [README.md](../README.md) · [CHANGELOG.md](../CHANGELOG.md) · [guide.md](guide.md) · [authoring.md](authoring.md)
