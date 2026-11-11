@@ -488,6 +488,34 @@
     </label>
   </div>
 
+  {# ── kanban_push ── #}
+  <div id="panel-kanban-push" class="stack action-panel" hidden>
+    <label class="stack">
+      Kanban page slug *
+      <input name="kanban_page_slug" type="text" class="input" value="{{ cfg.get('page_slug') or '' }}" placeholder="work">
+    </label>
+    <label class="stack">
+      Column
+      <input name="kanban_column" type="text" class="input" value="{{ cfg.get('column') or 'Next' }}" placeholder="Next">
+    </label>
+    <label class="stack">
+      Title
+      <input name="kanban_title" type="text" class="input" value="{{ cfg.get('title') if cfg.get('title') is not none else '{{ title }}' }}" placeholder="{{ '{{ title }}' }}">
+    </label>
+    <label class="stack">
+      Mode
+      <input name="kanban_mode" type="text" class="input" value="{{ cfg.get('mode') if cfg.get('mode') is not none else '{{ mode }}' }}" placeholder="{{ '{{ mode }}' }}">
+    </label>
+    <label class="stack">
+      Identity key
+      <input name="kanban_key" type="text" class="input" value="{{ cfg.get('key') or '{{ uid }}-{{ occurrence }}' }}">
+    </label>
+    <label class="flex items-center gap">
+      <input type="checkbox" name="kanban_remove" value="1" {% if cfg.get('remove') %}checked{% endif %}>
+      Remove the card if it is still in this column
+    </label>
+  </div>
+
   <div class="flex items-center gap">
     <button type="submit" class="btn btn--primary">{% if is_edit %}Save Action{% else %}Create Action{% endif %}</button>
   </div>
@@ -503,7 +531,8 @@
     notify: document.getElementById("panel-notify"),
     local_script: document.getElementById("panel-local-script"),
     http_forward: document.getElementById("panel-http-forward"),
-    trigger_source: document.getElementById("panel-trigger-source")
+    trigger_source: document.getElementById("panel-trigger-source"),
+    kanban_push: document.getElementById("panel-kanban-push")
   };
   var fpPanels = {
     logbook: document.getElementById("fp-logbook"),

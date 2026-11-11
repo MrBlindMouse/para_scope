@@ -7,10 +7,78 @@
 
 <p class="mt">Set up and Manage widgets</p>
 
+<dialog id="add-page-dialog" class="dialog">
+  <form method="post" action="/config/dashboard/add-page" class="stack dialog__form">
+    {% include 'components/csrf.html' %}
+    <header class="dialog__header flex items-center gap">
+      <h2 class="dialog__title">Add page</h2>
+      <button type="button" class="btn btn--sm" data-add-page-close>Close</button>
+    </header>
+    <label class="stack">
+      Name
+      <input type="text" name="page_name" class="input" maxlength="100" placeholder="Work">
+    </label>
+    <label class="stack">
+      Type
+      <select name="kind" class="input" id="add-page-kind">
+        <option value="dashboard">Dashboard</option>
+        <option value="calendar">Calendar</option>
+        <option value="kanban">Kanban</option>
+      </select>
+    </label>
+    <div id="add-page-feed" class="stack" hidden>
+      <label class="stack">
+        Secret ICS URL
+        <input type="url" name="ics_url" class="input" placeholder="https://…/basic.ics"
+               {% if not has_calendar_feed %}data-feed-required{% endif %}>
+      </label>
+      <p class="text-muted">Sets up the calendar feed, focus Fields, and the rules that add focus blocks to a kanban board.{% if has_calendar_feed %} Leave the URL blank to keep the current feed.{% endif %}</p>
+    </div>
+    <button type="submit" class="btn btn--primary">Create</button>
+  </form>
+</dialog>
+<form method="post" action="/config/dashboard/delete-page" id="dashboard-delete-page-form" hidden>
+  {% include 'components/csrf.html' %}
+  <input type="hidden" name="page" value="{{ page_slug }}">
+</form>
+
 <form method="post" action="/config/dashboard" id="dashboard-form" class="stack">
   {% include 'components/csrf.html' %}
   <input type="hidden" name="widgets" id="widgets-json" value="[]">
+  <input type="hidden" name="page" value="{{ page_slug }}">
 
+  <div class="flex items-center gap flex-wrap">
+    <label class="stack form-field--xl">
+      Page
+      <select id="dashboard-page-select" class="input" aria-label="Dashboard page">
+        <option value="" {% if not page_slug %}selected{% endif %}>Main</option>
+        {% for p in dashboard_pages %}
+        <option value="{{ p.slug }}" {% if page_slug == p.slug %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+        <option value="__add__">Add Page</option>
+      </select>
+    </label>
+    {% if page_slug %}
+    <button type="button" class="btn" id="dashboard-delete-page-btn">Delete</button>
+    {% endif %}
+  </div>
+
+  {% if page_slug %}
+  <label class="stack form-field--xl">
+    Page Name
+    <input type="text" name="page_name" class="input" value="{{ page_name }}" required maxlength="100">
+  </label>
+  {% endif %}
+
+  {% if page_kind != 'dashboard' %}
+  <p class="text-muted">
+    {% if page_kind == 'calendar' %}
+    This page shows the imported calendar. The feed and its rules were created with the page.
+    {% else %}
+    This page is a kanban board. Focus blocks from the calendar feed land in Next. The slug stays fixed so those rules keep finding it.
+    {% endif %}
+  </p>
+  {% else %}
   <div class="flex items-center gap flex-wrap">
     <label class="stack form-field--xl form-field--grow">
       Widget type
@@ -26,6 +94,7 @@
   <div id="widget-instances" class="stack"></div>
 
   <p id="widgets-empty" class="text-muted" hidden>No widgets yet. Add one from the catalog above.</p>
+  {% endif %}
 
   <div class="flex items-center gap mt flex-wrap">
     <button type="submit" class="btn btn--primary">Save Layout</button>
@@ -44,6 +113,7 @@
   </div>
 </dialog>
 
+{% if page_kind == 'dashboard' %}
 <link rel="stylesheet" href="/static/vendor/apexcharts/apexcharts.css">
 <script src="/static/vendor/apexcharts/apexcharts.min.js"></script>
 <script src="/static/js/widget-charts.js"></script>
@@ -2192,6 +2262,46 @@
   }
 
   setWidgets(initial);
+})();
+</script>
+{% endif %}
+<script>
+(function () {
+  var pageSelect = document.getElementById("dashboard-page-select");
+  var addDialog = document.getElementById("add-page-dialog");
+  if (pageSelect) {
+    pageSelect.addEventListener("change", function () {
+      var v = pageSelect.value;
+      if (v === "__add__") {
+        pageSelect.value = {{ page_slug | tojson }};
+        if (addDialog && addDialog.showModal) addDialog.showModal();
+        return;
+      }
+      window.location.href = v ? ("/config/dashboard?page=" + encodeURIComponent(v)) : "/config/dashboard";
+    });
+  }
+  if (addDialog) {
+    var kindSel = document.getElementById("add-page-kind");
+    var feed = document.getElementById("add-page-feed");
+    var feedInput = feed && feed.querySelector("input");
+    function syncAddPageKind() {
+      var work = kindSel && (kindSel.value === "calendar" || kindSel.value === "kanban");
+      if (feed) feed.hidden = !work;
+      if (feedInput) feedInput.required = !!(work && feedInput.hasAttribute("data-feed-required"));
+    }
+    if (kindSel) kindSel.addEventListener("change", syncAddPageKind);
+    syncAddPageKind();
+    addDialog.addEventListener("click", function (e) {
+      if (e.target.closest("[data-add-page-close]")) addDialog.close();
+    });
+  }
+  var deleteBtn = document.getElementById("dashboard-delete-page-btn");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", function () {
+      if (!window.confirm("Delete this page? Its widgets or cards will be removed.")) return;
+      document.getElementById("dashboard-delete-page-form").submit();
+    });
+  }
 })();
 </script>
 {% endblock %}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ page_name }} – Para-Scope{% endblock %}
+{% block body_class %}work-page{% endblock %}
+{% block header_center %}
+  {% include "components/page_nav.html" %}
+{% endblock %}
+{% block header_actions %}
+  <a href="/config/dashboard?page={{ page_slug }}" class="btn btn--icon" aria-label="Page settings" title="Page settings">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+      <circle cx="12" cy="12" r="3"/>
+    </svg>
+  </a>
+{% endblock %}
+{% block content %}
+<header class="work-toolbar">
+  <h1>{{ page_name }}</h1>
+  <div class="work-toolbar__nav">
+    <a class="btn btn--sm" href="/?page={{ page_slug }}&amp;week={{ prev_week }}">Previous</a>
+    <span>{{ week_label }}</span>
+    <a class="btn btn--sm" href="/?page={{ page_slug }}&amp;week={{ next_week }}">Next</a>
+  </div>
+</header>
+{% if focus %}
+<p class="focus-now">
+  Now{% if focus_label %}: {{ focus_label }}{% endif %}
+  <span class="text-muted">{{ focus.title }} · until {{ focus.ends_at | display_dt('%H:%M') }}</span>
+</p>
+{% else %}
+<p class="focus-now text-muted">Nothing scheduled right now.</p>
+{% endif %}
+{% if days %}
+<div class="week">
+  {% for day in days %}
+  <section class="week__day{% if day.today %} week__day--today{% endif %}">
+    <h2><span>{{ day.weekday }}</span> {{ day.number }}</h2>
+    {% if day['items'] %}
+    <ul>
+      {% for item in day['items'] %}
+      <li class="week__event{% if item.mode %} week__event--{{ item.mode }}{% endif %}">
+        <time>{% if item.all_day %}All day{% else %}{{ item.starts_at | display_dt('%H:%M') }}{% endif %}</time>
+        <span>{{ item.title }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
+{% if not has_events %}
+<p class="text-muted">No events this week. Add a calendar feed under Config → Pipeline → From template.</p>
+{% endif %}
+{% endblock %}

@@ -69,7 +69,7 @@ Get a working pipeline after login (more detail in `/help`):
    - **Poll:** schedules feed `on_success` / `on_failure` into the same pipeline (see [Polling](#polling)).
 4. **Add a rule** for the event(s) you care about (use **Add rule** on an event row to pre-select it). Empty conditions match all events for those types.
 5. **Add an action on that rule** (`field_push` is a good smoke test; `http_forward`, `notify` for ntfy / Gotify / Discord, and `web_push` are also built in; `local_script` needs `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`). Optional credentials can be attached in the action dialog. For `web_push`, set VAPID env vars and click the bell in the header to enable notifications. Events, rules, and actions are editable from the chain.
-6. **Confirm** on `/events` (live SSE tail), enable widgets at `/config/dashboard`, and view them on `/`. Widget **titles**, **labels**, **units**, and **link URLs** accept `{{ slug… }}` Field templates at display time (same bare-slug namespace as display templates; notes stay literal).
+6. **Confirm** on `/events` (live SSE tail), enable widgets at `/config/dashboard`, and view them on `/` (optional named pages via `/?page=…`). Widget **titles**, **labels**, **units**, and **link URLs** accept `{{ slug… }}` Field templates at display time (same bare-slug namespace as display templates; notes stay literal).
 
 Day-to-day: `/events` and `/system`. Manage accounts at `/config/users`. Appearance and dashboard background: `/config/style`.
 
@@ -143,7 +143,7 @@ Highest reasonable privilege for the shipped pollers is usually **a dedicated se
 
 ### Dashboard widgets
 
-Configure layout at `/config/dashboard`. Widgets bind to Fields (or stand alone) and refresh with the dashboard.
+Configure layout at `/config/dashboard` (page dropdown for Main / Add Page / named pages). Widgets bind to Fields (or stand alone) and refresh with the dashboard. Named pages open at `/?page={slug}`.
 
 | Kind | Displays | Notable styles |
 |------|----------|----------------|

@@ -729,9 +729,35 @@ def _action_trigger_source(db, event: Event, action: ActionInstance) -> None:
         raise ValueError(f"Nested trigger failed: {failures[0]}")
 
 
+def _action_kanban_push(db, event: Event, action: ActionInstance) -> None:
+    """Create or refresh a card. Does not emit card.moved and does not change column."""
+    from app.dashboard_layout import get_layout
+    from app.kanban import upsert_card
+
+    config = action.config or {}
+    page_slug = str(config.get("page_slug") or "").strip()
+    layout = get_layout(db, page_slug)
+    if layout is None or (layout.kind or "dashboard") != "kanban":
+        raise ValueError("Kanban page not found")
+    ctx = event_data_context(db, event)
+    key = render_data_template(str(config.get("key") or "{{ uid }}-{{ occurrence }}"), ctx).strip()
+    title = render_data_template(str(config.get("title") or "{{ title }}"), ctx).strip()
+    mode = render_data_template(str(config.get("mode") or "{{ mode }}"), ctx).strip()
+    upsert_card(
+        db,
+        layout=layout,
+        column_name=str(config.get("column") or "Next"),
+        title=title,
+        mode=mode,
+        external_key=key,
+        remove=bool(config.get("remove")),
+    )
+
+
 register_action("field_push", _action_field_push)
 register_action("http_forward", _action_http_forward)
 register_action("notify", _action_notify)
 register_action("web_push", _action_web_push)
 register_action("local_script", _action_local_script)
 register_action("trigger_source", _action_trigger_source)
+register_action("kanban_push", _action_kanban_push)

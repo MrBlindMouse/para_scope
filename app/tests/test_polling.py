@@ -379,7 +379,9 @@ def test_poller_registry_exposes_categories_and_specs():
         "tcp_connect", "icmp_ping", "dns_resolve", "cert_expiry",
     ]
     assert by_cat["storage"] == ["disk_free_space", "backup_age"]
-    assert by_cat["external"] == ["rss_atom_change", "imap_unread", "domain_expiry"]
+    assert by_cat["external"] == [
+        "rss_atom_change", "imap_unread", "domain_expiry", "ics_calendar",
+    ]
 
 
 def test_parse_poller_form_http_schedule():

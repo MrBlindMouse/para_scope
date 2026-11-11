@@ -17,6 +17,12 @@
         hx-swap="innerHTML"
         class="stack">
     {% include "components/csrf.html" %}
+    {% for field in t.inputs or [] %}
+    <label class="stack">
+      {{ field.label }}
+      <input type="url" name="{{ field.name }}" class="input" required placeholder="{{ field.placeholder or '' }}">
+    </label>
+    {% endfor %}
     <button type="submit" class="btn">
       <strong>{{ t.title }}</strong>
       <span class="text-muted"> — {{ t.summary }}</span>

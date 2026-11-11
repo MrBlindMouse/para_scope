@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse
 from sqlalchemy.orm import Session
+from urllib.parse import urlencode
 import json
 
 from app.database import get_db
@@ -25,8 +26,11 @@ from app.widgets import (
 from app.dashboard_layout import (
     GRID_CELL_HEIGHT, GRID_COLUMN_LIVE_MAX, GRID_COLUMN_WIDTH, GRID_COLUMNS,
     GRID_MARGIN, GRID_STACK_BELOW, GRID_STACK_FIXED_H,
-    find_widget, grid_stack_column_css, layout_json, merge_geometry,
-    normalize_for_save, normalize_widgets, parse_layout_config,
+    MAIN_NAME, MAIN_SLUG,
+    find_widget, get_layout, grid_stack_column_css, layout_json,
+    list_named_pages, merge_geometry, normalize_for_save, normalize_page_slug,
+    normalize_widgets, parse_layout_config, slugify_page_name, unique_page_slug,
+    validate_page_name,
 )
 
 from app import webctx as ctx
@@ -110,18 +114,47 @@ async def push_unsubscribe(request: Request, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-# ── Dashboard (root) ────────────────────────────────────────────────────────
+# ── Dashboard pages ─────────────────────────────────────────────────────────
 
-def _get_layout(db: Session) -> DashboardLayout | None:
-    """Shared install layout (singleton)."""
-    return db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+def _page_slug_from_request(request: Request) -> str:
+    return normalize_page_slug(request.query_params.get("page"))
 
 
-def _load_widgets(db: Session) -> list[dict]:
-    """Load shared widgets, migrating ids/geometry and persisting if needed."""
-    layout = _get_layout(db)
+def _page_slug_from_body(body: dict | None) -> str:
+    if not isinstance(body, dict):
+        return MAIN_SLUG
+    return normalize_page_slug(body.get("page"))
+
+
+def _config_dashboard_url(slug: str = MAIN_SLUG, *, success: str | None = None, error: str | None = None) -> str:
+    params: dict[str, str] = {}
+    if slug:
+        params["page"] = slug
+    if success is not None:
+        params["success"] = success
+    if error is not None:
+        params["error"] = error
+    qs = urlencode(params)
+    return f"/config/dashboard?{qs}" if qs else "/config/dashboard"
+
+
+def _has_calendar_feed(db: Session) -> bool:
+    from app.source_templates import has_calendar_feed
+    return has_calendar_feed(db)
+
+
+def _dashboard_pages_ctx(db: Session) -> list[dict]:
+    return [
+        {"name": p.name, "slug": p.slug, "kind": p.kind or "dashboard"}
+        for p in list_named_pages(db)
+    ]
+
+
+def _load_widgets(db: Session, slug: str = MAIN_SLUG) -> list[dict] | None:
+    """Load widgets for a page. None if named page missing."""
+    layout = get_layout(db, slug)
     if not layout:
-        return []
+        return None
     widgets = parse_layout_config(layout.layout_config)["widgets"]
     widgets, changed = normalize_widgets(widgets)
     if changed:
@@ -130,13 +163,117 @@ def _load_widgets(db: Session) -> list[dict]:
     return widgets
 
 
+def _render_calendar(request: Request, db: Session, user, layout):
+    from datetime import datetime, timedelta
+    from app.calendar_sync import current_focus, display_zone, load_week, week_bounds
+    from app.kanban import mode_label
+
+    zone = display_zone(db)
+    raw = (request.query_params.get("week") or "").strip()
+    try:
+        anchor = datetime.strptime(raw, "%Y-%m-%d").date() if raw else datetime.now(zone).date()
+    except ValueError:
+        anchor = datetime.now(zone).date()
+    start, _end = week_bounds(anchor, zone)
+    items = load_week(db, anchor, zone)
+    days = []
+    for offset in range(7):
+        moment = start + timedelta(days=offset)
+        day = moment.date()
+        day_items = []
+        for item in items:
+            from datetime import timezone
+            starts = item.starts_at
+            if starts.tzinfo is None:
+                starts = starts.replace(tzinfo=timezone.utc)
+            if starts.astimezone(zone).date() != day:
+                continue
+            day_items.append(item)
+        days.append({
+            "date": day,
+            "weekday": day.strftime("%a"),
+            "number": day.day,
+            "items": day_items,
+            "today": day == datetime.now(zone).date(),
+        })
+    focus = current_focus(db)
+    prev_week = (start.date() - timedelta(days=7)).isoformat()
+    next_week = (start.date() + timedelta(days=7)).isoformat()
+    return ctx.templates.TemplateResponse(
+        request,
+        "calendar.html",
+        {
+            "user": user,
+            "page_slug": layout.slug,
+            "page_name": layout.name,
+            "page_kind": "calendar",
+            "dashboard_pages": _dashboard_pages_ctx(db),
+            "days": days,
+            "focus": focus,
+            "focus_label": mode_label(focus.mode) if focus and focus.mode else "",
+            "prev_week": prev_week,
+            "next_week": next_week,
+            "week_label": f"{start.strftime('%b')} {start.day}",
+            "has_events": any(day["items"] for day in days),
+        },
+        headers=_NO_STORE,
+    )
+
+
+def _render_kanban(request: Request, db: Session, user, layout):
+    from app.calendar_sync import current_focus
+    from app.kanban import ensure_columns, mode_label
+
+    from app.models import KanbanColumn
+    had_columns = (
+        db.query(KanbanColumn).filter(KanbanColumn.layout_id == layout.id).count() > 0
+    )
+    columns = ensure_columns(db, layout)
+    if not had_columns:
+        db.commit()
+    focus = current_focus(db)
+    return ctx.templates.TemplateResponse(
+        request,
+        "kanban.html",
+        _kanban_ctx(db, user, layout, columns, focus, mode_label),
+        headers=_NO_STORE,
+    )
+
+
+def _kanban_ctx(db, user, layout, columns, focus, mode_label):
+    from app.kanban import FOCUS_MODES
+    return {
+        "user": user,
+        "page_slug": layout.slug,
+        "page_name": layout.name,
+        "page_kind": "kanban",
+        "dashboard_pages": _dashboard_pages_ctx(db),
+        "columns": columns,
+        "focus": focus,
+        "focus_label": mode_label(focus.mode) if focus and focus.mode else "",
+        "focus_modes": FOCUS_MODES,
+    }
+
+
 # route: /
 @router.get("/")
 async def root(request: Request, db: Session = Depends(get_db)):
     user = ctx._get_user(request, db)
     if not user:
         return ctx.templates.TemplateResponse(request, "base.html", {})
-    widgets = _load_widgets(db)
+    slug = _page_slug_from_request(request)
+    layout = get_layout(db, slug)
+    if layout and (layout.kind or "dashboard") != "dashboard":
+        if layout.kind == "calendar":
+            return _render_calendar(request, db, user, layout)
+        if layout.kind == "kanban":
+            return _render_kanban(request, db, user, layout)
+        return HTMLResponse("Unknown page", status_code=404, headers=_NO_STORE)
+    widgets = _load_widgets(db, slug)
+    if widgets is None:
+        return HTMLResponse("Dashboard page not found", status_code=404, headers=_NO_STORE)
+    layout = get_layout(db, slug)
+    page_name = (layout.name if layout else MAIN_NAME) or MAIN_NAME
     # ponytail: titles only re-render on full page load (HTMX refreshes card body only).
     snap = fields_snapshot(db)
     for w in widgets:
@@ -156,6 +293,9 @@ async def root(request: Request, db: Session = Depends(get_db)):
             "user": user,
             "widgets": widgets,
             "widget_data": widget_data,
+            "page_slug": slug,
+            "page_name": page_name,
+            "dashboard_pages": _dashboard_pages_ctx(db),
             "grid_columns": GRID_COLUMNS,
             "grid_column_width": GRID_COLUMN_WIDTH,
             "grid_column_live_max": GRID_COLUMN_LIVE_MAX,
@@ -183,7 +323,10 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
     except (TypeError, ValueError):
         index = None
 
-    widgets = _load_widgets(db)
+    slug = _page_slug_from_request(request)
+    widgets = _load_widgets(db, slug)
+    if widgets is None:
+        return HTMLResponse("", status_code=404, headers=_NO_STORE)
     widget = find_widget(widgets, widget_id=widget_id, index=index)
     config = (widget.get("config") or {}) if widget else {}
     display = (widget.get("display") if widget else None) or ""
@@ -210,7 +353,7 @@ async def widget_partial(request: Request, widget_type: str, db: Session = Depen
 # route: /api/dashboard/layout
 @router.post("/api/dashboard/layout")
 async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
-    """Merge widget geometry (x/y/w/h) by id into the shared layout."""
+    """Merge widget geometry (x/y/w/h) by id into the page layout."""
     user = ctx._get_user(request, db)
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -222,7 +365,8 @@ async def api_dashboard_layout(request: Request, db: Session = Depends(get_db)):
     if not isinstance(updates, list):
         return JSONResponse({"error": "Widgets array required"}, status_code=400)
 
-    layout = _get_layout(db)
+    slug = _page_slug_from_body(body if isinstance(body, dict) else None)
+    layout = get_layout(db, slug)
     if not layout:
         return JSONResponse({"error": "No layout"}, status_code=404)
     widgets = parse_layout_config(layout.layout_config)["widgets"]
@@ -362,7 +506,7 @@ NOTES_TEXT_MAX = 50_000
 # route: /api/dashboard/notes
 @router.post("/api/dashboard/notes")
 async def api_dashboard_notes(request: Request, db: Session = Depends(get_db)):
-    """Persist notes widget body text into shared layout config."""
+    """Persist notes widget body text into page layout config."""
     user = ctx._get_user(request, db)
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -383,7 +527,8 @@ async def api_dashboard_notes(request: Request, db: Session = Depends(get_db)):
     if len(text) > NOTES_TEXT_MAX:
         return JSONResponse({"error": "Notes text too long"}, status_code=400)
 
-    layout = _get_layout(db)
+    slug = _page_slug_from_body(body)
+    layout = get_layout(db, slug)
     if not layout:
         return JSONResponse({"error": "No layout"}, status_code=404)
     widgets = parse_layout_config(layout.layout_config)["widgets"]
@@ -399,17 +544,32 @@ async def api_dashboard_notes(request: Request, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-# ── Config: Pipeline (Sources → Rules → Actions) ────────────────────────────
+# ── Config: Dashboard ───────────────────────────────────────────────────────
 
 
 # route: /config/dashboard
 @router.get("/config/dashboard")
 async def config_dashboard(request: Request, db: Session = Depends(get_db)):
     success, error = ctx.get_message_params(request)
+    slug = _page_slug_from_request(request)
+    widgets = _load_widgets(db, slug)
+    if widgets is None:
+        return RedirectResponse(
+            url=_config_dashboard_url(error="Dashboard page not found"),
+            status_code=303,
+        )
+    layout = get_layout(db, slug)
     return ctx.templates.TemplateResponse(
         request, "config/dashboard.html",
-        _dashboard_editor_context(db, current_widgets=_load_widgets(db),
-                                  success=success, error=error),
+        _dashboard_editor_context(
+            db,
+            current_widgets=widgets,
+            page_slug=slug,
+            page_name=(layout.name if layout else MAIN_NAME) or MAIN_NAME,
+            page_kind=(layout.kind if layout else None) or "dashboard",
+            success=success,
+            error=error,
+        ),
     )
 
 
@@ -417,6 +577,9 @@ def _dashboard_editor_context(
     db: Session,
     *,
     current_widgets: list,
+    page_slug: str = MAIN_SLUG,
+    page_name: str = MAIN_NAME,
+    page_kind: str = "dashboard",
     success: str | None = None,
     error: str | None = None,
 ) -> dict:
@@ -437,6 +600,11 @@ def _dashboard_editor_context(
         "available_widgets": available_widgets,
         "fields": db.query(Field).order_by(Field.name).all(),
         "trigger_targets": _trigger_targets(db),
+        "page_slug": page_slug,
+        "page_name": page_name,
+        "page_kind": page_kind if page_kind in ("dashboard", "calendar", "kanban") else "dashboard",
+        "dashboard_pages": _dashboard_pages_ctx(db),
+        "has_calendar_feed": _has_calendar_feed(db),
         "success": success,
         "error": error,
     }
@@ -446,23 +614,43 @@ def _dashboard_editor_context(
 @router.post("/config/dashboard")
 async def save_dashboard(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
-    widgets_raw = form.get("widgets", "[]").strip()
+    slug = normalize_page_slug(form.get("page"))
+    widgets_raw = (form.get("widgets") or "[]").strip()
 
     try:
         widgets = json.loads(widgets_raw) if widgets_raw else []
     except json.JSONDecodeError:
         return RedirectResponse(
-            url=ctx.flash_url("/config/dashboard", error="Couldn’t read the dashboard settings"),
+            url=_config_dashboard_url(slug, error="Couldn’t read the dashboard settings"),
+            status_code=303,
+        )
+
+    layout = get_layout(db, slug)
+    if not layout:
+        return RedirectResponse(
+            url=_config_dashboard_url(error="Dashboard page not found"),
+            status_code=303,
+        )
+
+    if (layout.kind or "dashboard") != "dashboard":
+        cleaned, name_err = validate_page_name(form.get("page_name") or layout.name)
+        if name_err:
+            return RedirectResponse(
+                url=_config_dashboard_url(slug, error=name_err),
+                status_code=303,
+            )
+        layout.name = cleaned
+        db.commit()
+        return RedirectResponse(
+            url=_config_dashboard_url(slug, success="Page saved"),
             status_code=303,
         )
 
     # Preserve geometry from existing layout when the form omits x/y/w/h
     existing = {}
-    layout = _get_layout(db)
-    if layout:
-        for w in parse_layout_config(layout.layout_config)["widgets"]:
-            if w.get("id"):
-                existing[w["id"]] = w
+    for w in parse_layout_config(layout.layout_config)["widgets"]:
+        if w.get("id"):
+            existing[w["id"]] = w
     for w in widgets:
         if isinstance(w, dict) and w.get("id") and w["id"] in existing:
             prev = existing[w["id"]]
@@ -481,23 +669,238 @@ async def save_dashboard(request: Request, db: Session = Depends(get_db)):
     widgets = normalize_for_save(widgets)
     err = validate_widget_bindings(db, widgets)
     if err:
-        # Keep the submitted editor state so a failed save doesn’t wipe setup.
         return ctx.templates.TemplateResponse(
             request, "config/dashboard.html",
-            _dashboard_editor_context(db, current_widgets=widgets, error=err),
+            _dashboard_editor_context(
+                db,
+                current_widgets=widgets,
+                page_slug=slug,
+                page_name=layout.name or MAIN_NAME,
+                error=err,
+            ),
             status_code=400,
         )
-    payload = layout_json(widgets)
 
-    if layout:
-        layout.layout_config = payload
-    else:
-        layout = DashboardLayout(layout_config=payload)
-        db.add(layout)
+    if slug:
+        cleaned, name_err = validate_page_name(form.get("page_name") or layout.name)
+        if name_err:
+            return ctx.templates.TemplateResponse(
+                request, "config/dashboard.html",
+                _dashboard_editor_context(
+                    db,
+                    current_widgets=widgets,
+                    page_slug=slug,
+                    page_name=form.get("page_name") or layout.name,
+                    error=name_err,
+                ),
+                status_code=400,
+            )
+        new_slug = unique_page_slug(
+            db, slugify_page_name(cleaned), exclude_id=layout.id,
+        )
+        layout.name = cleaned
+        layout.slug = new_slug
+        slug = new_slug
+
+    layout.layout_config = layout_json(widgets)
     db.commit()
     return RedirectResponse(
-        url=ctx.flash_url("/config/dashboard", success="Dashboard layout saved"),
+        url=_config_dashboard_url(slug, success="Dashboard layout saved"),
         status_code=303,
     )
 
 
+# route: /config/dashboard/add-page
+@router.post("/config/dashboard/add-page")
+async def add_dashboard_page(request: Request, db: Session = Depends(get_db)):
+    from app.dashboard_layout import PAGE_KINDS
+    from app.kanban import ensure_columns
+
+    form = await request.form()
+    kind = (form.get("kind") or "dashboard").strip()
+    if kind not in PAGE_KINDS:
+        kind = "dashboard"
+    fallback = {"dashboard": "New Page", "calendar": "Calendar", "kanban": "Kanban"}[kind]
+    cleaned, err = validate_page_name((form.get("page_name") or "").strip() or fallback)
+    if err:
+        return RedirectResponse(
+            url=_config_dashboard_url(error=err),
+            status_code=303,
+        )
+    base = slugify_page_name(cleaned)
+    slug = unique_page_slug(db, base)
+    layout = DashboardLayout(
+        name=cleaned,
+        slug=slug,
+        kind=kind,
+        layout_config=layout_json([]),
+    )
+    db.add(layout)
+    db.flush()
+    schedule = None
+    if kind == "kanban":
+        ensure_columns(db, layout)
+    if kind in ("calendar", "kanban"):
+        from app.source_templates import ensure_calendar_pipeline
+
+        kanban_slug = slug if kind == "kanban" else None
+        if kanban_slug is None:
+            boards = [p for p in list_named_pages(db) if (p.kind or "") == "kanban"]
+            if len(boards) == 1:
+                kanban_slug = boards[0].slug
+        try:
+            schedule = ensure_calendar_pipeline(
+                db,
+                ics_url=(form.get("ics_url") or "").strip(),
+                kanban_slug=kanban_slug,
+            )
+        except ValueError as exc:
+            db.rollback()
+            return RedirectResponse(
+                url=_config_dashboard_url(error=str(exc)),
+                status_code=303,
+            )
+    db.commit()
+    if schedule is not None:
+        from app.scheduler import add_or_update_job
+        add_or_update_job(schedule)
+    message = "Page created"
+    if kind in ("calendar", "kanban"):
+        message = "Page created. Calendar feed and rules are ready."
+    return RedirectResponse(
+        url=_config_dashboard_url(slug, success=message),
+        status_code=303,
+    )
+
+
+# route: /config/dashboard/delete-page
+@router.post("/config/dashboard/delete-page")
+async def delete_dashboard_page(request: Request, db: Session = Depends(get_db)):
+    form = await request.form()
+    slug = normalize_page_slug(form.get("page"))
+    if not slug:
+        return RedirectResponse(
+            url=_config_dashboard_url(error="Main cannot be deleted"),
+            status_code=303,
+        )
+    layout = get_layout(db, slug)
+    if not layout:
+        return RedirectResponse(
+            url=_config_dashboard_url(error="Dashboard page not found"),
+            status_code=303,
+        )
+    db.delete(layout)
+    db.commit()
+    return RedirectResponse(
+        url=_config_dashboard_url(success="Page deleted"),
+        status_code=303,
+    )
+
+
+def _kanban_layout(db: Session, slug: str):
+    layout = get_layout(db, slug)
+    if not layout or (layout.kind or "") != "kanban":
+        return None
+    return layout
+
+
+def _kanban_reply(request: Request, db: Session, user, layout):
+    from app.calendar_sync import current_focus
+    from app.kanban import ensure_columns, mode_label
+
+    columns = ensure_columns(db, layout)
+    if ctx._is_htmx(request):
+        return ctx.templates.TemplateResponse(
+            request,
+            "kanban_board.html",
+            _kanban_ctx(db, user, layout, columns, current_focus(db), mode_label),
+            headers=_NO_STORE,
+        )
+    return RedirectResponse(url=f"/?page={layout.slug}", status_code=303)
+
+
+# route: /kanban/card
+@router.post("/kanban/card")
+async def kanban_add_card(request: Request, db: Session = Depends(get_db)):
+    from app.kanban import add_card, column_named, ensure_columns
+
+    user = ctx._get_user(request, db)
+    if not user:
+        return HTMLResponse("", status_code=401)
+    form = await request.form()
+    layout = _kanban_layout(db, normalize_page_slug(form.get("page")))
+    if layout is None:
+        return HTMLResponse("Kanban page not found", status_code=404)
+    columns = ensure_columns(db, layout)
+    column = column_named(columns, "Next") or columns[0]
+    add_card(db, column, form.get("title") or "", (form.get("mode") or "").strip())
+    db.commit()
+    return _kanban_reply(request, db, user, layout)
+
+
+# route: /kanban/card/move
+@router.post("/kanban/card/move")
+async def kanban_move_card(request: Request, db: Session = Depends(get_db)):
+    from app.kanban import emit_card_moved, move_card
+    from app.models import KanbanCard, KanbanColumn
+
+    user = ctx._get_user(request, db)
+    if not user:
+        return HTMLResponse("", status_code=401)
+    form = await request.form()
+    layout = _kanban_layout(db, normalize_page_slug(form.get("page")))
+    if layout is None:
+        return HTMLResponse("Kanban page not found", status_code=404)
+    try:
+        card_id = int(form.get("card_id") or 0)
+        column_id = int(form.get("column_id") or 0)
+    except (TypeError, ValueError):
+        return HTMLResponse("Invalid card", status_code=400)
+    card = (
+        db.query(KanbanCard)
+        .join(KanbanColumn)
+        .filter(KanbanCard.id == card_id, KanbanColumn.layout_id == layout.id)
+        .first()
+    )
+    column = (
+        db.query(KanbanColumn)
+        .filter(KanbanColumn.id == column_id, KanbanColumn.layout_id == layout.id)
+        .first()
+    )
+    if card is None or column is None:
+        return HTMLResponse("Card not found", status_code=404)
+    moved = move_card(db, card, column)
+    if moved:
+        origin, dest = moved
+        emit_card_moved(db, card, origin=origin, dest=dest)
+    else:
+        db.commit()
+    return _kanban_reply(request, db, user, layout)
+
+
+# route: /kanban/card/delete
+@router.post("/kanban/card/delete")
+async def kanban_delete_card(request: Request, db: Session = Depends(get_db)):
+    from app.models import KanbanCard, KanbanColumn
+
+    user = ctx._get_user(request, db)
+    if not user:
+        return HTMLResponse("", status_code=401)
+    form = await request.form()
+    layout = _kanban_layout(db, normalize_page_slug(form.get("page")))
+    if layout is None:
+        return HTMLResponse("Kanban page not found", status_code=404)
+    try:
+        card_id = int(form.get("card_id") or 0)
+    except (TypeError, ValueError):
+        return HTMLResponse("Invalid card", status_code=400)
+    card = (
+        db.query(KanbanCard)
+        .join(KanbanColumn)
+        .filter(KanbanCard.id == card_id, KanbanColumn.layout_id == layout.id)
+        .first()
+    )
+    if card is not None:
+        db.delete(card)
+        db.commit()
+    return _kanban_reply(request, db, user, layout)

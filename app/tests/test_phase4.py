@@ -12,7 +12,7 @@ def test_action_types_registered():
     types = get_action_types()
     assert types == [
         "field_push", "http_forward", "notify", "web_push", "local_script",
-        "trigger_source",
+        "trigger_source", "kanban_push",
     ]
 
 

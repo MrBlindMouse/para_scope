@@ -53,7 +53,7 @@ Single-process FastAPI app. SQLite only, no migrations, no Docker. Everything is
 | Webhooks | `app/webhook_verifiers.py` — provider signature / replay verification |
 | Live events | `app/event_stream.py` — in-process SSE fan-out for `/events/stream` |
 | Source recipes | `app/source_templates.py` — full-stack quick-add prefills |
-| Widgets | `app/widgets.py`, `app/widget_transforms.py`, `app/dashboard_layout.py` |
+| Widgets | `app/widgets.py`, `app/widget_transforms.py`, `app/dashboard_layout.py` (Main + `/?page=` pages). Page `kind`: `dashboard`, `calendar`, `kanban` |
 | Appearance | `app/themes.py`, `app/labels.py`, `app/webpush_util.py` |
 
 Config lives in the DB. Config nav: `/config/pipeline`, `/config/users`, `/config/dashboard`, `/config/style`.

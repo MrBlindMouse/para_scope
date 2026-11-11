@@ -1,0 +1,133 @@
+@layer components;
+
+@layer components {
+  .work-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--inline-space);
+    margin-block-end: var(--block-space);
+  }
+
+  .work-toolbar__nav {
+    display: flex;
+    align-items: center;
+    gap: var(--inline-space);
+  }
+
+  .focus-now {
+    margin-block-end: var(--block-space);
+  }
+
+  .week {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: var(--inline-space);
+    align-items: start;
+  }
+
+  .week__day {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 0.75rem;
+    min-block-size: 8rem;
+  }
+
+  .week__day--today {
+    background: color-mix(in oklch, var(--color-ink) 8%, transparent);
+  }
+
+  .week__day h2 {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9rem;
+    margin-block-end: 0.5rem;
+  }
+
+  .week__day ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .week__event {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-block-end: 0.5rem;
+    font-size: 0.85rem;
+  }
+
+  .week__event time {
+    color: color-mix(in oklch, var(--color-ink) 65%, transparent);
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--inline-space);
+    align-items: start;
+  }
+
+  .board__column {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 0.75rem;
+  }
+
+  .board__column h2 {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.95rem;
+    margin-block-end: 0.75rem;
+  }
+
+  .board__cards {
+    list-style: none;
+    padding: 0;
+    margin: 0.75rem 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .board__add {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .board__add .input {
+    flex: 1 1 8rem;
+  }
+
+  .kanban-card {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md, 0.4rem);
+    padding: 0.6rem 0.7rem;
+  }
+
+  .kanban-card--quiet {
+    opacity: 0.45;
+  }
+
+  .kanban-card__mode {
+    font-size: 0.75rem;
+    margin-block-start: 0.25rem;
+    color: color-mix(in oklch, var(--color-ink) 65%, transparent);
+  }
+
+  .kanban-card__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-block-start: 0.5rem;
+  }
+
+  @media (max-width: 768px) {
+    .week,
+    .board {
+      grid-template-columns: 1fr;
+    }
+  }
+}

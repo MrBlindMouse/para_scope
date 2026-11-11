@@ -236,6 +236,11 @@ def parse_poller_form(
     if spec.get("uses_url") and not values["handler_url"]:
         return None, {}, "URL is required"
 
+    # Poller-owned state (focus key). The form does not edit these.
+    for key, val in existing_params.items():
+        if str(key).startswith("_") and key not in values["handler_params"]:
+            values["handler_params"][key] = val
+
     return values, secret_updates, None
 
 
@@ -1692,6 +1697,51 @@ register_poller(
                 input_type="number",
                 store="timeout",
                 default=15,
+            ),
+        ],
+    },
+)
+
+
+def ics_calendar_poll(schedule: PollingSchedule, db) -> dict:
+    """Fetch an ICS feed, store the window, and emit one event per change."""
+    from app.calendar_sync import sync_ics
+
+    source = db.query(Source).filter(Source.id == schedule.source_id).first()
+    if source is None:
+        raise ValueError("Poll source not found")
+    result = sync_ics(db, schedule)
+    edges = result.pop("edges", [])
+    for edge in edges:
+        _create_poll_event(
+            db, schedule, source,
+            {"data": edge["data"], "raw": ""},
+            outcome="on_success",
+            type_name=edge["type"],
+        )
+    return result
+
+
+register_poller(
+    "ics_calendar",
+    ics_calendar_poll,
+    spec={
+        "label": "Calendar feed",
+        "category": "external",
+        "summary": "Read-only ICS URL. Changes become item.upsert, item.removed, and focus.changed.",
+        "uses_url": True,
+        "fields": [
+            _field(
+                "mode_map",
+                "Category → focus mode",
+                input_type="textarea",
+                rows=4,
+                placeholder="Deep work=deep\nMeetings=people",
+                help_text=(
+                    "One ICS category per line, mapped to deep, people, admin, or errands. "
+                    "Categories that already use those names match on their own. "
+                    "Add event types item.upsert, item.removed, and focus.changed to use them in rules."
+                ),
             ),
         ],
     },

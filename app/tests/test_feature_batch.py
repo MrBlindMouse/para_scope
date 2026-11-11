@@ -353,7 +353,44 @@ class TestSourceTemplates:
         assert "USD forex rates" in resp.text
         assert "GitHub Status" in resp.text
         assert "ISS position" in resp.text
+        assert "Calendar" in resp.text
         assert "Disk free space" not in resp.text
+
+    def test_apply_calendar_kanban_requires_url_then_builds_pages(self, authenticated_client):
+        missing = authenticated_client.post(
+            "/config/pipeline/templates/calendar_kanban/apply",
+            data={},
+            follow_redirects=False,
+        )
+        assert missing.status_code == 303
+        assert "Calendar%20URL" in (missing.headers.get("location") or "")
+
+        ok = authenticated_client.post(
+            "/config/pipeline/templates/calendar_kanban/apply",
+            data={"ics_url": "https://example.test/basic.ics"},
+            follow_redirects=False,
+        )
+        assert ok.status_code in (200, 303)
+
+        from app.database import get_db
+        from app.models import DashboardLayout, EventTypeRecord, KanbanColumn, Rule, Source
+
+        db = next(get_db())
+        try:
+            src = db.query(Source).filter(Source.slug == "calendar_feed").one()
+            assert src.schedule.handler_type == "ics_calendar"
+            assert src.schedule.handler_url == "https://example.test/basic.ics"
+            names = {et.name for et in db.query(EventTypeRecord).filter_by(source_id=src.id)}
+            assert {"item.upsert", "item.removed", "focus.changed"} <= names
+            cal = db.query(DashboardLayout).filter_by(slug="calendar").one()
+            work = db.query(DashboardLayout).filter_by(slug="work").one()
+            assert cal.kind == "calendar"
+            assert work.kind == "kanban"
+            assert db.query(KanbanColumn).filter_by(layout_id=work.id).count() == 3
+            rules = db.query(Rule).filter_by(source_id=src.id).all()
+            assert any(rule.conditions == {"mode": {"not": ""}} for rule in rules)
+        finally:
+            db.close()
 
     def test_apply_fx_usd_stack(self, authenticated_client):
         resp = authenticated_client.post(
@@ -415,7 +452,7 @@ class TestSourceTemplates:
                 assert action.config.get("value_key") == "value.*.rate"
                 assert action.config.get("field_id") == fields_by_slug[f"fx_usd_{q.lower()}"].id
 
-            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            layout = db.query(DashboardLayout).filter(DashboardLayout.slug == "").one()
             assert layout is not None
             widgets = parse_layout_config(layout.layout_config)["widgets"]
             titles = {w.get("title") for w in widgets}
@@ -474,7 +511,7 @@ class TestSourceTemplates:
             assert actions[rules[0].action_ids[0]].config["value"] is True
             assert actions[rules[1].action_ids[0]].config["value"] is False
 
-            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            layout = db.query(DashboardLayout).filter(DashboardLayout.slug == "").one()
             widgets = parse_layout_config(layout.layout_config)["widgets"]
             toggle = next(
                 w for w in widgets
@@ -513,9 +550,9 @@ class TestSourceTemplates:
             ).first()
             assert action.config.get("field_id") == field.id
 
-            layout = db.query(DashboardLayout).order_by(DashboardLayout.id).first()
+            layout = db.query(DashboardLayout).filter(DashboardLayout.slug == "").one()
             widgets = parse_layout_config(layout.layout_config)["widgets"]
-            kv = next(w for w in widgets if w.get("display") == "kv_text")
+            kv = next(w for w in widgets if w.get("title") == "ISS now")
             assert "iss_now.iss_position.latitude" in kv["config"]["template"]
         finally:
             db.close()

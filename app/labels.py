@@ -10,6 +10,7 @@ ACTION_TYPE_LABELS = {
     "web_push": "Browser notification",
     "local_script": "Local script",
     "trigger_source": "Trigger source",
+    "kanban_push": "Add kanban card",
 }
 
 FIELD_TYPE_LABELS = {
@@ -51,6 +52,7 @@ POLLER_LABELS = {
     "imap_unread": "IMAP unread",
     "domain_expiry": "Domain expiry",
     "local_llm_http_status": "Local LLM status",
+    "ics_calendar": "Calendar feed",
 }
 
 OPERATOR_LABELS = {

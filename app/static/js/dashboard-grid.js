@@ -64,13 +64,16 @@
     function saveLayout() {
       if (!atDesignWidth()) return;
       var widgets = collectGeometry();
+      var page = el.getAttribute("data-page") || "";
+      var payload = { widgets: widgets };
+      if (page) payload.page = page;
       fetch("/api/dashboard/layout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-CSRF-Token": csrfToken(),
         },
-        body: JSON.stringify({ widgets: widgets }),
+        body: JSON.stringify(payload),
       }).catch(function (err) {
         console.error("dashboard layout save failed", err);
       });

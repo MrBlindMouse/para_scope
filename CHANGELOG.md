@@ -10,6 +10,17 @@ While still on `0.x`, a **MINOR** bump may include breaking (wipe) changes; thos
 
 ## [Unreleased]
 
+### Breaking
+
+- `DashboardLayout` gains `name`, `slug`, and `kind` (`dashboard`, `calendar`, `kanban`), plus `calendar_items`, `kanban_columns`, and `kanban_cards`. **Wipe** `para_scope.db` and `app/.test_db.sqlite` (and `-wal`/`-shm`) before restart — layout and all other config/data are not migrated. If you already wiped for named pages, wipe again.
+
+### Added
+
+- Named dashboard pages: create/rename/delete under `/config/dashboard`; live view via `/?page={slug}`; header links when pages exist
+- Page kinds: a page can be a dashboard, a week calendar, or a kanban board
+- Read-only ICS poller (`ics_calendar`). Changes emit `item.upsert`, `item.removed`, and `focus.changed`
+- `kanban_push` action and a **Calendar → kanban** pipeline template. Cards land in Next; moving a card emits `card.moved` on a reserved Board source
+
 ## [0.1.2] — 2026-08-18
 
 Patch release. Tag: `v0.1.2`. No schema wipe.

@@ -13,7 +13,7 @@ Layers in `main.css`: `reset → base → layout → components → utilities`.
 | reset | `reset.css` |
 | base | `base.css`, `themes.css` |
 | layout | `layout.css` |
-| components | `buttons`, `inputs`, `cards`, `tables`, `feedback`, `config-nav`, `dialogs`, `pipeline`, `tooltips`, `help`, `conditions-builder`, `dashboard` |
+| components | `buttons`, `inputs`, `cards`, `tables`, `feedback`, `config-nav`, `dialogs`, `pipeline`, `tooltips`, `help`, `conditions-builder`, `dashboard`, `work` |
 | utilities | `utilities.css` |
 
 ## Invariants

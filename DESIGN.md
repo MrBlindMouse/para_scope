@@ -21,6 +21,7 @@ Status: Living design. **AGENTS.md** is the ops contract for agents; this docume
 - Dashboard Triggers widget + `trigger_source` action; self-metrics on `/system`
 - Vanilla CSS (37signals/Fizzy-inspired, OKLCH tokens, cascade layers)
 - GridStack layout + ApexCharts widgets
+- Named pages (`/?page=`) with kind `dashboard`, `calendar` (read-only ICS window), or `kanban`. Focus modes (`deep`, `people`, `admin`, `errands`) ride on imported events. `kanban_push` creates cards; rules stay stateless. A card you move emits `card.moved` and is not pushed back into another column
 - Web Push via VAPID (optional env keys)
 - systemd + nginx production path documented; pure git + venv primary distribution
 
@@ -139,7 +140,7 @@ Global named sink used by both actions and widgets:
 
 **Dashboard View / Widget**  
 
-Modular visualization or control surface (status, charts, series, links, notes, system info, display). Layout is stored in `DashboardLayout` and edited via GridStack. Widgets refresh via HTMX today; SSE push for series/chart/system is Planned (see §0).
+Modular visualization or control surface (status, charts, series, links, notes, system info, display). Layout is stored in `DashboardLayout` (one row per page: Main at `/`, named pages at `/?page={slug}`). `kind` is `dashboard` (GridStack), `calendar` (week view of imported ICS rows), or `kanban` (Next / Doing / Done). Widgets refresh via HTMX today; SSE push for series/chart/system is Planned (see §0).
 
 Series displays (logbook): `line` / `area` / `column` with per-style options (e.g. stepline, stacked, horizontal). Chart displays (value/text): `pie` / `radial` / `radar` / `polar`. Radial styles use an explicit max/target. Notes display: `Text` (plain body in layout config, debounced save from the dashboard).
 
@@ -228,15 +229,15 @@ Server-rendered with progressive enhancement.
 
 Key surfaces:
 
-- `/` — modular widget dashboard (GridStack)
+- `/` — modular widget dashboard (GridStack); optional `?page={slug}` for named pages
 - `/events` — event log
 - `/system` — system / poller health
 - `/config/pipeline` — sources, events, rules, actions
-- `/config/dashboard` — widget layout
+- `/config/dashboard` — widget layout (page picker; optional `?page=`)
 - `/config/style` — theme / appearance
 - `/config/users`, audit log, help
 
-Widgets are modular partials refreshed independently via HTMX. Layout is shared for the install (not per-user in v0.1).
+Widgets are modular partials refreshed independently via HTMX. Layout is shared for the install (not per-user in v0.1); multiple named pages share the same Fields.
 
 **Authentication &amp; Authorization**  
 
@@ -263,7 +264,7 @@ Core entities present in `app/models.py`:
 - `Event`
 - `Field` + `FieldLogEntry`
 - `AuditLog`
-- `DashboardLayout`
+- `DashboardLayout` (Main + named pages via `slug`)
 - `AppSettings` (theme, font, background)
 - `PushSubscription`
 

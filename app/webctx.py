@@ -510,6 +510,20 @@ def _parse_action_config(form, action_type: str) -> tuple[dict | None, str | Non
             out["payload"] = {}
         return out, None
 
+    if action_type == "kanban_push":
+        page_slug = (form.get("kanban_page_slug") or "").strip()
+        if not page_slug:
+            return None, "Kanban page is required"
+        column = (form.get("kanban_column") or "Next").strip() or "Next"
+        return {
+            "page_slug": page_slug,
+            "column": column,
+            "title": form.get("kanban_title") if form.get("kanban_title") is not None else "{{ title }}",
+            "mode": form.get("kanban_mode") if form.get("kanban_mode") is not None else "{{ mode }}",
+            "key": (form.get("kanban_key") or "").strip() or "{{ uid }}-{{ occurrence }}",
+            "remove": (form.get("kanban_remove") or "").strip().lower() in ("1", "true", "on", "yes"),
+        }, None
+
     return None, "That action type isn’t supported"
 
 

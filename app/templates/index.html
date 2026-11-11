@@ -1,11 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Dashboard – Para-Scope{% endblock %}
+{% block title %}{% if page_slug %}{{ page_name }} – {% endif %}Dashboard – Para-Scope{% endblock %}
 {% block body_class %}dashboard-page{% endblock %}
 {% block body_start %}
 {% if dashboard_bg %}
 <div class="dashboard-bg" aria-hidden="true"
      style="--dashboard-bg-opacity: {{ dashboard_bg_opacity }}; --dashboard-bg-image: url('/media/dashboard-bg');"></div>
 {% endif %}
+{% endblock %}
+{% block header_center %}
+  {% include "components/page_nav.html" %}
 {% endblock %}
 {% block header_actions %}
   {% if widgets %}
@@ -23,7 +26,7 @@
     </svg>
   </button>
   {% endif %}
-  <a href="/config/dashboard" class="btn btn--icon" aria-label="Dashboard layout" title="Dashboard layout">
+  <a href="{% if page_slug %}/config/dashboard?page={{ page_slug }}{% else %}/config/dashboard{% endif %}" class="btn btn--icon" aria-label="Dashboard layout" title="Dashboard layout">
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
       <circle cx="12" cy="12" r="3"/>
@@ -35,6 +38,7 @@
 <link rel="stylesheet" href="/static/vendor/gridstack/gridstack.min.css">
 <style>{{ grid_column_css | safe }}</style>
 <div class="grid-stack dashboard-grid" id="dashboard-grid"
+     data-page="{{ page_slug }}"
      data-gs-column="{{ grid_columns }}"
      data-gs-column-width="{{ grid_column_width }}"
      data-gs-column-live-max="{{ grid_column_live_max }}"
@@ -63,7 +67,7 @@
           {% endif %}
           <div class="card__body"
                {% if widget.type not in ('links', 'clock', 'triggers', 'notes') %}
-               hx-get="/widgets/{{ widget.type }}?id={{ wid }}"
+               hx-get="/widgets/{{ widget.type }}?id={{ wid }}{% if page_slug %}&page={{ page_slug }}{% endif %}"
                hx-trigger="every 30s"
                hx-swap="innerHTML"
                {% endif %}>
@@ -86,7 +90,7 @@
 <div class="card">
   <div class="card__body" style="text-align:center; padding:2em;">
     <p class="text-muted">No widgets configured on your dashboard.</p>
-    <a href="/config/dashboard" class="btn btn--primary mt">Add widgets</a>
+    <a href="{% if page_slug %}/config/dashboard?page={{ page_slug }}{% else %}/config/dashboard{% endif %}" class="btn btn--primary mt">Add widgets</a>
   </div>
 </div>
 {% endif %}

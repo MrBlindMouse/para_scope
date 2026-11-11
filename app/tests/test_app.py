@@ -1915,6 +1915,8 @@ class TestDashboardLayout:
         assert resp.status_code == 200
         assert b'id="widget-catalog"' in resp.content
         assert b'id="add-widget-btn"' in resp.content
+        assert b'id="dashboard-page-select"' in resp.content
+        assert b"Add Page" in resp.content
         assert b'name="widget_type"' not in resp.content
         assert b'data-widget-toggle' in resp.content
         assert b'dashboard-widget-editor__toggle' in resp.content
@@ -2601,6 +2603,229 @@ class TestDashboardGridLayout:
         assert resp.status_code == 200
         assert "no-store" in (resp.headers.get("cache-control") or "")
         assert b"No value fields yet" in resp.content or b"stat__value" in resp.content
+
+
+class TestDashboardPages:
+    def test_add_page_rename_view_delete(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        add = authenticated_client.post(
+            "/config/dashboard/add-page",
+            data={},
+            follow_redirects=False,
+        )
+        assert add.status_code == 303
+        assert "page=new-page" in (add.headers.get("location") or "")
+
+        db = next(get_db())
+        try:
+            page = db.query(DashboardLayout).filter(DashboardLayout.slug == "new-page").first()
+            assert page is not None
+            assert page.name == "New Page"
+        finally:
+            db.close()
+
+        widgets = [{"type": "system", "display": "source_health", "title": "Page Health"}]
+        save = authenticated_client.post(
+            "/config/dashboard",
+            data={
+                "page": "new-page",
+                "page_name": "Status Board",
+                "widgets": json.dumps(widgets),
+            },
+            follow_redirects=False,
+        )
+        assert save.status_code == 303
+        loc = save.headers.get("location") or ""
+        assert "page=status-board" in loc
+
+        live = authenticated_client.get("/?page=status-board")
+        assert live.status_code == 200
+        assert b"Page Health" in live.content
+        assert b"Status Board" in live.content
+        assert b'href="/?page=status-board"' in live.content
+
+        main = authenticated_client.get("/")
+        assert main.status_code == 200
+        assert b"Status Board" in main.content
+        assert b"Page Health" not in main.content
+
+        cfg = authenticated_client.get("/config/dashboard?page=status-board")
+        assert cfg.status_code == 200
+        assert b'name="page_name"' in cfg.content
+        assert b"Status Board" in cfg.content
+        assert b'id="dashboard-delete-page-btn"' in cfg.content
+
+        delete = authenticated_client.post(
+            "/config/dashboard/delete-page",
+            data={"page": "status-board"},
+            follow_redirects=False,
+        )
+        assert delete.status_code == 303
+        gone = authenticated_client.get("/?page=status-board")
+        assert gone.status_code == 404
+
+        db = next(get_db())
+        try:
+            assert db.query(DashboardLayout).filter(DashboardLayout.slug == "status-board").first() is None
+        finally:
+            db.close()
+
+    def test_calendar_and_kanban_pages(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout, KanbanCard, KanbanColumn
+
+        missing = authenticated_client.post(
+            "/config/dashboard/add-page",
+            data={"page_name": "Calendar", "kind": "calendar"},
+            follow_redirects=False,
+        )
+        assert missing.status_code == 303
+        assert "Calendar" in (missing.headers.get("location") or "")
+
+        cal = authenticated_client.post(
+            "/config/dashboard/add-page",
+            data={
+                "page_name": "Calendar",
+                "kind": "calendar",
+                "ics_url": "https://example.test/basic.ics",
+            },
+            follow_redirects=False,
+        )
+        assert cal.status_code == 303
+        assert "page=calendar" in (cal.headers.get("location") or "")
+        live = authenticated_client.get("/?page=calendar")
+        assert live.status_code == 200
+        assert b"Nothing scheduled right now" in live.content
+        assert b"No events this week" in live.content
+        assert b"Previous" in live.content
+
+        board = authenticated_client.post(
+            "/config/dashboard/add-page",
+            data={"page_name": "Work", "kind": "kanban"},
+            follow_redirects=False,
+        )
+        assert board.status_code == 303
+        db = next(get_db())
+        try:
+            from app.models import ActionInstance, PollingSchedule, Rule, Source
+            schedule = db.query(PollingSchedule).filter_by(handler_type="ics_calendar").one()
+            assert schedule.handler_url == "https://example.test/basic.ics"
+            src = db.query(Source).filter_by(id=schedule.source_id).one()
+            rules = db.query(Rule).filter_by(source_id=src.id).all()
+            descriptions = {rule.description for rule in rules}
+            assert "Remember the current focus" in descriptions
+            assert "Card for a focus block" in descriptions
+            card_rule = next(rule for rule in rules if rule.description == "Card for a focus block")
+            action = db.query(ActionInstance).filter_by(id=card_rule.action_ids[0]).one()
+            assert action.config.get("page_slug") == "work"
+        finally:
+            db.close()
+        page = authenticated_client.get("/?page=work")
+        assert page.status_code == 200
+        assert b"Next" in page.content and b"Doing" in page.content
+
+        added = authenticated_client.post(
+            "/kanban/card",
+            data={"page": "work", "title": "Write the spec", "mode": "deep"},
+            follow_redirects=False,
+        )
+        assert added.status_code == 303
+        again = authenticated_client.get("/?page=work")
+        assert b"Write the spec" in again.content
+
+        db = next(get_db())
+        try:
+            card = db.query(KanbanCard).filter(KanbanCard.title == "Write the spec").one()
+            doing = (
+                db.query(KanbanColumn)
+                .join(DashboardLayout)
+                .filter(DashboardLayout.slug == "work", KanbanColumn.name == "Doing")
+                .one()
+            )
+            card_id, column_id = card.id, doing.id
+        finally:
+            db.close()
+
+        moved = authenticated_client.post(
+            "/kanban/card/move",
+            data={"page": "work", "card_id": str(card_id), "column_id": str(column_id)},
+            follow_redirects=False,
+        )
+        assert moved.status_code == 303
+        db = next(get_db())
+        try:
+            card = db.query(KanbanCard).filter(KanbanCard.id == card_id).one()
+            assert card.column_id == column_id
+        finally:
+            db.close()
+
+    def test_cannot_delete_main(self, authenticated_client):
+        resp = authenticated_client.post(
+            "/config/dashboard/delete-page",
+            data={"page": ""},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert "error=" in (resp.headers.get("location") or "")
+
+        live = authenticated_client.get("/")
+        assert live.status_code == 200
+
+    def test_layout_api_scoped_by_page(self, authenticated_client):
+        from app.database import get_db
+        from app.models import DashboardLayout
+
+        authenticated_client.post("/config/dashboard/add-page", data={}, follow_redirects=False)
+        authenticated_client.post(
+            "/config/dashboard",
+            data={
+                "page": "new-page",
+                "page_name": "Geo Page",
+                "widgets": json.dumps([{
+                    "id": "w_pagegeo1",
+                    "type": "system",
+                    "display": "source_health",
+                    "title": "Geo",
+                    "x": 0, "y": 0, "w": 6, "h": 3,
+                }]),
+            },
+            follow_redirects=False,
+        )
+        # Unique slug if new-page already taken from prior test in class
+        db = next(get_db())
+        try:
+            page = (
+                db.query(DashboardLayout)
+                .filter(DashboardLayout.slug != "")
+                .order_by(DashboardLayout.id.desc())
+                .first()
+            )
+            assert page is not None
+            slug = page.slug
+            wid = json.loads(page.layout_config)["widgets"][0]["id"]
+        finally:
+            db.close()
+
+        resp = authenticated_client.post(
+            "/api/dashboard/layout",
+            json={"page": slug, "widgets": [{"id": wid, "x": 2, "y": 1, "w": 8, "h": 4}]},
+        )
+        assert resp.status_code == 200
+        assert resp.json().get("ok") is True
+
+        db = next(get_db())
+        try:
+            page = db.query(DashboardLayout).filter(DashboardLayout.slug == slug).first()
+            saved = {w["id"]: w for w in json.loads(page.layout_config)["widgets"]}
+            assert saved[wid]["x"] == 2 and saved[wid]["w"] == 8
+        finally:
+            db.close()
+
+    def test_missing_page_404(self, authenticated_client):
+        resp = authenticated_client.get("/?page=does-not-exist")
+        assert resp.status_code == 404
 
 
 class TestWidgetTransforms:

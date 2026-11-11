@@ -432,6 +432,15 @@ def _build_action_dialog_context(
                 "signing_signature_header": form.get("signing_signature_header") or "X-Call-Signature",
                 "signing_timestamp_header": form.get("signing_timestamp_header") or "X-Call-Timestamp",
             })
+        elif action_type == "kanban_push":
+            draft_cfg.update({
+                "page_slug": (form.get("kanban_page_slug") or "").strip(),
+                "column": (form.get("kanban_column") or "Next").strip() or "Next",
+                "title": form.get("kanban_title") if form.get("kanban_title") is not None else "{{ title }}",
+                "mode": form.get("kanban_mode") if form.get("kanban_mode") is not None else "{{ mode }}",
+                "key": (form.get("kanban_key") or "").strip() or "{{ uid }}-{{ occurrence }}",
+                "remove": (form.get("kanban_remove") or "").strip().lower() in ("1", "true", "on", "yes"),
+            })
         elif action_type == "trigger_source":
             ref = (form.get("target_ref") or "").strip()
             if ref:
@@ -835,8 +844,9 @@ async def pipeline_apply_template(
     if not get_source_template(slug):
         return _err(f"Unknown template '{slug}'")
 
+    form = await request.form()
     try:
-        result = apply_source_template(db, slug)
+        result = apply_source_template(db, slug, values=dict(form))
     except ValueError as e:
         return _err(str(e))
 
@@ -2088,6 +2098,8 @@ async def delete_source(request: Request, source_id: int, db: Session = Depends(
     db.query(EventTypeRecord).filter(EventTypeRecord.source_id == source_id).delete()
     db.query(PollingSchedule).filter(PollingSchedule.source_id == source_id).delete()
     db.query(Rule).filter(Rule.source_id == source_id).delete()
+    from app.models import CalendarItem
+    db.query(CalendarItem).filter(CalendarItem.source_id == source_id).delete()
     db.delete(source)
     db.commit()
     ctx._audit_log(db, request, "source.delete", resource_type="source", resource_id=source_id, details={"name": name})

@@ -1,0 +1,54 @@
+<div id="kanban-board" class="board">
+  {% for column in columns %}
+  <section class="board__column">
+    <h2>
+      {{ column.name }}
+      <span class="text-muted">{{ column.cards | length }}{% if column.wip_limit %}/{{ column.wip_limit }}{% endif %}</span>
+    </h2>
+    {% if column.name == 'Next' %}
+    <form method="post" action="/kanban/card" class="board__add"
+          hx-post="/kanban/card" hx-target="#kanban-board" hx-swap="outerHTML">
+      {% include "components/csrf.html" %}
+      <input type="hidden" name="page" value="{{ page_slug }}">
+      <input type="text" name="title" class="input" placeholder="Add a card" aria-label="Card title" required maxlength="300">
+      <select name="mode" class="input" aria-label="Focus mode">
+        <option value="">No mode</option>
+        {% for slug, label in focus_modes %}
+        <option value="{{ slug }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn--sm">Add</button>
+    </form>
+    {% endif %}
+    <ul class="board__cards">
+      {% for card in column.cards %}
+      <li class="kanban-card{% if focus and focus.mode and card.mode and card.mode != focus.mode %} kanban-card--quiet{% endif %}{% if card.mode %} kanban-card--{{ card.mode }}{% endif %}">
+        <p>{{ card.title }}</p>
+        {% if card.mode %}
+        <p class="kanban-card__mode">{{ card.mode }}</p>
+        {% endif %}
+        <div class="kanban-card__actions">
+          {% for other in columns if other.id != column.id %}
+          <form method="post" action="/kanban/card/move"
+                hx-post="/kanban/card/move" hx-target="#kanban-board" hx-swap="outerHTML">
+            {% include "components/csrf.html" %}
+            <input type="hidden" name="page" value="{{ page_slug }}">
+            <input type="hidden" name="card_id" value="{{ card.id }}">
+            <input type="hidden" name="column_id" value="{{ other.id }}">
+            <button type="submit" class="btn btn--sm">{{ other.name }}</button>
+          </form>
+          {% endfor %}
+          <form method="post" action="/kanban/card/delete"
+                hx-post="/kanban/card/delete" hx-target="#kanban-board" hx-swap="outerHTML">
+            {% include "components/csrf.html" %}
+            <input type="hidden" name="page" value="{{ page_slug }}">
+            <input type="hidden" name="card_id" value="{{ card.id }}">
+            <button type="submit" class="btn btn--sm" aria-label="Delete {{ card.title }}">Delete</button>
+          </form>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</div>

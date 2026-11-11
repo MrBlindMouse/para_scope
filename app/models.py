@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, Text, ForeignKey, JSON, Float,
-    Enum as SAEnum, Index,
+    Enum as SAEnum, Index, UniqueConstraint,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
@@ -229,15 +229,77 @@ class AuditLog(Base):
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
-# ── DashboardLayout (shared widget layout for the install) ───────────────────
+# ── DashboardLayout (one row per page; Main slug="", kind=dashboard) ─────────
 
 class DashboardLayout(Base):
     __tablename__ = "dashboard_layouts"
 
     id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), nullable=False, default="Main")
+    slug = Column(String(100), unique=True, nullable=False, default="", index=True)
+    # dashboard | calendar | kanban. Main is always dashboard.
+    kind = Column(String(20), nullable=False, default="dashboard")
     layout_config = Column(JSON, default=dict)  # widget positions, visible panels, etc.
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    kanban_columns = relationship(
+        "KanbanColumn", back_populates="layout", cascade="all, delete-orphan",
+    )
+
+
+class CalendarItem(Base):
+    """One imported occurrence. The ICS feed is the source of truth."""
+    __tablename__ = "calendar_items"
+    __table_args__ = (
+        UniqueConstraint("source_id", "uid", "occurrence", name="uq_calendar_occurrence"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_id = Column(Integer, ForeignKey("sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    uid = Column(String(500), nullable=False)
+    occurrence = Column(String(40), nullable=False)  # UTC start iso, stable across polls
+    title = Column(String(300), nullable=False, default="")
+    starts_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    ends_at = Column(DateTime(timezone=True), nullable=False)
+    all_day = Column(Boolean, nullable=False, default=False)
+    mode = Column(String(20), nullable=False, default="")  # focus slug, or empty
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class KanbanColumn(Base):
+    __tablename__ = "kanban_columns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    layout_id = Column(Integer, ForeignKey("dashboard_layouts.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+    wip_limit = Column(Integer, nullable=True)
+
+    layout = relationship("DashboardLayout", back_populates="kanban_columns")
+    cards = relationship(
+        "KanbanCard", back_populates="column", cascade="all, delete-orphan",
+        order_by="KanbanCard.position",
+    )
+
+
+class KanbanCard(Base):
+    __tablename__ = "kanban_cards"
+    __table_args__ = (
+        UniqueConstraint("external_key", name="uq_kanban_external_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    column_id = Column(Integer, ForeignKey("kanban_columns.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(300), nullable=False)
+    body = Column(Text, nullable=False, default="")
+    mode = Column(String(20), nullable=False, default="")
+    position = Column(Integer, nullable=False, default=0)
+    # uid-occurrence from a calendar feed. Null for cards you add by hand.
+    external_key = Column(String(600), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    column = relationship("KanbanColumn", back_populates="cards")
 
 
 # ── AppSettings (singleton install preferences) ──────────────────────────────

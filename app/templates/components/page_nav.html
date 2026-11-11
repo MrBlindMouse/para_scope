@@ -1,0 +1,7 @@
+{% if dashboard_pages %}
+<nav class="page-header__center" aria-label="Pages">
+  {% for p in dashboard_pages %}
+  <a href="/?page={{ p.slug }}" class="btn btn--sm"{% if page_slug == p.slug %} aria-current="page"{% endif %}>{{ p.name }}</a>
+  {% endfor %}
+</nav>
+{% endif %}

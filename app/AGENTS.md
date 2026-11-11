@@ -18,7 +18,8 @@ Single-process domain layer: SQLite models, auth/secrets, webhook/poll ingress, 
 | `pipeline.py` | Rule match + conditions + `evaluate_and_dispatch` (cascade depth 3) |
 | `actions.py` | Action registry: field_push, http_forward, notify, web_push, local_script, trigger_source |
 | `fields.py` | Field helpers, path access, star-binding ContextVar |
-| `widgets.py` / `widget_transforms.py` / `dashboard_layout.py` | Widget registry, series/maths/templates, GridStack layout |
+| `widgets.py` / `widget_transforms.py` / `dashboard_layout.py` | Widget registry, series/maths/templates, GridStack layout, page kinds |
+| `ics_feed.py` / `calendar_sync.py` / `kanban.py` | ICS window, focus edges, kanban cards. Poller and `kanban_push` call these; they do not run rules |
 | `source_templates.py` | Full-stack source+fields+rules+widgets recipes (prefill / apply) |
 | `pollers.py` / `scheduler.py` | Poller registry + `run_schedule`; APScheduler lifecycle |
 | `http_auth.py` | Shared outbound bearer/key_secret header injection (poll + Call URL) |

@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from typing import Any
+
+from sqlalchemy.orm import Session
 
 # Single source of truth for GridStack resolution (JS + CSS read these via the template).
 # Design standard ≈ GRID_COLUMNS * GRID_COLUMN_WIDTH px; live cols = round(gridWidth / GRID_COLUMN_WIDTH).
@@ -192,3 +195,105 @@ def normalize_for_save(widgets: list[Any]) -> list[dict]:
         cleaned.append(item)
     normalized, _ = normalize_widgets(cleaned)
     return normalized
+
+
+# ── Multi-page helpers ───────────────────────────────────────────────────────
+
+MAIN_SLUG = ""
+MAIN_NAME = "Main"
+PAGE_KINDS = ("dashboard", "calendar", "kanban")
+PAGE_KIND_LABELS = {
+    "dashboard": "Dashboard",
+    "calendar": "Calendar",
+    "kanban": "Kanban",
+}
+_RESERVED_SLUGS = frozenset({"", "main", "config", "api", "widgets", "static", "media"})
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_page_slug(raw: str | None) -> str:
+    """Query/body page param → layout slug (empty = Main)."""
+    if raw is None:
+        return MAIN_SLUG
+    return str(raw).strip()
+
+
+def slugify_page_name(name: str) -> str:
+    """Lowercase hyphenated slug from a display name. Empty if nothing usable."""
+    s = _SLUG_RE.sub("-", (name or "").strip().lower()).strip("-")
+    while "--" in s:
+        s = s.replace("--", "-")
+    return s
+
+
+def unique_page_slug(db: Session, base: str, *, exclude_id: int | None = None) -> str:
+    """Return base or base-2, base-3, … unused by other layouts."""
+    from app.models import DashboardLayout
+
+    candidate = base
+    n = 2
+    while True:
+        q = db.query(DashboardLayout).filter(DashboardLayout.slug == candidate)
+        if exclude_id is not None:
+            q = q.filter(DashboardLayout.id != exclude_id)
+        if q.first() is None:
+            return candidate
+        candidate = f"{base}-{n}"
+        n += 1
+
+
+def ensure_main_layout(db: Session):
+    """Return the Main layout row, creating an empty one if missing."""
+    from app.models import DashboardLayout
+
+    layout = (
+        db.query(DashboardLayout)
+        .filter(DashboardLayout.slug == MAIN_SLUG)
+        .first()
+    )
+    if layout:
+        return layout
+    layout = DashboardLayout(name=MAIN_NAME, slug=MAIN_SLUG, layout_config=layout_json([]))
+    db.add(layout)
+    db.commit()
+    db.refresh(layout)
+    return layout
+
+
+def get_layout(db: Session, slug: str = MAIN_SLUG):
+    """Load a layout by slug. Does not create missing named pages."""
+    from app.models import DashboardLayout
+
+    slug = normalize_page_slug(slug)
+    if slug == MAIN_SLUG:
+        return ensure_main_layout(db)
+    return (
+        db.query(DashboardLayout)
+        .filter(DashboardLayout.slug == slug)
+        .first()
+    )
+
+
+def list_named_pages(db: Session) -> list:
+    """Named pages only (exclude Main), ordered by name."""
+    from app.models import DashboardLayout
+
+    return (
+        db.query(DashboardLayout)
+        .filter(DashboardLayout.slug != MAIN_SLUG)
+        .order_by(DashboardLayout.name)
+        .all()
+    )
+
+
+def validate_page_name(name: str) -> tuple[str | None, str | None]:
+    """Return (cleaned_name, error). error set when invalid."""
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return None, "Page name is required"
+    if len(cleaned) > 100:
+        return None, "Page name is too long"
+    base = slugify_page_name(cleaned)
+    if not base or base in _RESERVED_SLUGS:
+        return None, "Page name must include letters or numbers"
+    return cleaned, None

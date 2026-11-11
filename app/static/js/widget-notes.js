@@ -12,13 +12,17 @@
   function saveNotes(el) {
     var id = el.getAttribute("data-widget-id") || "";
     if (!id) return;
+    var grid = document.getElementById("dashboard-grid");
+    var page = grid ? (grid.getAttribute("data-page") || "") : "";
+    var payload = { id: id, text: el.value };
+    if (page) payload.page = page;
     fetch("/api/dashboard/notes", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-CSRF-Token": csrfToken(),
       },
-      body: JSON.stringify({ id: id, text: el.value }),
+      body: JSON.stringify(payload),
     }).catch(function (err) {
       console.error("notes save failed", err);
     });
