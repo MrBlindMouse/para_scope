@@ -10,14 +10,18 @@ While still on `0.x`, a **MINOR** bump may include breaking (wipe) changes; thos
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-11-11
+
+Release tag: `v0.1.3`. **Wipe** `para_scope.db` (and `app/.test_db.sqlite`, `-wal`/`-shm`) before restart.
+
 ### Breaking
 
-- `DashboardLayout` gains `name`, `slug`, and `kind` (`dashboard`, `calendar`, `kanban`), plus `calendar_items`, `kanban_columns`, and `kanban_cards`. **Wipe** `para_scope.db` and `app/.test_db.sqlite` (and `-wal`/`-shm`) before restart — layout and all other config/data are not migrated. If you already wiped for named pages, wipe again.
+- `DashboardLayout` gains `name`, `slug`, and `kind` (`dashboard`, `calendar`, `kanban`), plus `calendar_items`, `kanban_columns`, and `kanban_cards`. Layout and all other config/data are not migrated.
 
 ### Added
 
 - Named dashboard pages: create/rename/delete under `/config/dashboard`; live view via `/?page={slug}`; header links when pages exist
-- Page kinds: a page can be a dashboard, a week calendar, or a kanban board
+- Page kinds: a page can be a dashboard, a week calendar, or a kanban board; calendar/kanban create can provision ICS feed + rules
 - Read-only ICS poller (`ics_calendar`). Changes emit `item.upsert`, `item.removed`, and `focus.changed`
 - `kanban_push` action and a **Calendar → kanban** pipeline template. Cards land in Next; moving a card emits `card.moved` on a reserved Board source
 

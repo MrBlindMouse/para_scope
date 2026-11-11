@@ -1,13 +1,14 @@
 # Para-Scope
 
-**Version 0.1.2** — see [CHANGELOG.md](CHANGELOG.md) and git tag `v0.1.2`.
+**Version 0.1.3** — see [CHANGELOG.md](CHANGELOG.md) and git tag `v0.1.3`.
 
-Self-hosted event hub and operational dashboard for personal or small-team infrastructure. Register **sources** (webhooks and/or scheduled polls), match events with **rules**, and run **actions** (update shared fields, notify, forward HTTP, browser push). A modular dashboard shows status, charts, clocks, and recent activity — without replacing Prometheus/Grafana or a full workflow engine like n8n.
+Self-hosted event hub and operational dashboard for personal or small-team infrastructure. Register **sources** (webhooks and/or scheduled polls), match events with **rules**, and run **actions** (update shared fields, notify, forward HTTP, browser push, kanban cards). A modular **Main** dashboard and optional named **pages** show status, charts, clocks, a read-only calendar week, or a kanban board — without replacing Prometheus/Grafana or a full workflow engine like n8n.
 
 - **Sources** — webhook receivers (HMAC, Stripe, GitHub, Slack, Discord, PayPal) and scheduled pollers
 - **Pipeline** — event types → rules (with conditions) → actions
 - **Fields** — shared logbook / value / text / toggle / data state for widgets and actions
-- **Dashboard** — configurable widgets on `/`: time series, charts, displays, clocks, links, triggers, notes, and system views
+- **Pages** — Main at `/` plus named pages at `/?page={slug}`: **dashboard** (GridStack widgets), **calendar** (imported week view), or **kanban** (Next / Doing / Done)
+- **Calendar feed** — read-only ICS poll; rules can mirror focus blocks to kanban and update focus Fields (no write-back to your calendar app)
 - **Style** — themes, fonts, and custom background images at `/config/style`
 - **Ops views** — `/events`, `/system`, plus config for users, dashboard layout, and audit log
 - **Simple ops** — single-process FastAPI + SQLite; no Docker required
@@ -71,6 +72,8 @@ Get a working pipeline after login (more detail in `/help`):
 5. **Add an action on that rule** (`field_push` is a good smoke test; `http_forward`, `notify` for ntfy / Gotify / Discord, and `web_push` are also built in; `local_script` needs `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`). Optional credentials can be attached in the action dialog. For `web_push`, set VAPID env vars and click the bell in the header to enable notifications. Events, rules, and actions are editable from the chain.
 6. **Confirm** on `/events` (live SSE tail), enable widgets at `/config/dashboard`, and view them on `/` (optional named pages via `/?page=…`). Widget **titles**, **labels**, **units**, and **link URLs** accept `{{ slug… }}` Field templates at display time (same bare-slug namespace as display templates; notes stay literal).
 
+**Calendar + kanban (optional):** at `/config/dashboard`, **Add Page** → type **Calendar** or **Kanban** and paste your calendar app’s **secret ICS URL** (or use Pipeline → **From template** → **Calendar → kanban**). That creates the ICS poll, `focus_mode` / `focus_title` text Fields, rules, and a Focus widget on Main. Open the calendar page for the week view; open the kanban page to pull cards from **Next** into **Doing** / **Done**. Focus on events is inferred from ICS categories or a category→mode map on the poll (`deep`, `people`, `admin`, `errands`). Only events with a mode become kanban cards; sync does not move cards you already pulled. Moving a card fires `card.moved` on the reserved **Board** webhook source (add your own rules if you want side effects).
+
 Day-to-day: `/events` and `/system`. Manage accounts at `/config/users`. Appearance and dashboard background: `/config/style`.
 
 ## Webhooks
@@ -132,7 +135,7 @@ Para-Scope does **not** need to run as root by default. The normal production se
 
 For the shipped pollers:
 
-- **Usually fine as an unprivileged service user:** HTTP / APIs, DNS, TCP connect, TLS cert expiry, RSS / Atom, IMAP, domain expiry, Home Assistant, local LLM HTTP status, database health, system snapshot, disk free space, backup age, git status
+- **Usually fine as an unprivileged service user:** HTTP / APIs, DNS, TCP connect, TLS cert expiry, RSS / Atom, IMAP, domain expiry, **ICS calendar feeds**, Home Assistant, local LLM HTTP status, database health, system snapshot, disk free space, backup age, git status
 - **May need extra read access:** log pattern watch, backup age on restricted paths, disk free space on restricted mount points
 - **May need host group access:** `journal_recent_errors` often needs membership in `systemd-journal` or `adm` (distro-dependent) so `journalctl` can read the system journal
 - **Usually works unprivileged, but still depends on host policy:** `systemd_failed_units` (it shells out to `systemctl`); `icmp_ping` may need ping capability or network policy that allows ICMP from the service user
@@ -141,9 +144,25 @@ Highest reasonable privilege for the shipped pollers is usually **a dedicated se
 
 ## Capabilities
 
+### Pages
+
+Configure at `/config/dashboard` (page dropdown: Main, named pages, **Add Page**). Each named page has a **kind**:
+
+| Kind | Live URL | What you get |
+|------|----------|--------------|
+| **dashboard** | `/?page={slug}` | GridStack widget layout (same widget catalog as Main) |
+| **calendar** | `/?page={slug}` | Week view of events imported by the ICS feed (read-only) |
+| **kanban** | `/?page={slug}` | Three columns (Next / Doing / Done); add cards by hand or via `kanban_push` rules |
+
+Main (`/`) is always a dashboard page. Header links list named pages when any exist.
+
+Creating a **calendar** or **kanban** page (or applying the **Calendar → kanban** template) provisions the ICS poll, focus Fields, and default card/focus rules when you supply an ICS URL. One feed per install is reused; a second kanban page keeps pointing rules at the board you chose unless you edit actions.
+
+The calendar poller emits **`item.upsert`**, **`item.removed`**, and **`focus.changed`** (not only `on_success`) when the imported window changes — register those event types on the feed source if you build custom rules.
+
 ### Dashboard widgets
 
-Configure layout at `/config/dashboard` (page dropdown for Main / Add Page / named pages). Widgets bind to Fields (or stand alone) and refresh with the dashboard. Named pages open at `/?page={slug}`.
+Dashboard **kind** pages only: bind widgets to Fields (or stand alone) at `/config/dashboard`. Widgets refresh with the dashboard (HTMX).
 
 | Kind | Displays | Notable styles |
 |------|----------|----------------|
@@ -170,9 +189,11 @@ HTTP / API pollers support Bearer, HTTP Basic, and OAuth2 client-credentials aut
 | **Network / DNS / TLS** | `tcp_connect`, `icmp_ping`, `dns_resolve`, `cert_expiry` |
 | **Files / Backups** | `disk_free_space`, `backup_age` |
 | **Local Apps / Data** | `git_status`, `database_health`, `log_pattern_watch`, `home_assistant_snapshot`, `local_llm_http_status` |
-| **External Services** | `rss_atom_change`, `imap_unread`, `domain_expiry` |
+| **External Services** | `rss_atom_change`, `imap_unread`, `domain_expiry`, `ics_calendar` |
 
 Use generic HTTP pollers for plain endpoint checks. Prefer specialized subtypes when they add real integration behavior (feed change detection, Home Assistant states, IMAP unread counts, whois expiry, and so on).
+
+**`ics_calendar`** fetches a secret ICS URL, stores a rolling window of occurrences, and emits pipeline events when rows or the current focus block change. Recurrence support is intentionally small (daily / weekly / monthly); treat the external calendar as the editor. Optional poll param **Category → focus mode** maps ICS categories to `deep` / `people` / `admin` / `errands` (category names `deep`, `people`, etc. also match directly).
 
 ### Fields
 
@@ -193,6 +214,7 @@ Use generic HTTP pollers for plain endpoint checks. Prefer specialized subtypes 
 | **Notify** | ntfy, Gotify, or Discord (thin wrapper over Call URL) |
 | **Browser notification** (`web_push`) | Web Push via VAPID (bell in the header to subscribe) |
 | **Trigger source** (`trigger_source`) | Run a poll once or ingest a webhook event type (nested cascades capped at depth 3) |
+| **Add kanban card** (`kanban_push`) | Create or refresh a card on a kanban page (by page slug); optional remove when still in the entry column. Does not move cards the user already pulled. |
 | **Local script** | Run a host command (requires `PARA_SCOPE_ALLOW_LOCAL_ACTIONS=1`; optional path allowlist) |
 
 ### Webhook providers
@@ -412,7 +434,7 @@ python create_user.py
 
 ### 9. Upgrade flow
 
-Read [CHANGELOG.md](CHANGELOG.md) for the target tag **before** upgrading. If the release lists a **Breaking** wipe, back up then remove `para_scope.db` (and `-wal`/`-shm`) — config and event history are not migrated. Keep the same `PARA_SCOPE_SECRET_KEY` only when you keep the same encrypted-secret DB; after a wipe, a new key is fine.
+Read [CHANGELOG.md](CHANGELOG.md) for the target tag **before** upgrading. If the release lists a **Breaking** wipe, back up then remove `para_scope.db` (and `-wal`/`-shm`) — config and event history are not migrated. Upgrading to **v0.1.3** from an older DB requires a wipe (page `kind`, calendar rows, kanban tables). Keep the same `PARA_SCOPE_SECRET_KEY` only when you keep the same encrypted-secret DB; after a wipe, a new key is fine.
 
 ```bash
 sudo systemctl stop para-scope
